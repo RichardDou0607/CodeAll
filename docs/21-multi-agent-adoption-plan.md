@@ -60,31 +60,29 @@
 
 > **v3 优先序**：首批 = M-A → M-B → M-H（观察层，配合 M-C 同窗展示）；控制层 M-D/M-E 随后；AgentOS 轨道 M-J1 提前为远端控制铺路；其余（M-F/M-I/M-K）W5+。
 
-### M-A · Claude Code 观察适配（P0，估 5～7 人日）
+### M-A · Claude Code 观察适配（P0，估 5～7 人日）✅ **观察通道已落地（2026-10-06，`adapters/claude-code-adapter.mjs`）**
 
 - **事件源**：tail `~/.claude/projects/*/*.jsonl`（增量读取，参考 `adapters/_reference/dsh-log-tail.mjs` 的多帧/半帧处理，此处是纯 JSONL 更简单）。
-- **映射草案**（行类型 → 契约事件，均已在 scan 脚本实测）：
-  - `user` / `last-prompt` → `turn.start`（inputKind=user）
-  - `assistant`（含 tool_use 块）→ `tool.call`（工具名 → category/risk 复用 classifyTool）
-  - `attachment`、`system(stop_hook_summary)` → `tool.result` / `message.assistant`
-  - `system(api_error)` → `error.raised`；`system(turn_duration)` → `turn.end`
-  - `custom-title`/`ai-title` → `session.meta.title`；`agent-name` → `session.meta.agentName`
-  - `queue-operation` →（可映射 approval 等待，待细看字段）
-- **目录**：`session-catalog.mjs` 的 `KNOWN_AGENTS` 追加一行（root=`~/.claude/projects`，layout=`claude-jsonl`）+ 新 `parseSession` 分支；真相源=目录本身（无注册表），无「未归入」概念。
-- **验收**：本机转录全量解析无崩溃；悬浮窗出现 CLAUDE-CODE 行（状态/模型/标题）；`scripts/replay-check.mjs` 通过适配器输出。
+- **落地形态**：`scanClaudeCatalog()`（窗口化目录：头 24KB + 尾 160KB，本机 11 项目 / 48 会话，中位 ~18ms）+ `followClaudeLogs()`（多文件字节偏移增量 tail，1.2s 轮询，产出规范事件喂 framed.mjs 状态机）+ `mapClaudeLine()` 纯函数。
+- **映射（已实现）**：`user`(非 sidechain) → `turn.start`；`user.tool_result` 块 → `tool.result`；`assistant.tool_use` → `tool.call`（category 复用 frame.mjs 的 categoryOf）；`assistant`(end_turn) → `message.assistant` + `turn.end(ok)`；`system/turn_duration` → `turn.end(ok)`；`system/api_error` → `error.raised`(fatal:false)；`custom-title`/`ai-title`/`agent-name` → `session.meta`(title)。`queue-operation` v1 不映射。
+- **元信息**：标题（custom-title > ai-title > agent-name）、模型（assistant.message.model，CC Switch 切供应商后即时可见）、版本（行内 version）、cwd（行内 cwd，目录名有损仅兜底）；sidechain 行内标记逐行忽略（子代理回合不产生事件）。
+- **验收**：`scripts/multi-source-check.mjs` MA1–MA7 全绿（真实 48 转录 + 纯函数断言 + 性能 <300ms）；实测本会话自身被实时跟随（running → 运行命令 → glm-5.3）。
 
-### M-B · Codex 观察适配（P0，估 4～6 人日）
+### M-B · Codex 观察适配（P0，估 4～6 人日）✅ **观察通道已落地（2026-10-06，`adapters/codex-adapter.mjs`）**
 
 - **事件源**：tail `~/.codex/sessions/<Y>/<M>/<D>/rollout-*.jsonl`。
-- **映射草案**（payload 实测）：`event_msg.task_started` → `turn.start`；`item_completed(CommandExecution/FileChange/McpToolCall)` → `tool.call`；`token_count` → 计数器；`task_complete` → `turn.end`；`session_meta` → `session.meta`（cwd/模型/版本）；`parent_thread_id` 非空 → 子代理标记（不进列表）。
-- **v2 补充**：验收时**同时用 Codex++ 发起一次会话**，确认 rollout 仍落 `~/.codex/sessions`；若 Codex++ 使用独立目录，`KNOWN_AGENTS` 加第二 root 即可（目录即真相源的设计天然支持）。
-- **验收**：本机 32 个 rollout 全量解析；Codex++ 通路验证结论写入本文快照。
+- **映射（已实现）**：`session_meta` → `session.start`（cwd/cli_version）；`event_msg.task_started` → `turn.start`；`item_completed(CommandExecution/FileChange/McpToolCall)` → 计数器（工具事件走 response_item 通道避免重复）；`response_item.function_call/custom_tool_call` → `tool.call`（apply_patch→write、exec_command→exec 等）；`*_output` → `tool.result`；`task_complete` → `turn.end(ok)` + `message.assistant`(截断 280)；`turn_aborted` → `turn.end(aborted)`。
+- **子代理**：`parent_thread_id` 非空 = 子代理线程（本机 32 个 rollout 中 19 个）——目录层不进列表；跟随器首遇文件时读 `session_meta` 判定，**整文件跳过不产事件**（防幽灵实时行）。
+- **v2 补充（已验证）**：本机全部 rollout 的 `session_meta.originator="Codex Desktop"`——**Codex++ 桌面壳的会话确实落同一 `~/.codex/sessions` 目录**，单 root 覆盖，无需第二 root。
+- **验收**：`scripts/multi-source-check.mjs` MB1–MB6 全绿（32 rollout：13 主 + 19 子代理；session_meta 首行实测 20~51KB，头窗口 96KB 覆盖；中位 ~19ms）。
 
-### M-C · 多源目录合并与 UI（P0，估 3～4 人日）
+### M-C · 多源目录合并与 UI（P0，估 3～4 人日）✅ **已落地（2026-10-06，`demo/framed.mjs` + `demo/window.html`）**
 
-- framed.mjs 的 `catalog()` 扫描所有 `KNOWN_AGENTS`；快照 `sessions[]/catalog.projects[]` 带 `source` 与 `agentName`（UI 的 source 列与 metaLine 已支持，已渲染 CLAUDE-CODE/CODEX 假数据，换成真数据即可）。
-- 项目分组：按 `cwd` 归一（同一目录下的 DSH/Claude/Codex/Kimi 会话并列展示，source 列区分）。
-- **验收**：四源（DSH/Claude/Codex/Kimi）同时显示互不干扰；单独 kill 任意一个后端，其余不受影响（契约 §4.4 的 45s 离线判定生效）。
+- framed.mjs 的 `multiCatalog()` 扫描三源（DSH workspace 注册表 / Claude Code 目录 / Codex rollout），5s 缓存，合计 ~55ms；快照 `sessions[]/catalog.projects[]` 带 `source` 与 `sources[]`（来源构成）。
+- 项目分组：按 `cwd` 归一——DSH 侧栏顺序（workspaceIds）保留为基准；claude/codex 会话 ① cwd 命中 workspace.path → 并进该项目（source 列区分），② 未命中 → `path:<cwd>` 自立组（claude 与 codex 同 cwd 进同一组）；DSH 未注册会话仍归「未归入项目」。
+- 实时层：`followClaudeLogs` + `followCodexLogs` 与 DSH 日志 tail/插件共用同一个 `applyEvent` 状态机（信封含 source；Kimi 无事件）。历史行跨源合并按更新时间排序（截 40）。
+- 投递安全：投递通道仍只有 DSH——选中 claude/codex 会话为目标时，UI 目标行黄色警示「暂不支持投递（观察通道）」，服务端 `resolveTarget` 二次拦截（404 + M-D/M-E 说明），绝不静默投错后端；自动挑目标也只挑 DSH 主会话。
+- **验收**：`scripts/multi-source-check.mjs` MC1–MC4 全绿（真实 framed 实例：多源历史行、`鹈鹕测试变体策划[dsh+claude-code+codex]` 同 cwd 归并、multi 标注、非 DSH 投递被拒）；`demo/test-window.mjs` 38 项断言全绿。**四源同窗演示目标中的三源（DSH/Claude/Codex）+ Kimi 四态面板已达成。**
 
 ### M-D · Claude Code 控制（P1，估 5～8 人日，方案待定）
 
@@ -109,14 +107,14 @@
 - **启动方式（已落地）**：`apps/shell/run.sh --install` 一次性装进 /Applications → 日常 Spotlight「AgentPet」一键启动（盘点确认 AgentPet.app 0.1.0 已装且在运行）；可选在 系统设置→登录项 加 AgentPet 开机自启。
 - 剩余工作：把 framed.mjs 的能力（目录/输入/插件探测）收进外壳进程内或守护进程（路线图 M1 的 Hub 常驻形态）；多后端探测的启动耗时预算（当前 DSH 单源 19ms，加三源预计 <80ms）。
 
-### M-H · Kimi Code 观察适配（**首批**，估 4～6 人日，v3 提入首批）
+### M-H · Kimi Code 观察适配（**首批**，估 4～6 人日，v3 提入首批）✅ **Step 1 spike 完成 + Step 2 降级落地（2026-10-06，`adapters/kimi-code-adapter.mjs`）**
 
-- **Step 1 · 数据定位 spike（0.5～1 人日，排 W1）**：排查 `~/Library/Application Support/kimi-code-app`（重点 `Partitions/kimi-browser` 的 IndexedDB/LevelDB）与 `~/kimi*` 家目录；确认是否存在结构化会话日志（JSONL/SQLite 优先，LevelDB 次之）。产出：数据位置报告 + 样本解析脚本；若无任何稳定存储 → 直接降级。
-- **Step 2 · 适配器或降级**：
-  - 有 JSONL/SQLite：按 M-A/M-B 同款 tail/快照路径做适配器。
-  - 只有 LevelDB/IndexedDB：**不做增量 tail**（无稳定性承诺），降级为 docs/40 #11 进程/日志兜底层（session.start/end + 心跳，`observes` 能力协商自动隐藏无数据指标）。
-- **验收**：悬浮窗出现 KIMI-CODE 行（至少 进程在线/离线 + 会话计数；理想 = 状态/标题）。
-- **备注**：docs/40 适配矩阵尚无 Kimi Code 行，spike 结论出来后补一行（含证据等级）。
+- **Step 1 · 数据定位 spike（完成）**：排查 `~/Library/Application Support/kimi-code-app` 全目录 + `~/Library/Logs` + 家目录：
+  - **无 JSONL / SQLite / 日志目录**；会话数据只存在于 Chromium **Local Storage（LevelDB）**：`Local Storage/leveldb/{*.log,*.ldb}`，键名可见 `session_<uuid>`（本机 9 个去重）/ `draft` / `draft-snapshot` / `wd_workspace_<hash>` / `workspace-order`（键名来自 strings 级扫描，**未解码任何 value**）。
+  - `Partitions/kimi-browser` 是内嵌浏览器分区；`ui-state.json`/`browser-tabs.json` 只有 UI/浏览器标签状态；`~/Library/Logs/kimi-code-app` 不存在；家目录无 `~/.kimi*`。
+- **Step 2 · 降级（按 §4 风险分级执行）**：LevelDB 无稳定性承诺 → **不做 tail**。落地 `scanKimiStatus()`：进程存活（经 local-agents ps 注入）+ **近似会话计数**（`session_<uuid>` 键名去重，只读字节流、压缩块可能漏计 → 显式 approximate）+ LevelDB mtime 连接判定（45s 窗口）。`observes = ['session.heartbeat']`——**不产生任何会话行/事件**（契约红线：降级不得伪造）。
+- **验收**：`scripts/multi-source-check.mjs` MH1–MH2 全绿；四态面板实测「已打开 · 未连接 ≈9 个会话」（Kimi 运行但 45s 无写入时）与「已连接（日志通道）」（有写入时）两种形态均可复现。
+- **备注（已回填）**：docs/40 适配矩阵已补 Kimi Code 行（§0 表 #12 + §3.11，证据等级 [A]）。
 
 ### M-I · OpenCode 接入（P2，估 2～4 人日）
 
@@ -176,15 +174,17 @@
 | **远端控制的安全边界（命令注入/越权）**【v3】 | 投递只走 `agent` 子命令白名单；输入文本经 AgentOS 既有脱敏（凭证模式截断）；sudo 类仍由远端 AgentOS 拦截交还终端；总控不存凭证（§6.4） |
 | **多主机规模（host 数量增长）**【v3】 | source 命名规范先行（§6.3）；目录 UI 按 host 折叠分组；SSH 连接池与轮询间隔做预算（首版 ≤5 台，超出再做事件推送通道 [U]） |
 
-## 5. 本机现状快照（2026-10-06 更新）
+## 5. 本机现状快照（2026-10-06 更新，多源观察已上线）
 
 - DSH：观察+目录+输入+新建+打开 全链路可用；AgentPet.app 0.1.0 已装 /Applications 且在运行（外壳自动拉起服务）。
-- Claude Code：CLI 2.1.278（npm 全局）+ VSCode 插件 2.1.286 + 桌面 App；`~/.claude/projects` 12 项目；CC Switch 3.20.4 运行中（供应商切换）。
-- Codex：`~/.codex` 32 个 rollout、auth.json 在；**codex CLI 不在 PATH**；装有 Codex++ 双版本 + 管理工具 + codex-disk-* 工具族；Nowdex（用量监控）同读 `~/.codex`。
-- Kimi Code 1.0.4 / KimiCU 0.6.6：已装；Kimi Code 数据位置待 M-H Step 1 spike（**首批**）。
+- **Claude Code：观察通道已上线（M-A ✅）**——转录目录 + 实时 tail（本机 11 项目 / 48 会话；CC Switch 供应商切换后的模型名即时可见）；控制（M-D）未开始。
+- **Codex：观察通道已上线（M-B ✅）**——rollout 目录 + 实时 tail（13 主 + 19 子代理；**Codex++ 会话确认落同一 `~/.codex/sessions`**，originator=Codex Desktop）；控制（M-E）未开始，codex CLI 仍不在 PATH。
+- **Kimi Code：降级通道已上线（M-H ✅）**——LevelDB 近似计数 + 四态面板（≈9 会话）；无会话行（按红线不伪造）。KimiCU 维持 C 观望。
+- **多源同窗（M-C ✅）**：framed.mjs 三源合并目录 + 双跟随器接入同一状态机；同 cwd 项目归并（实测 `鹈鹕测试变体策划[dsh+claude-code+codex]`）；投递目标守卫（非 DSH 明确拒绝）。
 - OpenCode：桌面版数据 + `~/.config/opencode/opencode.json` 在，CLI 不在 PATH，活跃度待确认（P2）。
-- AgentOS M1：`~/.local/bin/agent`（shell，484 行）+ `~/agentos` 文档齐全（含 INSTALL-AMD64.md，已有 Linux 安装路径），状态文件可直接读——**远端执行体候选，见 §6**。
+- AgentOS M1：`~/.local/bin/agent`（shell，484 行）+ `~/agentos` 文档齐全（含 INSTALL-AMD64.md，已有 Linux 安装路径），状态文件可直接读——**远端执行体候选，见 §6**（M-J1 排 W4）。
 - 排除项：Claude.app / ChatGPT.app（聊天，无本机通道）、影刀 RPA（范式不符）——理由见 §1.3。
+- 下一步（按 §3 排期）：W3 M-G（打包常驻）+ M-D spike（tmux 注入 vs --resume）；W4 M-D/E 落地（先恢复 codex CLI）+ M-J1。
 
 ---
 

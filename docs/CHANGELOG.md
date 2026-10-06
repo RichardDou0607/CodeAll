@@ -113,3 +113,16 @@
 - **选择模型三规则**：行点击=设投递目标；过滤器只影响显示不影响目标（目标被过滤时黄色警示条，替换现状的静默回退——列为 P0 投递安全项）；「打开」独立于选择。
 - **术语统一**：队列用户文案只用 待投递/已送达/失败/已取消；toast ≤3s；删除 5s 可撤销。
 - **新增 10 条 UX-A 验收断言** + 与现状差异清单（7 项，P0 两项：目标不静默回退、软件区可点联动）+ 与 51/50 冲突消解表 + 远端主机分组（Phase 3）与用户旅程。
+
+### 多 Agent 观察适配落地：Claude Code / Codex / Kimi Code + 多源同窗（2026-10-06，代码，docs/21 M-A/M-B/M-C/M-H ✅）
+
+- **新增 `adapters/claude-code-adapter.mjs`（M-A）**：`scanClaudeCatalog()`（窗口化目录：头 24KB + 尾 160KB，单行 >512KB 跳过；本机 11 项目 / 48 会话，中位 ~18ms）+ `followClaudeLogs()`（多文件字节偏移增量 tail，1.2s 轮询，截断重建自愈，启动从 EOF 起不回放）+ `mapClaudeLine()` 纯函数（user→turn.start、tool_use→tool.call（category 复用 categoryOf）、end_turn→turn.end(ok)、turn_duration→turn.end、api_error→error.raised(fatal:false)、custom-title/ai-title/agent-name→session.meta；sidechain 行逐行忽略）。元信息：标题三级回退、模型（assistant.message.model，CC Switch 供应商可见）、版本、cwd（行内权威，目录名有损兜底）。
+- **新增 `adapters/codex-adapter.mjs`（M-B）**：`scanCodexCatalog()`（首行 session_meta 实测 20~51KB → 头窗口 96KB；本机 13 主 + 19 子代理，中位 ~19ms）+ `followCodexLogs()`（首遇文件读 session_meta：权威 sessionId + 子代理判定，**子代理 rollout 整文件跳过**，防幽灵实时行）+ `mapCodexLine()`（task_started→turn.start、function_call/custom_tool_call→tool.call、output→tool.result、task_complete→turn.end(ok)+message(截断280)、turn_aborted→turn.end(aborted)、session_meta→session.start）。**Codex++ 通路验证：全部 rollout originator="Codex Desktop"，落同一 `~/.codex/sessions`，单 root 覆盖。**
+- **新增 `adapters/kimi-code-adapter.mjs`（M-H Step 1+2）**：spike 结论——Kimi Code 无 JSONL/SQLite/日志，会话仅在 Chromium LevelDB（键名 `session_<uuid>` 等，只扫键名不解码 value）→ 按风险分级**降级**：`scanKimiStatus()` 存活 + 近似会话计数（≈9，显式 approximate）+ mtime 连接判定；`observes=['session.heartbeat']`，不产生会话行/事件（红线：降级不伪造）。
+- **`demo/framed.mjs`（M-C）**：`multiCatalog()` 三源合并（5s 缓存，合计 ~55ms）；快照 projects 带 `sources[]`；claude/codex 会话按 cwd 挂靠 DSH workspace（未命中则 `path:<cwd>` 自立组）；历史行跨源合并（截 40）；`followClaudeLogs`+`followCodexLogs` 与 DSH tail/插件共用同一 `applyEvent` 状态机；**投递目标守卫**——非 DSH 会话：UI 黄色警示 + 服务端 `resolveTarget` 404 拦截（M-D/M-E 未落地说明），自动挑目标仅限 DSH 主会话；`/api/catalog` 三源合并视图（perSource 统计）、`/api/open` 跨源定位并如实说明。
+- **`demo/window.html`**：历史行来源列改 `s.source`；Kimi 近似计数进四态面板（≈N 个会话）；非 DSH 目标行黄色警示；空态/底注/帮助文案多源化。
+- **`adapters/local-agents.mjs`**：kimi-code 补 LevelDB activity（连接判定生效）+ 会话计数（30s 缓存）。
+- **测试**：新增 `scripts/multi-source-check.mjs`（19 项断言全绿：MA1–7 / MB1–6 / MH1–2 / MC1–4，MC 组起真实 framed 实例验证多源快照与投递拦截）；`demo/test-window.mjs` 35 → 38 项全绿（历史来源列 / Kimi 计数 / 非 DSH 目标警示与颜色 / DSH 目标正常态）。
+- **实测**：本会话自身被 Claude 跟随器实时观察（running · 运行命令 · glm-5.3）；`鹈鹕测试变体策划[dsh+claude-code+codex]` 同 cwd 三源归并同窗；对 claude 会话投递被 404 + 明确原因拒绝。
+- **文档**：docs/21（M-A/M-B/M-C/M-H 标 ✅ + 落地形态 + §5 现状快照更新）、docs/40（Kimi Code 补行：§0 表 #12 + §3.11 [A] 证据）、README（多源演示命令）。
+- **已知既有问题（与本次无关）**：`scripts/check-fixtures.mjs` 对 `fixtures/session-replay.pet.jsonl` 的乱序窗口断言在改动前的基线上即失败（乱序窗口 ts 跨度 5797ms > 2000ms，非连续 seq），留待 fixture 重新录制修复。

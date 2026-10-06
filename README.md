@@ -20,19 +20,23 @@
 5. **内存验收口径**：`phys_footprint` 合计（RSS 仅作参考）。
 6. **分发**：优先 DMG 直分发（`macOSPrivateApi` 与 App Store 审核存在冲突，见风险登记册 R-12）。
 
-## 三、现在就有的可运行演示（2026-10-05）
+## 三、现在就有的可运行演示（2026-10-06）
 
-> 完整演示说明与「诚实边界」见 [demo/README.md](./demo/README.md)。**已跑通的是数据链路（真实 DSH 会话 → 规范事件 → 状态机 → 工作框卡片/悬浮窗）与悬浮窗输入队列；Tauri 真·桌面外壳与常驻 Hub 守护进程尚未实现**（路线图 M0–M3）。
+> 完整演示说明与「诚实边界」见 [demo/README.md](./demo/README.md)。**已跑通的是数据链路（真实 DSH 会话 → 规范事件 → 状态机 → 工作框卡片/悬浮窗）与悬浮窗输入队列；Tauri 真·桌面外壳与常驻 Hub 守护进程尚未实现**（路线图 M0–M3）。**多源观察已上线（M-A/M-B/M-C/M-H）：Claude Code 转录与 Codex rollout 只读接入，与 DSH 会话同窗并列；Kimi Code 按 LevelDB 降级为四态面板（存活 + 近似计数）。**
 
 ```bash
-# ★ 悬浮窗（多项目 / 多会话状态 + Agent·模型·思考程度 + **软件四态面板** + 缩减输入框）——最接近最终形态的演示
+# ★ 悬浮窗（多源 / 多项目 / 多会话状态 + Agent·模型·思考程度 + **软件四态面板** + 缩减输入框）——最接近最终形态的演示
 #   桌面窗口版（推荐，日常使用）：一键安装后从启动台/Spotlight 打开
 apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后直接打开「AgentPet」即可（外壳自动拉起服务）
-node demo/framed.mjs --port 7799    # 本地服务：只读会话日志 + SSE + 目录/输入接口
+node demo/framed.mjs --port 7799    # 本地服务：DSH 日志tail/插件 + Claude Code 转录tail + Codex rollout tail + SSE
 open http://127.0.0.1:7799/         # 悬浮窗页面（demo/window.html）
-node demo/test-window.mjs           # 悬浮窗渲染自检（35 项断言）
-node adapters/session-catalog.mjs   # 会话目录：本机 3 项目 / 16 会话，扫描 19ms
+node demo/test-window.mjs           # 悬浮窗渲染自检（38 项断言）
+node adapters/session-catalog.mjs   # DSH 会话目录（~20ms）
+node adapters/claude-code-adapter.mjs    # Claude Code 会话目录（本机 11 项目 / 48 会话，~18ms）
+node adapters/codex-adapter.mjs          # Codex 会话目录（13 主会话 / 19 子代理自动排除，~19ms）
+node adapters/kimi-code-adapter.mjs      # Kimi Code 降级通道（LevelDB 近似计数）
 node adapters/local-agents.mjs      # 软件四态探测：已连接 / 已打开·未连接 / 未打开 / 未下载（~40ms）
+node scripts/multi-source-check.mjs # 多源适配验收（M-A/M-B/M-C/M-H，19 项断言，含真实服务实例）
 
 # 其它演示
 node demo/frame.mjs                 # 终端实时工作框：跟随你正在跑的 DSH 会话（约 400ms 刷新）

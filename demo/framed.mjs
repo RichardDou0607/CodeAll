@@ -20,10 +20,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { createHub, makeMapper, findSessionLog } from './frame.mjs';
-import { scanCatalog, resolveSession, readWorkspaceIndex } from '../adapters/session-catalog.mjs';
+import { scanCatalog, readWorkspaceIndex } from '../adapters/session-catalog.mjs';
 import { scanLocalAgents } from '../adapters/local-agents.mjs';
+import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../adapters/claude-code-adapter.mjs';
+import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
 import net from 'node:net';
 import crypto from 'node:crypto';
+
+/** 多源会话目录（M-C）：DSH（workspace 注册表）+ Claude Code（目录即项目）+ Codex（session_meta.cwd 归并）。 */
+const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', agentos: 'AgentOS', opencode: 'OpenCode' };
 
 // ---------- DSH 插件通道（优先）：存在则用进程内事件 + 输入投递；不存在则退回日志 tail + 本地队列 ----------
 const PLUGIN_SOCK = process.env.PET_PLUGIN_SOCK || path.join(process.env.TMPDIR || '/tmp', 'agent-pet', 'dsh-plugin.sock');
@@ -203,6 +208,19 @@ function workspaceIndex(force) {
   }
   return wsCache.data;
 }
+// 多源目录缓存：DSH + Claude Code + Codex 三路扫描合并（各 ~20ms，5s 复用）
+let multiCache = { at: 0, data: null };
+function multiCatalog(force) {
+  if (force || !multiCache.data || Date.now() - multiCache.at > 5000) {
+    const dsh = catalog(force);
+    let cc = { projects: [], sessions: [], elapsedMs: 0 };
+    let cx = { projects: [], sessions: [], elapsedMs: 0 };
+    try { cc = scanClaudeCatalog(); } catch (e) { cc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+    try { cx = scanCodexCatalog(); } catch (e) { cx = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+    multiCache = { at: Date.now(), data: { dsh, cc, cx, elapsedMs: (dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) } };
+  }
+  return multiCache.data;
+}
 const sessionStates = new Map(); // sessionId -> 来自目录的粗粒度状态（无实时事件时用）
 
 // ---------- 本地域 agent 软件四态（adapters/local-agents.mjs）：3s 轮询，DSH 连接态由此处注入 ----------
@@ -269,31 +287,58 @@ function applyEvent(ev) {
 }
 function snapshot() {
   const agg = hub.agg();
-  const cat = catalog(false);
+  const multi = multiCatalog(false);
+  const cat = multi.dsh;
   const ws = workspaceIndex(false);
+  // 跨源元信息表：sessionId → 目录记录（claude/codex 记录自带 source / agentName / model）
   const metaById = new Map();
   for (const p of cat.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
+  for (const p of multi.cc.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
+  for (const p of multi.cx.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   // 子代理判定：插件 session.start 的 origin 立即可判（零延迟）；目录 kind 兜底（≤5s 滞后）
   const isSubagent = (id, s) => s?.origin === 'subagent' || (metaById.get(id)?.kind || 'main') === 'subagent';
-  // projectKey：会话所属项目（workspaceId）；未注册进任何 workspace 的会话归 '__none__'（DSH 侧栏之外的兜底组）
-  const keyOfSession = (id) => ws.sessionOwner.get(id) || '__none__';
+  // projectKey：DSH 注册表优先；claude/codex 按 cwd 归并进同目录 workspace；都不中 → 'path:<cwd>'（M-C）
+  const keyOfSession = (id, row) => {
+    const wid = ws.sessionOwner.get(id);
+    if (wid) return wid;
+    const cwd = metaById.get(id)?.cwd ?? row?.cwd ?? null;
+    if (cwd) { const w = ws.byPath.get(cwd); if (w) return w; }
+    return cwd ? 'path:' + cwd : '__none__';
+  };
   const live = state.order.map(id => state.sessions.get(id)).filter(Boolean).filter(s => !isSubagent(s.id, s)).map(s => {
     const meta = metaById.get(s.id) || {};
     return {
       id: s.id, source: s.source, label: meta.title || s.label, state: s.state,
-      cwd: meta.cwd || s.cwd || null, projectKey: keyOfSession(s.id),
+      cwd: meta.cwd || s.cwd || null, projectKey: keyOfSession(s.id, s),
       since: s.since, pending: s.pending, activity: s.activity,
       elapsedMs: Date.now() - s.since,
-      agentName: meta.agentName || 'DSH', model: meta.model || null, reasoningEffort: meta.reasoningEffort || null,
+      agentName: meta.agentName || SOURCE_LABEL[s.source] || 'DSH', model: meta.model || null, reasoningEffort: meta.reasoningEffort || null,
       agentPreset: meta.agentPreset || null, title: meta.title || null, kind: 'main', live: true,
     };
   });
-  // ---- 会话列表以 DSH 左侧列表（workspace 注册表）为准 ----
-  //   1) 注册表项目按 global.workspaceIds 顺序（= DSH 侧栏顺序），成员按各 workspace.sessionIds；
-  //   2) 子代理 / 已归档一律不出现（注册表本就不含子代理，这里再按目录 kind 双保险）；
-  //   3) 未注册进任何 workspace 的主会话（如旧版 cwd-only 创建的）归入末尾「未归入项目」组，
-  //      避免新建后不可见，也不打乱注册表项目的成员。
   const liveIds = new Set(live.map(s => s.id));
+
+  // ---- 会话列表（多源合并，docs/21 M-C「按 cwd 归一」）----
+  //   DSH = workspace 注册表（唯一真相源，原行为保留）；
+  //   Claude Code / Codex 会话按 cwd 挂靠：① 命中 workspace.path → 并进该项目；② 未命中 → 'path:<cwd>' 自立组。
+  //   子代理一律不出现（注册表本就不含；codex 目录扫描已按 parent_thread_id 过滤）。
+  const extraByWorkspace = new Map();   // workspaceId → 非 DSH 会话行
+  const orphanByCwd = new Map();        // 'path:<cwd>' → { cwd, rows }
+  const collectExtra = (s) => {
+    if (s.kind === 'subagent') return;
+    const wid = s.cwd ? ws.byPath.get(s.cwd) : undefined;
+    if (wid && ws.byId.has(wid)) {
+      if (!extraByWorkspace.has(wid)) extraByWorkspace.set(wid, []);
+      extraByWorkspace.get(wid).push(s);
+    } else {
+      const key = 'path:' + (s.cwd ?? '(未知目录)');
+      if (!orphanByCwd.has(key)) orphanByCwd.set(key, { cwd: s.cwd, rows: [] });
+      orphanByCwd.get(key).rows.push(s);
+    }
+  };
+  for (const s of multi.cc.sessions || []) collectExtra(s);
+  for (const s of multi.cx.sessions || []) collectExtra(s);
+
   const sidebarProjects = [];
   const listed = new Set();
   for (const wid of ws.order) {
@@ -307,12 +352,31 @@ function snapshot() {
       listed.add(sid);
       rows.push(meta);
     }
+    const extras = (extraByWorkspace.get(wid) || []).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    for (const e of extras) listed.add(e.sessionId);
+    const all = [...rows, ...extras];
     sidebarProjects.push({
       key: wid, projectId: wid, workspaceId: wid, name: w.title, title: w.title, cwd: w.path,
-      sessionCount: rows.length, mainCount: rows.length, subagentCount: 0,
-      liveCount: rows.filter(r => r.live || liveIds.has(r.sessionId)).length, sessions: rows,
+      sessionCount: all.length, mainCount: all.length, subagentCount: 0,
+      liveCount: all.filter(r => r.live || liveIds.has(r.sessionId)).length,
+      sources: [...new Set(['dsh', ...extras.map(e => e.source).filter(Boolean)])],
+      sessions: all,
     });
   }
+  // 未挂靠任何 workspace 的 claude/codex 项目组（cwd 自立；claude 与 codex 同 cwd 进同一组）
+  for (const [key, g] of orphanByCwd) {
+    const rows = g.rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    for (const r of rows) listed.add(r.sessionId);
+    const name = g.cwd ? path.basename(g.cwd) : '（未知目录）';
+    sidebarProjects.push({
+      key, projectId: key, workspaceId: null, name, title: name, cwd: g.cwd,
+      sessionCount: rows.length, mainCount: rows.length, subagentCount: 0,
+      liveCount: rows.filter(r => r.live || liveIds.has(r.sessionId)).length,
+      sources: [...new Set(rows.map(r => r.source).filter(Boolean))],
+      sessions: rows, unregistered: false,
+    });
+  }
+  // DSH 未注册进任何 workspace 的主会话（如旧版 cwd-only 创建的）归入末尾「未归入项目」组
   const unregistered = (cat.sessions || [])
     .filter(s => s.kind !== 'subagent' && !ws.archived.has(s.sessionId) && !ws.sessionOwner.has(s.sessionId) && !listed.has(s.sessionId))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
@@ -320,16 +384,18 @@ function snapshot() {
     sidebarProjects.push({
       key: '__none__', projectId: '__none__', workspaceId: null, name: '未归入项目', title: '未归入项目', cwd: null,
       sessionCount: Math.min(unregistered.length, 12), mainCount: Math.min(unregistered.length, 12), subagentCount: 0,
-      liveCount: unregistered.filter(r => r.live || liveIds.has(r.sessionId)).length, sessions: unregistered.slice(0, 12),
+      liveCount: unregistered.filter(r => r.live || liveIds.has(r.sessionId)).length,
+      sources: ['dsh'],
+      sessions: unregistered.slice(0, 12),
       unregistered: true,
     });
   }
-  // 历史行（非实时）：注册表会话优先按更新时间排，未注册的殿后；总量截 40
-  const history = [...unregistered, ...sidebarProjects.flatMap(p => p.unregistered ? [] : p.sessions)]
+  // 历史行（非实时）：跨源合并，按更新时间排，总量截 40
+  const history = sidebarProjects.flatMap(p => p.sessions)
     .filter(s => !liveIds.has(s.sessionId) && !s.live)
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 40)
-    .map(s => ({ ...s, source: 'dsh', projectKey: keyOfSession(s.sessionId) }));
+    .map(s => ({ ...s, source: s.source || 'dsh', projectKey: keyOfSession(s.sessionId, s) }));
   return {
     v: 1, ts: Date.now(), agg,
     sessions: live,
@@ -344,10 +410,11 @@ function snapshot() {
         key: p.key, projectId: p.projectId, name: p.name, cwd: p.cwd,
         sessionCount: p.sessionCount, mainCount: p.mainCount, subagentCount: p.subagentCount,
         liveCount: p.liveCount, unregistered: p.unregistered || false,
+        sources: p.sources || ['dsh'],
       })),
       history,
-      elapsedMs: cat.elapsedMs, scannedAt: cat.scannedAt,
-      source: 'workspace-registry',
+      elapsedMs: multi.elapsedMs, scannedAt: cat.scannedAt,
+      source: 'multi:workspace-registry+disk(claude-code,codex)',
     },
     capabilities: {
       canCatalog: true,
@@ -397,14 +464,31 @@ function startFollower() {
 }
 
 // ---------- 输入投递 ----------
-/** 校验并归一化用户指定的投递目标：必须是已知**主**会话（支持 sessionId 前缀）；返回 {id,label} 或 {error}。 */
+/** 跨源定位会话（支持前缀）：DSH / Claude Code / Codex 目录各查一遍，返回时附带所属项目。 */
+function resolveSessionAny(sessionId) {
+  const multi = multiCatalog(false);
+  for (const cat of [multi.dsh, multi.cc, multi.cx]) {
+    for (const p of cat.projects || []) {
+      const s = (p.sessions || []).find(x => x.sessionId === sessionId || String(x.sessionId).indexOf(sessionId) === 0);
+      if (s) return { ...s, project: { projectId: p.projectId, cwd: p.cwd, name: p.name, title: p.title } };
+    }
+  }
+  return null;
+}
+/** 校验并归一化用户指定的投递目标：必须是已知**主**会话（支持 sessionId 前缀）。
+ *  投递通道当前只有 DSH（插件/队列）；claude-code/codex 的控制通道属 M-D/M-E（未落地），
+ *  选中即明确报错——绝不静默投错后端。返回 {id,label} 或 {error}。 */
 function resolveTarget(sessionId) {
   if (!sessionId) return { id: null };
   const liveHit = state.order.map(id => state.sessions.get(id)).filter(Boolean).find(s => s.id === sessionId || s.id.startsWith(sessionId));
-  if (liveHit) return { id: liveHit.id, label: liveHit.label };
-  const found = resolveSession(String(sessionId));
+  if (liveHit) {
+    if (liveHit.source && liveHit.source !== 'dsh') return { error: '「' + (liveHit.label || String(liveHit.id).slice(0, 12)) + '」是 ' + (SOURCE_LABEL[liveHit.source] || liveHit.source) + ' 会话：控制通道未落地（M-D/M-E），当前投递仅支持 DSH' };
+    return { id: liveHit.id, label: liveHit.label };
+  }
+  const found = resolveSessionAny(String(sessionId));
   if (!found) return { error: '未找到会话 ' + String(sessionId).slice(0, 24) };
   if (found.kind === 'subagent') return { error: '「' + (found.title || found.sessionId.slice(0, 12)) + '」是子代理会话，不能作为投递目标' };
+  if (found.source && found.source !== 'dsh') return { error: '「' + (found.title || found.sessionId.slice(0, 12)) + '」是 ' + (SOURCE_LABEL[found.source] || found.source) + ' 会话：控制通道未落地（M-D/M-E），当前投递仅支持 DSH' };
   return { id: found.sessionId, label: found.title };
 }
 async function deliverInput(text, targetId) {
@@ -441,12 +525,13 @@ async function deliverInput(text, targetId) {
   broadcast();
   return item;
 }
-/** 自动挑投递目标：优先实时活跃的主会话（子代理不算，见 snapshot() 同款过滤），否则 null（插件会挑最新磁盘主会话）。 */
+/** 自动挑投递目标：优先实时活跃的**DSH 主**会话（claude/codex 无投递通道，子代理不算），否则 null（插件会挑最新磁盘主会话）。 */
 function pluginTargetSession() {
   const cat = catalog(false);
   const metaById = new Map();
   for (const p of cat.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   const live = state.order.map(id => state.sessions.get(id)).filter(Boolean)
+    .filter(s => (s.source ?? 'dsh') === 'dsh')
     .filter(s => (metaById.get(s.id)?.kind || 'main') !== 'subagent');
   const running = live.find(s => ['running', 'thinking', 'waiting'].includes(s.state)) || live[0];
   return running ? running.id : null;
@@ -492,22 +577,34 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/catalog') {
     // 对外只暴露「主会话」：子代理（kind==='subagent'）不是用户意义上的会话，
     // 既不该出现在列表里，也不该被选为投递目标（服务端 resolveTarget 也会再拦一次）。
-    const raw = catalog(url.searchParams.get('refresh') === '1');
-    const projects = (raw.projects || []).map(p => {
-      const mains = (p.sessions || []).filter(s => s.kind !== 'subagent');
-      return Object.assign({}, p, {
-        sessions: mains,
-        sessionCount: mains.length,
-        mainCount: mains.length,
-        subagentCount: (p.sessions || []).length - mains.length,
-        liveCount: mains.filter(s => s.live).length,
-      });
-    }).filter(p => p.sessionCount > 0);
+    // M-C：三源合并（DSH / Claude Code / Codex），projects[].sources 标注每个项目的来源构成。
+    const multi = multiCatalog(url.searchParams.get('refresh') === '1');
+    const projects = [];
+    for (const cat of [multi.dsh, multi.cc, multi.cx]) {
+      for (const p of cat.projects || []) {
+        const mains = (p.sessions || []).filter(s => s.kind !== 'subagent');
+        projects.push(Object.assign({}, p, {
+          sessions: mains,
+          sessionCount: mains.length,
+          mainCount: mains.length,
+          subagentCount: (p.sessions || []).length - mains.length,
+          liveCount: mains.filter(s => s.live).length,
+          sources: [...new Set(mains.map(s => s.source).filter(Boolean))],
+        }));
+      }
+    }
+    const visible = projects.filter(p => p.sessionCount > 0);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(Object.assign({}, raw, {
-      projects,
-      mainSessions: projects.reduce((a, p) => a + p.sessionCount, 0),
-      subagentSessions: (raw.projects || []).reduce((a, p) => a + (p.sessions || []).filter(s => s.kind === 'subagent').length, 0),
+    res.end(JSON.stringify(Object.assign({}, multi.dsh, {
+      source: 'multi:workspace-registry+disk(claude-code,codex)',
+      projects: visible,
+      mainSessions: visible.reduce((a, p) => a + p.sessionCount, 0),
+      subagentSessions: visible.reduce((a, p) => a + p.subagentCount, 0),
+      perSource: {
+        dsh: { projects: (multi.dsh.projects || []).length, sessions: (multi.dsh.sessions || []).filter(s => s.kind !== 'subagent').length },
+        'claude-code': { projects: (multi.cc.projects || []).length, sessions: (multi.cc.sessions || []).length },
+        codex: { projects: (multi.cx.projects || []).length, sessions: (multi.cx.sessions || []).filter(s => s.kind !== 'subagent').length },
+      },
     })));
     return;
   }
@@ -528,12 +625,16 @@ const server = http.createServer(async (req, res) => {
     req.on('end', () => {
       let sessionId = '';
       try { sessionId = String(JSON.parse(body).sessionId || ''); } catch {}
-      const found = sessionId ? resolveSession(sessionId) : null;
+      // 跨源定位（M-C）：DSH 会话维持原口径；claude/codex 会话「定位成功但不可切换跟随」并如实说明
+      const found = sessionId ? resolveSessionAny(sessionId) : null;
+      const reason = !found ? '未找到该会话'
+        : found.source && found.source !== 'dsh' ? '目录中已定位该 ' + (SOURCE_LABEL[found.source] || found.source) + ' 会话；切换实时跟随/打开属 M-D/M-E（控制通道未落地）'
+        : '目录中已定位该会话；切换实时跟随需要 DSH 插件授权（canOpen 能力位）';
       res.writeHead(found ? 200 : 404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         ok: !!found, session: found,
         opened: false,
-        reason: found ? '目录中已定位该会话；切换实时跟随需要 DSH 插件授权（canOpen 能力位）' : '未找到该会话',
+        reason,
         howto: '见 demo/README.md「打开已存在会话 / 新建会话」',
       }));
     });
@@ -652,6 +753,10 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('  输入通道： ' + (INPUT_CMD ? 'PET_INPUT_CMD（自动投递）' : '手动队列（未配置 PET_INPUT_CMD）'));
   startFollower();
   connectPlugin();   // 若 DSH 插件已挂载：进程内事件 + 直接投递
+  // M-A/M-B：Claude Code 与 Codex 的多文件观察跟随（增量 tail → 同一个状态机；Kimi Code 按 M-H 降级为四态面板，无事件）
+  const ccFollow = followClaudeLogs({ onEvent: applyEvent });
+  const cxFollow = followCodexLogs({ onEvent: applyEvent });
+  console.log('  观察通道： DSH=日志tail/插件 · Claude Code=' + (ccFollow ? '转录tail' : 'off') + ' · Codex=' + (cxFollow ? 'rollout tail' : 'off') + ' · Kimi Code=四态面板（降级）');
   refreshAgentStatus();
   setInterval(refreshAgentStatus, 3000);   // 软件四态（ps + mtime 探测，实测 ~40ms）
 });

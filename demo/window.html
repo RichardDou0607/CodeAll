@@ -92,7 +92,7 @@ select{flex:1;background:#0d1117;color:var(--txt);border:1px solid var(--line);b
       <div class="crow"><span class="hint" id="hint">未连接</span><span class="chip" title="窗口失焦时按 ⌥⌘I 直接聚焦输入框">⌥⌘I 聚焦</span><button class="send" id="send">发送</button></div>
       <div class="queue" id="queue"></div>
     </div>
-    <div class="note" id="note">数据来自本机 DSH 会话日志（只读）；输入先进入本地队列。</div>
+    <div class="note" id="note">数据只读自本机会话日志（DSH / Claude Code / Codex；Kimi Code 仅存活与近似计数）；输入先进入本地队列。</div>
   </div>
   <div class="help">
     <h4>这一版新增了什么</h4>
@@ -101,12 +101,13 @@ select{flex:1;background:#0d1117;color:var(--txt);border:1px solid var(--line);b
     ③ <b>选择投递目标</b>：点击任一会话行（实时/历史）把它设为输入的目标会话（高亮显示），再点一次恢复自动<br>
     ④ <b>打开已存在会话</b>：历史会话行点击即选中为目标并定位（切换实时跟随需插件授权）<br>
     ⑤ <b>新建会话</b>：插件连通后按钮可用（在 DSH 进程内创建）；未连通时禁用并说明原因，<b>不使用 DSH 凭证绕过权限</b><br>
-    ⑥ <b>软件状态面板</b>：本机每个 agent 软件的四态（<b>已连接</b> / <b>已打开 · 未连接</b> / <b>未打开</b> / <b>未下载</b>）；安装=App 包/CLI/配置目录存在性（cc-switch 同款），运行=进程探测，连接=观察通道 45s 内有数据
+    ⑥ <b>软件状态面板</b>：本机每个 agent 软件的四态（<b>已连接</b> / <b>已打开 · 未连接</b> / <b>未打开</b> / <b>未下载</b>）；安装=App 包/CLI/配置目录存在性（cc-switch 同款），运行=进程探测，连接=观察通道 45s 内有数据<br>
+    ⑦ <b>多后端同窗</b>（M-A/M-B/M-C/M-H）：Claude Code 转录与 Codex rollout 只读接入，与 DSH 会话并列显示（来源列区分）；同目录项目自动归并；Kimi Code 按 LevelDB 降级（仅存活 + 近似会话计数，不解析内容）。投递当前仅支持 DSH，选其他后端为目标会显式提示
     <h4 style="margin-top:14px">输入如何送达</h4>
     当前进本地队列，点击队列里的「复制」把文本粘到 DSH 输入框即可；授权挂载插件后可直接送达。<br>
     <h4 style="margin-top:14px">为什么打开/新建要授权</h4>
     运行中的会话日志有排他锁（直写会损坏会话）；DSH 的 GUI 接口需要浏览器会话密钥，让悬浮窗持有它属于越权。插件方式是在 DSH 自身进程内调用官方 API，权限最小。<br>
-    <span style="color:#6b7a90">数据只读自 <code>~/.dsh/sessions/**</code>；不接触任何凭证。</span>
+    <span style="color:#6b7a90">数据只读自 <code>~/.dsh/sessions/**</code>、<code>~/.claude/projects/**</code>、<code>~/.codex/sessions/**</code>；不接触任何凭证。</span>
   </div>
 </div>
 <script>
@@ -149,6 +150,7 @@ function render(snap){
       if(a.version)meta.push('v'+a.version);
       if(st==='connected')meta.push(a.connectionKind==='plugin'?'插件通道':a.connectionKind==='event'?'事件流':'日志通道');
       if(a.running&&a.processes>1)meta.push(a.processes+' 进程');
+      if(a.id==='kimi-code'&&a.sessionCount!=null)meta.push('≈'+a.sessionCount+' 个会话');   // M-H 降级：LevelDB 键名去重的近似计数
       if(st==='closed'&&a.lastActivityMs)meta.push('上次活动 '+relTime(a.lastActivityMs,snap.ts||Date.now()));
       if(st==='open-unconnected'&&a.note)meta.push(a.note);
       if(st==='not-installed')meta.push('未检测到安装痕迹');
@@ -185,6 +187,9 @@ function render(snap){
   let tgtHit=null;
   for(const s of rows.concat(hist)){if(s.id===tgt||s.sessionId===tgt){tgtHit=s;break}}
   if(tgt&&!tgtHit)window.__TARGET__='';
+  // 非 DSH 会话可选中（观察联动），但投递通道未落地（M-D/M-E）——目标行显式警示，不静默失败
+  const tgtSource=tgtHit?(tgtHit.source||'dsh'):'dsh';
+  const tgtBlocked=!!tgtHit&&tgtSource!=='dsh';
   const effectiveHist=(showHist||!!pid)?hist:[];
   const proj=(snap.catalog&&snap.catalog.projects)||[];
   let html='';
@@ -199,13 +204,13 @@ function render(snap){
         +'<span class="tm">'+(st==='idle'?'--':st==='done'?'完成':mmss(s.elapsedMs||0))+'</span></div>';
     }).join('');
   } else {
-    html+='<div class="empty">暂无实时会话（等待 DSH 会话活动…）</div>';
+    html+='<div class="empty">暂无实时会话（等待后端活动：DSH / Claude Code / Codex…）</div>';
   }
   if(effectiveHist.length||(showHist&&!hist.length)){
     html+=effectiveHist.length?effectiveHist.map(function(s){
       const col=COLOR[s.state]||'#8b98a9';
       const sel=window.__TARGET__===s.sessionId;
-      return '<div class="srow hist'+(sel?' sel':'')+'" data-session="'+esc(s.sessionId)+'" title="点击选为投递目标并定位"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(String(s.agentName||'DSH').toUpperCase())+'</span>'
+      return '<div class="srow hist'+(sel?' sel':'')+'" data-session="'+esc(s.sessionId)+'" title="点击选为投递目标并定位"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(String(s.source||s.agentName||'dsh').toUpperCase())+'</span>'
         +'<span class="mid"><span class="lbl">'+esc(s.title||s.sessionId.slice(0,12))+'</span><span class="meta">'+esc(metaLine(s))+' · '+new Date(s.updatedAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+'</span></span>'
         +'<span class="st" style="color:'+col+'">'+(STATE_LABEL[s.state]||s.state)+'</span><span class="tm">打开</span></div>';
     }).join(''):'<div class="empty">该项目没有历史会话</div>';
@@ -220,10 +225,17 @@ function render(snap){
   const mainOf=function(p){return p.mainCount!=null?p.mainCount:p.sessionCount};
   const selHtml='<option value="">全部项目（'+projList.length+'）</option>'+projList.map(function(p){return '<option value="'+esc(p.key||p.projectId)+'"'+((p.key||p.projectId)===cur?' selected':'')+'>'+esc(p.name)+'（'+mainOf(p)+' 会话'+(p.liveCount?' · '+p.liveCount+' 进行中':'')+(p.unregistered?' · 未注册':'')+'）</option>'}).join('');
   if(sel.__petLastHtml!==selHtml){sel.innerHTML=selHtml;sel.__petLastHtml=selHtml}   // 同理：不打断下拉交互
-  // 投递目标行：显示当前目标（自动 = 服务端挑最近活跃主会话）
-  $('target').innerHTML=window.__TARGET__
-    ?('投递目标：<b>'+esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12))+'</b>（点击恢复自动）')
-    :'投递目标：自动 · 最近活跃主会话（点击会话行可指定）';
+  // 投递目标行：显示当前目标（自动 = 服务端挑最近活跃主会话）；非 DSH 目标黄色警示（M-D/M-E 未落地）
+  const tgtEl=$('target');
+  if(window.__TARGET__){
+    tgtEl.innerHTML=tgtBlocked
+      ?('投递目标：<b>'+esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12))+'</b> · ⚠ '+(String(tgtSource).toUpperCase())+' 暂不支持投递（观察通道）')
+      :('投递目标：<b>'+esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12))+'</b>（点击恢复自动）');
+    tgtEl.style.color=tgtBlocked?'var(--wait)':'';
+  } else {
+    tgtEl.innerHTML='投递目标：自动 · 最近活跃主会话（点击会话行可指定）';
+    tgtEl.style.color='';
+  }
   const caps=snap.capabilities||{};
   $('new-session').disabled=!caps.canCreate;
   $('new-session').title=caps.canCreate?'在选中项目新建会话':'新建会话需要在 DSH 进程内完成（插件授权）：'+((snap.catalog&&snap.catalog.projects&&snap.catalog.projects[0]&&snap.catalog.projects[0].cwd)||'');

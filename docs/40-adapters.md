@@ -22,6 +22,7 @@
 | 9 | **Windsurf** | hook（官方文档本次不可达，第三方镜像） | 未验证（估计 6～8 类） | **P2** | 8～10 人日 |
 | 10 | **Aider** | 无 hook；JSON 输出/历史文件/进程观测 | 3～4 类（进程级为主） | **P2** | 3～4 人日 |
 | 11 | **进程/日志兜底层** | ps / lsof / 文件监听 | 2 类（session.start/end 级别） | **P1（兜底）** | 2～3 人日 |
+| 12 | **Kimi Code**（桌面 App，1.0.4） | Chromium Local Storage（LevelDB）——无 JSONL/SQLite/日志 | 0 类事件（降级：存活 + 近似会话计数） | **首批降级**（docs/21 M-H ✅） | 1 人日（已落地） |
 
 **三条结论**：
 1. **Phase 2 的关键不是「能不能拿到事件」，而是「拿到事件要不要用户改配置」**：Claude Code / Codex / Cursor / Copilot / Gemini 的 hook 都要写进用户或项目配置文件，属于「需用户同意安装」的接入方式；**离线日志兜底（只读、零侵入）应当作为每个后端的默认降级路径**。本机实测证明两条路都可行（见 §3.1/§3.2 的实测证据段）。
@@ -464,6 +465,16 @@ $ node -e 'fs.watch(dir, ...)'    # 文件级变化（会话日志增长 = 有�
 **TCC / 权限**：App Sandbox 容器之间互相不可读（[B] https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox.md ，2026-10-05）；`~/Library/**`、`~/.claude`、`~/.codex` 属于用户家目录普通位置，本机实测**无需 Full Disk Access 即可读**（[A] 本次全部扫描均未提权）；`~/Documents`、`~/Desktop`、`~/Downloads` 属于受保护目录，读取需用户授权（[U] 未找到可抓取的 Apple 官方页面，验证方法：系统设置 → 隐私与安全性 → 完全磁盘访问权限；或在沙箱外进程内 `fs.readdir` 这两个目录观察是否报 EPERM）。
 **降级体验设计**（契约合规）：只发 `session.start`（进程启动）/ `session.end`（进程退出）与 `pet.heartbeat`（带 `load`≈CPU 占用档位），渲染层保持 `idle`，UI 上显示「在跑」小徽标而不是动画；**禁止**用 `agent.status=working` 冒充。
 **工作量：2～3 人日**（进程发现 + 文件监听 + 契约信封）。
+
+---
+
+### 3.11 Kimi Code（首批·降级，docs/21 M-H）【2026-10-06 补行】
+
+**接入点（spike 实测 [A]）**：无 hook、无本地 API、无 JSONL/SQLite/日志目录；会话数据只存在于 Chromium **Local Storage（LevelDB）**——`~/Library/Application Support/kimi-code-app/Local Storage/leveldb/{*.log,*.ldb}`，键名含 `session_<uuid>`（本机去重 9 个）、`draft(-snapshot)`、`wd_workspace_<hash>`、`workspace-order`（strings 级键名扫描，未解码 value）。
+
+**处置（按 §4/风险分级「只有 LevelDB → 不做 tail」）**：降级为 §3.10 同款兜底——**不产生任何事件/会话行**，只提供进程存活（ps）+ **近似会话计数**（`session_<uuid>` 键名去重，压缩块可能漏计 → 显式 approximate）+ LevelDB mtime 连接判定（45s 窗口）。落地于 `adapters/kimi-code-adapter.mjs`（`observes=['session.heartbeat']`）与 `adapters/local-agents.mjs`（四态面板「≈N 个会话」）。
+
+**证据等级**：[A] 本机实测（2026-10-06 全目录排查 + 键名扫描，只读）。**若未来版本出现结构化导出/日志，重新评估升级为事件级适配。**
 
 ---
 
