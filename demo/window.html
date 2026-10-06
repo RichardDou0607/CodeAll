@@ -2,261 +2,257 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Agent 悬浮窗 · 状态 / 会话 / 输入</title>
+<title>AgentPet · App</title>
 <style>
-:root{--bg:#0b0e14;--win:#12161f;--line:#242c3a;--txt:#e6edf3;--dim:#8b98a9;--idle:#8b98a9;--think:#4aa8ff;--run:#3fb950;--wait:#e3b341;--err:#f85149;--done:#bc8cff}
+:root{--bg:#0b0e14;--win:#12161f;--line:#242c3a;--txt:#e6edf3;--dim:#8b98a9;--idle:#8b98a9;--think:#4aa8ff;--run:#3fb950;--wait:#e3b341;--err:#f85149;--done:#bc8cff;--acc:#1f6feb}
 *{box-sizing:border-box}
-body{margin:0;height:100vh;overflow:auto;background:linear-gradient(160deg,#1b2230,#0b0e14 55%);color:var(--txt);font:13px/1.5 -apple-system,"PingFang SC",system-ui,sans-serif;display:flex;align-items:flex-start;justify-content:flex-start;gap:18px;padding:14px}
-.desk{position:relative;flex:1 1 auto;min-width:320px;min-height:100%;border-radius:16px;background:radial-gradient(700px 300px at 80% 0%,#22304a33,#0e1219);border:1px solid #202839;padding:10px}
-.desk:after{content:"模拟桌面（演示用）";position:absolute;right:12px;bottom:10px;color:#38445a;font-size:11px}
-.win{width:360px;max-width:100%;background:rgba(18,22,31,.96);border:1px solid var(--line);border-radius:13px;box-shadow:0 26px 60px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.02) inset;overflow:hidden}
-.titlebar{height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:rgba(255,255,255,.02);border-bottom:1px solid var(--line)}
-.titlebar .grip{width:9px;height:9px;border-radius:50%;background:#2f3a4d}
-.titlebar .ttl{flex:1;font-size:11px;color:var(--dim);letter-spacing:.04em}
-.titlebar button{background:none;border:none;color:var(--dim);cursor:pointer;font-size:12px;padding:2px 4px}
-.toolbar{display:flex;align-items:center;gap:6px;padding:7px 10px;border-bottom:1px solid var(--line)}
-select{flex:1;background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:7px;font-size:11px;padding:4px 6px;outline:none}
-.btn{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:7px;font-size:11px;padding:4px 8px;cursor:pointer}
-.btn:disabled{opacity:.45;cursor:not-allowed}
-.aggbar{display:flex;align-items:center;gap:6px;padding:7px 10px;border-bottom:1px solid var(--line);font-size:12px}
+html,body{margin:0;height:100%;background:#0b0e14;color:var(--txt);font:13px/1.5 -apple-system,"PingFang SC",system-ui,sans-serif;overflow:hidden}
+#app{height:100vh;display:flex;flex-direction:column;background:linear-gradient(160deg,#141926,#0b0e14 60%)}
+/* ---- 顶部：agent 软件切换 + 聚合状态 ---- */
+header{flex:0 0 42px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.02)}
+header .logo{font-weight:700;font-size:13px;letter-spacing:.02em}
+header .logo small{color:var(--dim);font-weight:400;font-size:10px;margin-left:4px}
+#agent-tabs{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto}
+#agent-tabs .tab{background:none;border:1px solid transparent;color:var(--dim);border-radius:8px;font-size:11px;padding:4px 10px;cursor:pointer;white-space:nowrap}
+#agent-tabs .tab:hover{color:var(--txt);border-color:var(--line)}
+#agent-tabs .tab.on{color:#fff;background:#1d2531;border-color:#34405499}
+.aggchip{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;flex:0 0 auto}
 .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 8px currentColor}
-.aggbar .agg{font-weight:600}
-.aggbar .sp{flex:1}
-.chips{display:flex;gap:4px;flex-wrap:wrap}
+.chips{display:flex;gap:4px;flex:0 0 auto}
 .chip{font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 6px;white-space:nowrap}
-.chip.b{color:#9db2cc}
-/* ---- 软件状态面板（四态：已连接 / 已打开·未连接 / 未打开 / 未下载）---- */
-.agents{max-height:118px;overflow:auto;border-bottom:1px solid var(--line)}
-.agents.hidden{display:none}
-.arow{display:flex;align-items:center;gap:7px;padding:4px 10px;border-bottom:1px solid rgba(36,44,58,.4)}
-.arow:last-child{border-bottom:none}
+.hbtn{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:8px;font-size:11px;padding:4px 9px;cursor:pointer;flex:0 0 auto}
+/* ---- 主体：左项目 / 右会话 ---- */
+#main{flex:1;display:flex;min-height:0}
+aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid var(--line);min-height:0}
+.side-h{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:8px 12px 4px;font-size:10px;color:var(--dim);letter-spacing:.08em}
+#projects{flex:1;overflow:auto;padding:2px 6px 6px}
+.pitem{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:8px;cursor:pointer;color:#c3ceda;font-size:12px}
+.pitem:hover{background:rgba(255,255,255,.04)}
+.pitem.on{background:rgba(31,111,235,.16);box-shadow:inset 2px 0 0 var(--acc);color:#fff}
+.pitem .pname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pitem .pcnt{flex:0 0 auto;font-size:10px;color:var(--dim)}
+.pitem .plive{color:var(--run)}
+#agents{flex:0 0 auto;max-height:132px;overflow:auto;border-top:1px solid var(--line);padding:2px 0}
+.arow{display:flex;align-items:center;gap:7px;padding:4px 12px}
 .arow .adot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 6px currentColor}
-.arow .aname{flex:0 0 auto;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:108px}
+.arow .aname{flex:0 0 auto;font-size:11px;max-width:86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .arow .ameta{flex:1;min-width:0;color:var(--dim);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.arow .astate{flex:0 0 auto;font-size:10px;white-space:nowrap}
+.arow .astate{flex:0 0 auto;font-size:10px}
 .astate.connected{color:var(--run)} .astate.open-unconnected{color:var(--wait)} .astate.closed{color:var(--idle)} .astate.not-installed{color:#5a6676}
-.aempty{padding:8px 12px;color:var(--dim);font-size:11px}
-.sessions{max-height:224px;overflow:auto}
-.srow{display:flex;align-items:center;gap:7px;padding:6px 10px;border-bottom:1px solid rgba(36,44,58,.5);cursor:pointer}
+#content{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+#toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line)}
+.btn{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:8px;font-size:11px;padding:4px 9px;cursor:pointer}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+#toolbar .sp{flex:1}
+#sessions{flex:1;overflow:auto;padding:4px 0}
+.srow{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid rgba(36,44,58,.45);cursor:pointer}
 .srow:hover{background:rgba(255,255,255,.03)}
-.srow.sel{background:rgba(31,111,235,.14);box-shadow:inset 2px 0 0 #1f6feb}
-.srow:last-child{border-bottom:none}
-.srow .src{width:58px;font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}
+.srow.sel{background:rgba(31,111,235,.14);box-shadow:inset 2px 0 0 var(--acc)}
+.srow .src{width:64px;font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}
 .srow .mid{flex:1;min-width:0}
-.srow .lbl{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.srow .meta{font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .lbl{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .meta{font-size:10.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .srow .st{font-size:11px;flex:0 0 auto}
 .srow .pend{font-size:10px;color:var(--wait);flex:0 0 auto}
-.srow .tm{width:42px;text-align:right;color:var(--dim);font-size:10px;flex:0 0 auto}
+.srow .tm{width:44px;text-align:right;color:var(--dim);font-size:10px;flex:0 0 auto}
 .srow.hist .lbl{color:#c3ceda}
-.empty{padding:16px 12px;color:var(--dim);font-size:12px;text-align:center}
-.composer{border-top:1px solid var(--line);padding:8px 10px;background:rgba(255,255,255,.015)}
+.empty{padding:18px 12px;color:var(--dim);font-size:12px;text-align:center}
+/* ---- 底部：会话控制 ---- */
+footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;background:rgba(255,255,255,.015)}
 .trow{font-size:10px;color:#9db2cc;margin-bottom:5px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trow b{color:#e6edf3;font-weight:600}
-.composer textarea{width:100%;height:42px;resize:none;background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:8px 9px;font:12px/1.45 inherit;outline:none}
+.composer{display:flex;gap:8px;align-items:flex-end}
+.composer textarea{flex:1;height:46px;resize:none;background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:8px 9px;font:12px/1.45 inherit;outline:none}
 .composer textarea:focus{border-color:#3d4a60}
 .crow{display:flex;align-items:center;gap:6px;margin-top:6px}
 .crow .hint{flex:1;font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.crow .send{background:#1f6feb;border:none;color:#fff;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer}
-.crow .send:disabled{opacity:.5}
-.queue{max-height:80px;overflow:auto;margin-top:6px;display:flex;flex-direction:column;gap:4px}
+.send{background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer}
+.send:disabled{opacity:.5}
+#queue{max-height:72px;overflow:auto;margin-top:6px;display:flex;flex-direction:column;gap:4px}
 .qitem{display:flex;gap:6px;align-items:baseline;font-size:11px;color:var(--dim)}
 .qitem .qt{flex:1;color:#a9b6c9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qitem .qs{flex:0 0 auto;font-size:10px;border:1px solid var(--line);border-radius:6px;padding:0 4px}
 .qitem .qc{flex:0 0 auto;font-size:10px;color:#7f8ea3;cursor:pointer;text-decoration:underline}
-.qs.queued{color:var(--wait)} .qs.delivered{color:var(--run)} .qs.failed{color:var(--err)}
-.note{padding:6px 10px;font-size:10px;color:var(--dim);border-top:1px solid var(--line);background:rgba(255,255,255,.01)}
-.help{flex:0 0 288px;color:var(--dim);font-size:12px;line-height:1.7}
-@media (max-width:720px){.help{display:none}}
-.help h4{color:var(--txt);font-size:12px;margin:0 0 6px}
-.help code{background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:1px 4px;font-size:11px}
-.help ol{padding-left:18px;margin:6px 0}
+.qs.queued{color:var(--wait)} .qs.failed{color:var(--err)}
+.note{padding:5px 2px 0;font-size:10px;color:var(--dim)}
 </style>
 </head>
 <body>
-<div class="desk">
-  <div class="win" id="win">
-    <div class="titlebar"><span class="grip"></span><span class="ttl">AGENT 悬浮窗 · 状态 / 会话 / 输入</span><button id="open-dsh" title="切回 DeepSeek Harness 窗口">↗</button><button id="hide-win" title="隐藏悬浮窗（⌘W 关闭 / ⌘Q 退出）">✕</button></div>
-    <div class="toolbar">
-      <select id="project" aria-label="项目"><option value="">全部项目</option></select>
-      <button class="btn" id="new-session" disabled title="新建会话需要在 DSH 进程内完成（插件授权）">+ 新建会话</button>
-      <button class="btn" id="toggle-history">历史会话</button>
-      <button class="btn" id="toggle-agents" title="本机 agent 软件四态：已连接 / 已打开·未连接 / 未打开 / 未下载">软件状态</button>
-    </div>
-    <div class="aggbar"><span class="dot" id="agg-dot"></span><span class="agg" id="agg-text">连接中…</span><span class="sp"></span><span class="chips" id="chips"></span></div>
-    <div class="agents" id="agents"><div class="aempty">正在探测本机 agent 软件…</div></div>
-    <div class="sessions" id="sessions"><div class="empty">正在读取会话状态…</div></div>
+<div id="app">
+  <header>
+    <span class="logo">AgentPet<small>总控</small></span>
+    <nav id="agent-tabs"></nav>
+    <span class="aggchip"><span class="dot" id="agg-dot"></span><span id="agg-text">连接中…</span></span>
+    <span class="chips" id="chips"></span>
+    <button class="hbtn" id="btn-mini" title="切换到迷你悬浮条（单行进度）">▤ 迷你条</button>
+    <button class="hbtn" id="hide-win" title="隐藏窗口（⌘W 关闭）">✕</button>
+  </header>
+  <div id="main">
+    <aside>
+      <div class="side-h">项目（左侧切换）</div>
+      <div id="projects"><div class="empty">读取中…</div></div>
+      <div class="side-h">软件状态</div>
+      <div id="agents"><div class="empty" style="padding:6px 12px">探测中…</div></div>
+    </aside>
+    <section id="content">
+      <div id="toolbar">
+        <button class="btn" id="toggle-history">历史会话</button>
+        <button class="btn" id="new-session" disabled>＋ 新建会话</button>
+        <span class="sp"></span>
+        <span id="proj-hint" style="font-size:10px;color:var(--dim)"></span>
+      </div>
+      <div id="sessions"><div class="empty">正在读取会话状态…</div></div>
+    </section>
+  </div>
+  <footer>
+    <div class="trow" id="target" title="点击恢复自动选择">投递目标：自动 · 最近活跃主会话（点击会话行可指定）</div>
     <div class="composer">
-      <div class="trow" id="target" title="点击恢复自动选择">投递目标：自动 · 最近活跃主会话（点击会话行可指定）</div>
-      <textarea id="input" placeholder="给当前会话发消息…（Enter 发送 / Shift+Enter 换行）"></textarea>
-      <div class="crow"><span class="hint" id="hint">未连接</span><span class="chip" title="窗口失焦时按 ⌥⌘I 直接聚焦输入框">⌥⌘I 聚焦</span><button class="send" id="send">发送</button></div>
-      <div class="queue" id="queue"></div>
+      <textarea id="input" placeholder="给选中会话发消息…（Enter 发送 / Shift+Enter 换行）"></textarea>
+      <button class="send" id="send">发送</button>
     </div>
-    <div class="note" id="note">数据只读自本机会话日志（DSH / Claude Code / Codex / Kimi Code）；输入先进入本地队列。</div>
-  </div>
-  <div class="help">
-    <h4>这一版新增了什么</h4>
-    ① 每行显示 <b>Agent 软件名 · 模型 · 思考程度</b>（如 <code>DSH · deepseek-flash · thinking:max</code>）<br>
-    ② <b>项目切换器</b>：自动发现项目与主会话（只读扫描，约 20ms；<b>子代理会话不再混入列表</b>）<br>
-    ③ <b>选择投递目标</b>：点击任一会话行（实时/历史）把它设为输入的目标会话（高亮显示），再点一次恢复自动<br>
-    ④ <b>打开已存在会话</b>：历史会话行点击即选中为目标并定位（切换实时跟随需插件授权）<br>
-    ⑤ <b>新建会话</b>：插件连通后按钮可用（在 DSH 进程内创建）；未连通时禁用并说明原因，<b>不使用 DSH 凭证绕过权限</b><br>
-    ⑥ <b>软件状态面板</b>：本机每个 agent 软件的四态（<b>已连接</b> / <b>已打开 · 未连接</b> / <b>未打开</b> / <b>未下载</b>）；安装=App 包/CLI/配置目录存在性（cc-switch 同款），运行=进程探测，连接=观察通道 45s 内有数据<br>
-    ⑦ <b>多后端同窗 + 总控投递</b>（M-A/B/C/H + M-D/E 控制层）：Claude Code 转录、Codex rollout、Kimi Code wire 事件流只读观察，与 DSH 会话并列（来源列区分、同目录项目自动归并）。投递：DSH=插件/队列；其余三家经各自 CLI（tmux 在跑则 send-keys，否则无头续会话，回合完成后状态自动回流）。新建/打开 = 终端新窗口
-    <h4 style="margin-top:14px">输入如何送达</h4>
-    DSH：授权挂载插件后直投，否则进本地队列（可复制）。Claude Code / Codex / Kimi Code：选中会话为目标后，发送即经 CLI 无头续会话送达（异步执行，状态由观察通道回流）。<br>
-    <h4 style="margin-top:14px">安全边界</h4>
-    控制通道只走各 CLI 官方能力（--resume / exec resume / -S），不注入不绕权：各 CLI 自身的权限模式照常生效；无头进程输出仅落 <code>~/.agent-pet/cli-control/</code>（0600）。<br>
-    <span style="color:#6b7a90">观察数据只读自 <code>~/.dsh</code>、<code>~/.claude</code>、<code>~/.codex</code>、<code>~/.kimi-code</code>；不接触任何凭证。</span>
-  </div>
+    <div class="crow"><span class="hint" id="hint">未连接</span><span class="chip" title="窗口失焦时按 ⌥⌘I 直接聚焦输入框">⌥⌘I 聚焦</span></div>
+    <div id="queue"></div>
+    <div class="note" id="note">数据只读自本机会话日志；输入经所选后端的官方通道送达。</div>
+  </footer>
 </div>
 <script>
-window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';  // 服务端只替换带引号的 '__PET_TOKEN_VALUE__'（唯一出现）；属性名 __PET_TOKEN__ 不能被替换，否则脚本语法损坏
-const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中','transient-error':'出错（自动恢复）',error:'连接错误',waiting:'等待你',done:'已完成'};
-const COLOR={idle:'#8b98a9',thinking:'#4aa8ff',running:'#3fb950','transient-error':'#e3b341',error:'#f85149',waiting:'#e3b341',done:'#bc8cff'};
-/** 软件四态（用户 2026-10-06 定义）：已连接 > 已打开·未连接 > 未打开 > 未下载 */
+window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
+const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错（自动恢复）',error:'连接错误',waiting:'等待你',done:'已完成'};
+const COLOR={idle:'#8b98a9',thinking:'#4aa8ff',running:'#3fb950',working:'#3fb950','transient-error':'#e3b341',error:'#f85149',waiting:'#e3b341',done:'#bc8cff'};
 const AGENT_STATUS_LABEL={connected:'已连接','open-unconnected':'已打开 · 未连接',closed:'未打开','not-installed':'未下载'};
 const AGENT_STATUS_COLOR={connected:'#3fb950','open-unconnected':'#e3b341',closed:'#8b98a9','not-installed':'#5a6676'};
+const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI']];
 const $=id=>document.getElementById(id);
 function esc(s){return String(s).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]))}
 function mmss(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 function relTime(ms,now){if(!ms)return '';const s=Math.max(0,Math.floor((now-ms)/1000));if(s<60)return s+' 秒前';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400)return Math.floor(s/3600)+' 小时前';return Math.floor(s/86400)+' 天前'}
-/** 会话行的元信息文本：Agent 软件名 · 模型 · 思考程度（缺项自动省略） */
-function metaLine(s){
-  const parts=[];
-  if(s.agentName) parts.push(s.agentName);
-  if(s.model) parts.push(s.model);
-  if(s.reasoningEffort) parts.push('thinking:'+s.reasoningEffort);
-  if(s.agentPreset) parts.push(s.agentPreset);
-  return parts.join(' · ');
+function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);return p.join(' · ')}
+async function trySetSize(w,h){
+  try{
+    const W=window.__TAURI__&&window.__TAURI__.window;
+    if(W&&W.getCurrentWindow&&W.LogicalSize){await W.getCurrentWindow().setSize(new W.LogicalSize(w,h));return}
+    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|set_size',{size:{type:'Logical',width:w,height:h}})}
+  }catch(e){}
+}
+function projNameOf(s,projList){
+  if(!s)return '';
+  const k=s.projectKey;
+  const p=projList.find(x=>x.key===k);
+  return p?p.name:(s.cwd?String(s.cwd).split('/').pop():'');
 }
 function render(snap){
   window.__SNAP__=snap;
+  const now=snap.ts||Date.now();
+  // ---- 顶部：agent tabs + 聚合 ----
+  const tabsEl=$('agent-tabs');
+  const tabsHtml=AGENT_TABS.map(([v,l])=>'<button class="tab'+((window.__AGENT__||'')===v?' on':'')+'" data-agent="'+v+'">'+l+'</button>').join('');
+  if(tabsEl.__petLastHtml!==tabsHtml){tabsEl.innerHTML=tabsHtml;tabsEl.__petLastHtml=tabsHtml}
   const agg=snap.agg||'idle';
   $('agg-dot').style.background=COLOR[agg]||'#8b98a9';$('agg-dot').style.color=COLOR[agg]||'#8b98a9';
   $('agg-text').textContent=STATE_LABEL[agg]||agg;$('agg-text').style.color=COLOR[agg]||'#8b98a9';
   const c=snap.counters||{};
-  $('chips').innerHTML=[['思考中',c.thinking],['运行',c.running],['出错',c.errors],['完成',c.done]].map(function(kv){return kv[1]?'<span class="chip">'+kv[0]+' '+kv[1]+'</span>':''}).join('');
-  // ---- 软件状态面板（四态）：缺 agents 字段（旧快照/探测未就绪）时显示占位，绝不报错 ----
+  $('chips').innerHTML=[['思考中',c.thinking],['运行',c.running],['出错',c.errors],['完成',c.done]].map(kv=>kv[1]?'<span class="chip">'+kv[0]+' '+kv[1]+'</span>':'').join('');
+  // ---- 过滤口径：agent tab（顶部）+ 项目（左侧）----
+  const agentSel=window.__AGENT__||'';
+  const projListAll=(snap.catalog&&snap.catalog.projects)||[];
+  const projList=agentSel?projListAll.filter(p=>(p.sources||[]).indexOf(agentSel)>=0):projListAll;
+  const pid=window.__PROJECT__||'';
+  const curProj=projList.filter(p=>p.key===pid)[0];
+  if(pid&&projListAll.length&&!curProj){window.__PROJECT__=''}   // 当前 agent 下无此项目 → 回「全部」
+  const inProj=(s)=>!curProj?true:(s.projectKey!==undefined?s.projectKey===curProj.key:(s.cwd?curProj.cwd===s.cwd:false));
+  // ---- 左侧：项目 ----
+  const projHtml='<div class="pitem'+(pid?'':' on')+'" data-proj="">全部项目<span class="pcnt">'+projList.length+'</span></div>'
+    +projList.map(p=>'<div class="pitem'+(p.key===pid?' on':'')+'" data-proj="'+esc(p.key)+'" title="'+esc(p.cwd||'')+'"><span class="pname">'+esc(p.name)+'</span><span class="pcnt">'+(p.liveCount?'<span class="plive">'+p.liveCount+' 进行</span> · ':'')+p.sessionCount+'</span></div>').join('');
+  const projEl=$('projects');
+  if(projEl.__petLastHtml!==projHtml){projEl.innerHTML=projHtml;projEl.__petLastHtml=projHtml}
+  // ---- 左侧：软件四态 ----
   const agentsEl=$('agents');
   const agentsList=(snap.agents||[]);
-  const showAgents=window.__SHOW_AGENTS__!==false;
   let ahtml='';
-  if(showAgents){
-    if(!agentsList.length) ahtml='<div class="aempty">正在探测本机 agent 软件…</div>';
-    else ahtml=agentsList.map(function(a){
-      const st=a.status||'closed',col=AGENT_STATUS_COLOR[st]||'#8b98a9';
-      const meta=[];
-      if(a.version)meta.push('v'+a.version);
-      if(st==='connected')meta.push(a.connectionKind==='plugin'?'插件通道':a.connectionKind==='event'?'事件流':'日志通道');
-      if(a.running&&a.processes>1)meta.push(a.processes+' 进程');
-      if(a.id==='kimi-code'&&a.sessionCount!=null)meta.push((a.sessionCountApproximate?'≈':'')+a.sessionCount+' 个会话');   // M-H：A 路径精确计数；LevelDB 兜底时标 ≈
-      if(st==='closed'&&a.lastActivityMs)meta.push('上次活动 '+relTime(a.lastActivityMs,snap.ts||Date.now()));
-      if(st==='open-unconnected'&&a.note)meta.push(a.note);
-      if(st==='not-installed')meta.push('未检测到安装痕迹');
-      return '<div class="arow" data-agent="'+esc(a.id)+'" title="'+esc((a.evidence||[]).join('\n')+(a.note?'\n'+a.note:''))+'">'
-        +'<span class="adot" style="background:'+col+';color:'+col+'"></span>'
-        +'<span class="aname">'+esc(a.name)+'</span>'
-        +'<span class="ameta">'+esc(meta.join(' · '))+'</span>'
-        +'<span class="astate '+st+'" style="color:'+col+'">'+(AGENT_STATUS_LABEL[st]||st)+'</span></div>';
-    }).join('');
-  }
+  if(!agentsList.length)ahtml='<div class="empty" style="padding:6px 12px">正在探测本机 agent 软件…</div>';
+  else ahtml=agentsList.map(a=>{
+    const st=a.status||'closed',col=AGENT_STATUS_COLOR[st]||'#8b98a9';
+    const meta=[];
+    if(a.version)meta.push('v'+a.version);
+    if(st==='connected')meta.push(a.connectionKind==='plugin'?'插件通道':a.connectionKind==='event'?'事件流':'日志通道');
+    if(a.running&&a.processes>1)meta.push(a.processes+' 进程');
+    if(a.id==='kimi-code'&&a.sessionCount!=null)meta.push((a.sessionCountApproximate?'≈':'')+a.sessionCount+' 会话');
+    if(st==='closed'&&a.lastActivityMs)meta.push('上次活动 '+relTime(a.lastActivityMs,now));
+    if(st==='open-unconnected'&&a.note)meta.push(a.note);
+    if(st==='not-installed')meta.push('未检测到安装痕迹');
+    return '<div class="arow" data-agent="'+esc(a.id)+'" title="'+esc((a.evidence||[]).join('\n')+(a.note?'\n'+a.note:''))+'">'
+      +'<span class="adot" style="background:'+col+';color:'+col+'"></span>'
+      +'<span class="aname">'+esc(a.name)+'</span><span class="ameta">'+esc(meta.join(' · '))+'</span>'
+      +'<span class="astate '+st+'" style="color:'+col+'">'+(AGENT_STATUS_LABEL[st]||st)+'</span></div>';
+  }).join('');
   if(agentsEl.__petLastHtml!==ahtml){agentsEl.innerHTML=ahtml;agentsEl.__petLastHtml=ahtml}
-  agentsEl.className=showAgents?'agents':'agents hidden';
-  const allRows=(snap.sessions||[]);
+  // ---- 会话列表（实时 + 历史）----
+  const rows=(snap.sessions||[]).filter(s=>(!agentSel||s.source===agentSel)&&s.kind!=='subagent'&&inProj(s));
   const showHist=window.__SHOW_HISTORY__===true;
-  const pid=window.__PROJECT__||'';
-  const projList=(snap.catalog&&snap.catalog.projects)||[];
-  const curProj=projList.filter(function(p){return (p.key||p.projectId)===pid})[0];
-  // 项目过滤：按 projectKey（workspaceId）匹配。曾按 label===项目名 过滤——label 是目录名、
-  // 项目名是 workspace 标题，口径不一致导致选中项目后实时行全部消失（2026-10-05 实测 10 行 → 0 行）。
-  // 子代理（kind==='subagent'）双保险过滤（服务端已按注册表+origin 过滤）。
-  const rows=(!pid||!curProj?allRows:allRows.filter(function(s){
-    if(s.projectKey!==undefined)return s.projectKey===curProj.key;
-    return s.cwd?s.cwd===curProj.cwd:((s.label||'')===curProj.name);   // 旧快照兜底
-  })).filter(function(s){return s.kind!=='subagent'});
-  const histAll=(snap.catalog&&snap.catalog.history)||[];
-  const hist=histAll.filter(function(s){
-    if(s.kind==='subagent')return false;
-    if(!pid||!curProj)return true;
-    if(s.projectKey!==undefined)return s.projectKey===curProj.key;
-    return !!(curProj.cwd&&s.cwd===curProj.cwd);
-  }).slice(0,12);
-  // 投递目标：选中的会话行高亮；目标已不在列表（被过滤/项目切换）时自动回到「自动」
+  const histAll=((snap.catalog&&snap.catalog.history)||[])
+    .filter(s=>(!agentSel||s.source===agentSel)&&s.kind!=='subagent'&&inProj(s));
+  const liveIds=new Set(rows.map(s=>s.id));
+  const hist=histAll.filter(s=>!liveIds.has(s.sessionId)&&!s.live).slice(0,30);
   const tgt=window.__TARGET__||'';
   let tgtHit=null;
   for(const s of rows.concat(hist)){if(s.id===tgt||s.sessionId===tgt){tgtHit=s;break}}
   if(tgt&&!tgtHit)window.__TARGET__='';
-  // 非 DSH 目标：经各自 CLI 投递（M-D/M-E/M-H 控制层已落地）——显示通道，不再是「不支持」警示
-  const tgtSource=tgtHit?(tgtHit.source||'dsh'):'dsh';
-  const tgtIsCli=!!tgtHit&&tgtSource!=='dsh';
-  const effectiveHist=(showHist||!!pid)?hist:[];
-  const proj=(snap.catalog&&snap.catalog.projects)||[];
   let html='';
   if(rows.length){
-    html+=rows.map(function(s){
+    html+=rows.map(s=>{
       const st=s.state,col=COLOR[st]||'#8b98a9';
       const sel=window.__TARGET__===s.id;
+      const proj=curProj?'':' · '+esc(projNameOf(s,projListAll));
       return '<div class="srow'+(sel?' sel':'')+'" data-session="'+esc(s.id)+'" title="点击选为投递目标"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(String(s.source||'dsh').toUpperCase())+'</span>'
-        +'<span class="mid"><span class="lbl">'+esc(s.label||s.title||s.id)+'</span><span class="meta">'+esc(metaLine(s))+'</span></span>'
+        +'<span class="mid"><span class="lbl">'+esc(s.label||s.title||s.id)+'</span><span class="meta">'+esc(metaLine(s))+proj+'</span></span>'
         +'<span class="st" style="color:'+col+'">'+(STATE_LABEL[st]||st)+'</span>'
         +(s.pending?'<span class="pend">待办 '+s.pending+'</span>':'')
         +'<span class="tm">'+(st==='idle'?'--':st==='done'?'完成':mmss(s.elapsedMs||0))+'</span></div>';
     }).join('');
-  } else {
-    html+='<div class="empty">暂无实时会话（等待后端活动：DSH / Claude Code / Codex…）</div>';
+  }else{
+    html+='<div class="empty">暂无实时会话（等待后端活动：DSH / Claude Code / Codex / Kimi Code…）</div>';
   }
-  if(effectiveHist.length||(showHist&&!hist.length)){
-    html+=effectiveHist.length?effectiveHist.map(function(s){
+  if(showHist||curProj){
+    html+=hist.length?hist.map(s=>{
       const col=COLOR[s.state]||'#8b98a9';
       const sel=window.__TARGET__===s.sessionId;
-      return '<div class="srow hist'+(sel?' sel':'')+'" data-session="'+esc(s.sessionId)+'" title="点击选为投递目标并定位"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(String(s.source||s.agentName||'dsh').toUpperCase())+'</span>'
-        +'<span class="mid"><span class="lbl">'+esc(s.title||s.sessionId.slice(0,12))+'</span><span class="meta">'+esc(metaLine(s))+' · '+new Date(s.updatedAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+'</span></span>'
+      const proj=curProj?'':' · '+esc(projNameOf(s,projListAll));
+      return '<div class="srow hist'+(sel?' sel':'')+'" data-session="'+esc(s.sessionId)+'" title="点击选为投递目标并打开"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(String(s.source||'dsh').toUpperCase())+'</span>'
+        +'<span class="mid"><span class="lbl">'+esc(s.title||String(s.sessionId).slice(0,12))+'</span><span class="meta">'+esc(metaLine(s))+proj+' · '+new Date(s.updatedAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+'</span></span>'
         +'<span class="st" style="color:'+col+'">'+(STATE_LABEL[s.state]||s.state)+'</span><span class="tm">打开</span></div>';
-    }).join(''):'<div class="empty">该项目没有历史会话</div>';
+    }).join(''):'<div class="empty">没有历史会话</div>';
   }
-  if(pid&&!effectiveHist.length&&!rows.length) html+='<div class="empty">该项目暂无会话</div>';
-  // 内容不变就不重写 DOM：全量 innerHTML 替换会打断进行中的点击（mousedown/mouseup 之间换掉
-  // 节点 → click 落到容器上被吞，2026-10-05 实测「点不中会话行」的主因之一）
   const sessEl=$('sessions');
   if(sessEl.__petLastHtml!==html){sessEl.innerHTML=html;sessEl.__petLastHtml=html}
-  const sel=$('project');
-  const cur=window.__PROJECT__||'';
-  const mainOf=function(p){return p.mainCount!=null?p.mainCount:p.sessionCount};
-  const selHtml='<option value="">全部项目（'+projList.length+'）</option>'+projList.map(function(p){return '<option value="'+esc(p.key||p.projectId)+'"'+((p.key||p.projectId)===cur?' selected':'')+'>'+esc(p.name)+'（'+mainOf(p)+' 会话'+(p.liveCount?' · '+p.liveCount+' 进行中':'')+(p.unregistered?' · 未注册':'')+'）</option>'}).join('');
-  if(sel.__petLastHtml!==selHtml){sel.innerHTML=selHtml;sel.__petLastHtml=selHtml}   // 同理：不打断下拉交互
-  // 投递目标行：显示当前目标（自动 = 服务端挑最近活跃主会话）；非 DSH 目标标注 CLI 投递通道
+  $('proj-hint').textContent=(agentSel?('仅 '+agentSel.toUpperCase()+' · '):'')+(curProj?curProj.name:'全部项目')+' · 实时 '+rows.length+' / 历史 '+hist.length;
+  // ---- 投递目标行 ----
   const tgtEl=$('target');
   if(window.__TARGET__){
-    tgtEl.innerHTML=tgtIsCli
-      ?('投递目标：<b>'+esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12))+'</b> · 经 '+esc(String(tgtSource).toUpperCase())+' CLI 投递')
-      :('投递目标：<b>'+esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12))+'</b>（点击恢复自动）');
-    tgtEl.style.color='';
-  } else {
+    const src=tgtHit?(tgtHit.source||'dsh'):'dsh';
+    const label=esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12));
+    tgtEl.innerHTML=src!=='dsh'
+      ?('投递目标：<b>'+label+'</b> · 经 '+esc(src.toUpperCase())+' CLI 投递（点击恢复自动）')
+      :('投递目标：<b>'+label+'</b>（点击恢复自动）');
+  }else{
     tgtEl.innerHTML='投递目标：自动 · 最近活跃主会话（点击会话行可指定）';
-    tgtEl.style.color='';
   }
+  // ---- 底部：能力位 / hint / 队列（只留未完成：delivered 不再显示） ----
   const caps=snap.capabilities||{};
   $('new-session').disabled=!caps.canCreate;
-  $('new-session').title=caps.canCreate
-    ?('在选中项目新建会话：DSH 需插件（进程内）；Claude Code / Codex / Kimi Code 经终端新窗口')
-    :'新建会话通道不可用（DSH 需插件授权；CLI 后端需 claude/codex/kimi 在 PATH）';
+  $('new-session').title=caps.canCreate?'在当前筛选下新建会话（DSH=插件；其余=终端新窗口）':'新建通道不可用（DSH 需插件；CLI 后端需在 PATH）';
   const ch=snap.inputChannel||{};
-  $('hint').textContent=ch.mode==='cmd'?('输入将自动投递（'+ch.detail+'）'):ch.mode==='cli'?('DSH 进本地队列 · Claude/Codex/Kimi 直接 CLI 投递'):'输入进本地队列 · 可复制投递';
-  const qs=(snap.inputs||[]);
-  $('queue').innerHTML=qs.map(function(i){
-    const label={queued:'待投递',pending:'投递中',delivered:'已送达',failed:'失败'}[i.status]||i.status;
-    const canResend=(i.status==='queued'||i.status==='failed');
+  $('hint').textContent=ch.mode==='cmd'?('自动投递：'+ch.detail):ch.mode==='cli'?('DSH 进本地队列 · Claude/Codex/Kimi 直接 CLI 投递'):'输入进本地队列 · 可复制投递';
+  const qs=(snap.inputs||[]).filter(i=>i.status&&i.status!=='delivered');
+  $('queue').innerHTML=qs.map(i=>{
+    const label={queued:'待投递',pending:'投递中',failed:'失败'}[i.status]||i.status;
     return '<div class="qitem"><span class="qs '+(i.status||'queued')+'">'+label+'</span><span class="qt">'+esc(i.text)+'</span>'
       +'<span class="qc" data-copy="'+esc(i.text)+'">复制</span>'
-      +(canResend?'<span class="qc" data-resend="'+esc(i.id)+'">重发</span>':'')
-      +'<span class="qc" data-del="'+esc(i.id)+'" title="从队列删除这条">✕</span></div>';
-  }).join('')
-  +(qs.length?'<div class="qitem"><span class="qc" data-clear="1">清空队列（'+qs.length+'）</span></div>':'');
+      +((i.status==='queued'||i.status==='failed')?'<span class="qc" data-resend="'+esc(i.id)+'">重发</span>':'')
+      +'<span class="qc" data-del="'+esc(i.id)+'">✕</span></div>';
+  }).join('');
   const last=snap.lastEvent;
-  $('note').textContent='只读会话日志 · '+(projList.length?('发现 '+projList.length+' 个项目 / '+projList.reduce(function(a,p){return a+p.sessionCount},0)+' 个会话（主会话 '+projList.reduce(function(a,p){return a+mainOf(p)},0)+'） · 扫描 '+(snap.catalog.elapsedMs||0)+'ms'+(pid&&curProj?(' · 当前项目 '+curProj.name):'')):'目录扫描中')
-    +' · 最后事件 '+(last?last.type:'—');
-  window.__RENDER_OUT__={agg:agg,rows:rows.length,hist:hist.length,projects:proj.length,agents:agentsList.length,agentStates:agentsList.map(function(a){return a.status}),meta:rows.map(function(s){return metaLine(s)})};
+  $('note').textContent='只读会话日志 · '+(projList.length?('项目 '+projList.length+' · 会话 '+(projList.reduce((a,p)=>a+p.sessionCount,0))+' · 扫描 '+(snap.catalog&&snap.catalog.elapsedMs||0)+'ms'):'目录扫描中')+' · 最后事件 '+(last?last.type:'—');
+  window.__RENDER_OUT__={agg:agg,agent:agentSel,rows:rows.length,hist:hist.length,projects:projList.length,queueShown:qs.length,targetShown:!!window.__TARGET__};
   return window.__RENDER_OUT__;
 }
 async function api(path,payload,method){
@@ -270,44 +266,39 @@ async function send(){
   el.value='';$('send').disabled=true;
   try{
     const j=await api('/api/input',{text:text,sessionId:window.__TARGET__||undefined});
-    if(j.ok===false){
-      $('note').textContent=j.item
-        ?({queued:'已入本地队列（未配置投递通道）· 可在下方重发或删除',failed:'投递失败：'+(j.item.detail||j.item.status)}[j.item.status]||('发送状态：'+j.item.status))
-        :('被本地服务拒绝：'+(j.detail?j.detail+' · ':'')+(j.howto||j.error||'未知'));
-    }
-    if(window.__SNAP__&&j.item){window.__SNAP__.inputs=[{id:j.item.id,text:j.item.text,status:j.item.status,at:j.item.at}].concat(window.__SNAP__.inputs||[]);render(window.__SNAP__)}
+    if(j.ok===false&&j.item){$('note').textContent={queued:'已入本地队列（未配置投递通道）',failed:'投递失败：'+(j.item.detail||j.item.status)}[j.item.status]||('发送状态：'+j.item.status)}
+    else if(j.ok===false){$('note').textContent='被本地服务拒绝：'+((j.detail&&String(j.detail))||j.error||'未知')}
+    else if(j.ok===true){$('note').textContent='已送达 ✓ '+(j.item&&j.item.detail?j.item.detail.slice(0,60):'')}   // 成功的消息不进队列展示，只在这里闪一次确认
   }catch(e){el.value=text;$('note').textContent='发送失败（输入已恢复）：'+e.message}
   $('send').disabled=false;$('input').focus();
 }
 async function openSession(id){
   try{
     const j=await api('/api/open',{sessionId:id});
-    $('note').textContent=j.ok?('已定位会话 '+(j.session.title||id.slice(0,12))+' · '+(j.reason||'')):('打开失败：'+(j.reason||'未知'));
+    $('note').textContent=j.ok?('已打开/定位会话 · '+(j.via||j.reason||'')):('打开失败：'+(j.detail||j.reason||'未知'));
   }catch(e){$('note').textContent='打开失败：'+e.message}
 }
 $('send').onclick=send;
-$('input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
-$('project').addEventListener('change',function(e){window.__PROJECT__=e.target.value;if(window.__SNAP__)render(window.__SNAP__)});
+$('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+$('agent-tabs').addEventListener('click',e=>{const t=e.target.closest('[data-agent]');if(!t)return;window.__AGENT__=t.getAttribute('data-agent');if(window.__SNAP__)render(window.__SNAP__)});
+$('projects').addEventListener('click',e=>{const t=e.target.closest('[data-proj]');if(!t)return;window.__PROJECT__=t.getAttribute('data-proj')||'';if(window.__SNAP__)render(window.__SNAP__)});
 $('toggle-history').onclick=function(){window.__SHOW_HISTORY__=!window.__SHOW_HISTORY__;if(window.__SNAP__)render(window.__SNAP__)};
-$('toggle-agents').onclick=function(){window.__SHOW_AGENTS__=window.__SHOW_AGENTS__===false;if(window.__SNAP__)render(window.__SNAP__)};
-// 新建会话：按选中项目挑选后端（DSH=插件；CLI 后端=终端新窗口），source 随请求发给服务端
+// 新建会话：agent tab 指定了后端就用它；否则按项目来源挑（DSH 插件优先，其次 CLI）
 $('new-session').onclick=async function(){
-  const proj=(window.__SNAP__&&window.__SNAP__.catalog?window.__SNAP__.catalog.projects:[])||[];
-  const pid=window.__PROJECT__||(proj[0]&&proj[0].key);
-  const p=proj.find(function(x){return (x.key||x.projectId)===pid});
-  const caps=(window.__SNAP__&&window.__SNAP__.capabilities)||{};
-  const cliSrc=(caps.cliChannels||[]).map(function(c){return c.source});
-  const src=p&&p.sources?(
-    (p.sources.indexOf('dsh')>=0&&caps.plugin&&caps.plugin.available)?'dsh'
-    :['claude-code','codex','kimi-code'].filter(function(s){return p.sources.indexOf(s)>=0&&cliSrc.indexOf(s)>=0})[0]
-    ||(cliSrc[0]||'dsh')
-  ):'dsh';
+  const snap=window.__SNAP__||{};
+  const projList=(snap.catalog&&snap.catalog.projects)||[];
+  const caps=snap.capabilities||{};
+  const cliSrc=(caps.cliChannels||[]).map(x=>x.source);
+  const p=projList.find(x=>x.key===(window.__PROJECT__||''));
+  let src=window.__AGENT__||'';
+  if(!src&&p&&p.sources){src=(p.sources.indexOf('dsh')>=0&&caps.plugin&&caps.plugin.available)?'dsh':['claude-code','codex','kimi-code'].filter(s=>p.sources.indexOf(s)>=0&&cliSrc.indexOf(s)>=0)[0]||(cliSrc[0]||'dsh')}
+  if(!src)src='dsh';
   const j=await api('/api/new',{cwd:p?p.cwd:'',source:src});
   $('note').textContent='新建会话（'+String(src).toUpperCase()+'）：'+(j.ok?(j.via||'已创建')+'；目录将在几秒内出现':((j.detail&&String(j.detail).slice(0,90))||(j.reason&&String(j.reason).slice(0,90))||j.error||'未知'));
   try{await api('/api/catalog?refresh=1',undefined,'GET')}catch(err){}
 };
-// 会话行点击 = 选为投递目标（再点一次取消，回到自动）；历史会话行同时定位（保持原有 open 行为）
-$('sessions').addEventListener('click',function(e){
+// 会话行点击 = 选为投递目标（再点一次取消）；历史行同时打开
+$('sessions').addEventListener('click',e=>{
   const t=e.target.closest('[data-session]');
   if(!t)return;
   const id=t.getAttribute('data-session');
@@ -316,37 +307,33 @@ $('sessions').addEventListener('click',function(e){
   if(window.__SNAP__)render(window.__SNAP__);
   $('input').focus();
 });
-// 点击「投递目标」行本身 = 恢复自动选择
 $('target').onclick=function(){window.__TARGET__='';if(window.__SNAP__)render(window.__SNAP__)};
-// 队列操作（复制/重发/删除/清空）。此前 data-copy 处理器挂在 #sessions 上、而按钮在 #queue 里，
-// 点击永远不会命中（死代码）——现挂到正确的元素上。
-$('queue').addEventListener('click',async function(e){
+// 队列操作（只对未完成项：复制/重发/删除）
+$('queue').addEventListener('click',async e=>{
   const c=e.target.closest('[data-copy]');
   if(c){const txt=c.getAttribute('data-copy');if(navigator.clipboard)navigator.clipboard.writeText(txt);$('note').textContent='已复制到剪贴板：'+txt.slice(0,40);return}
   const del=e.target.closest('[data-del]');
   if(del){try{await api('/api/input/'+encodeURIComponent(del.getAttribute('data-del')),undefined,'DELETE')}catch(err){}return}
   const rs=e.target.closest('[data-resend]');
-  if(rs){const id=rs.getAttribute('data-resend');try{const j=await api('/api/input/'+encodeURIComponent(id)+'/resend',{});$('note').textContent=j.ok?'重发已送达':'重发未送达：'+((j.item&&(j.item.detail||j.item.status))||'')}catch(err){$('note').textContent='重发失败：'+err.message}return}
-  const cl=e.target.closest('[data-clear]');
-  if(cl){try{await api('/api/queue/clear',{})}catch(err){}return}
+  if(rs){const id=rs.getAttribute('data-resend');try{const j=await api('/api/input/'+encodeURIComponent(id)+'/resend',{});$('note').textContent=j.ok?'重发已送达 ✓':'重发未送达：'+((j.item&&(j.item.detail||j.item.status))||'')}catch(err){$('note').textContent='重发失败：'+err.message}return}
 });
-$('open-dsh').onclick=function(){location.href='dsh-app://'};
-// 关闭/隐藏：Tauri 外壳里真正隐藏窗口；浏览器演示退化为提示
+$('btn-mini').onclick=async function(){try{await trySetSize(360,64)}catch(e){};location.href='/mini.html'};
 $('hide-win').onclick=async function(){
   try{
     if(window.__TAURI__&&window.__TAURI__.window){await window.__TAURI__.window.getCurrentWindow().hide();return}
     if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|hide');return}
   }catch(e){}
-  $('note').textContent='浏览器演示无法隐藏窗口；Tauri 外壳里此按钮会隐藏悬浮窗（⌘W 关闭 / ⌘Q 退出）';
+  $('note').textContent='浏览器演示无法隐藏窗口；Tauri 外壳里此按钮会隐藏窗口';
 };
-document.addEventListener('keydown',function(e){if(e.altKey&&e.metaKey&&e.key.toLowerCase()==='i'){e.preventDefault();$('input').focus()}});
+document.addEventListener('keydown',e=>{if(e.altKey&&e.metaKey&&e.key.toLowerCase()==='i'){e.preventDefault();$('input').focus()}});
 let es=null;
 function connect(){
   es=new EventSource('/api/stream');
-  es.onmessage=function(e){try{render(JSON.parse(e.data))}catch(err){}};
+  es.onmessage=e=>{try{render(JSON.parse(e.data))}catch(err){}};
   es.onerror=function(){$('hint').textContent='与本地服务断开，3s 后重连…';es.close();setTimeout(connect,3000)};
 }
 connect();
+trySetSize(980,640);
 </script>
 </body>
 </html>

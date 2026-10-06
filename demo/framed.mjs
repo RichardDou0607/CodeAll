@@ -589,7 +589,6 @@ function removeInputs(pred) {
 }
 
 // ---------- HTTP ----------
-const HTML = path.join(path.dirname(fileURLToPath(import.meta.url)), 'window.html');
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://127.0.0.1');
   if (!hostOk(req)) {
@@ -602,12 +601,19 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ ok: false, error: 'unauthorized', howto: '写接口需带 header x-pet-token 或 ?t=；token 在 ~/.agent-pet/token（0600）' }));
     return;
   }
-  if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/window.html')) {
+  // 页面路由：/ = 迷你悬浮条（外壳默认入口，单行进度 + 三级切换）；/window.html = App 界面
+  //（顶部切 agent / 左侧切项目 / 底部控会话）。token 只替换带引号的 '__PET_TOKEN_VALUE__'（唯一出现，
+  // 不得动 window.__PET_TOKEN__ 属性名——2026-10-05 实测踩坑：整页 SyntaxError →「未连接」）。
+  const HTML_DIR = path.dirname(fileURLToPath(import.meta.url));
+  const PAGE_BY_ROUTE = {
+    '/': path.join(HTML_DIR, 'mini.html'),
+    '/mini.html': path.join(HTML_DIR, 'mini.html'),
+    '/window.html': path.join(HTML_DIR, 'window.html'),
+    '/app': path.join(HTML_DIR, 'window.html'),
+  };
+  if (req.method === 'GET' && PAGE_BY_ROUTE[url.pathname]) {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    // 只替换字符串字面量 '__PET_TOKEN_VALUE__'（页面中唯一出现）。
-    // 不得用 '__PET_TOKEN__'：它在页面里的首次出现是 window.__PET_TOKEN__ 的属性名，
-    // 会被一并替换成 window.<hex>——数字开头的非法标识符，整个内联脚本 SyntaxError（2026-10-05 实测踩坑）。
-    res.end(fs.readFileSync(HTML, 'utf8').replace("'__PET_TOKEN_VALUE__'", JSON.stringify(TOKEN)));
+    res.end(fs.readFileSync(PAGE_BY_ROUTE[url.pathname], 'utf8').replace("'__PET_TOKEN_VALUE__'", JSON.stringify(TOKEN)));
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/catalog') {
