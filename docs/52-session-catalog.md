@@ -101,6 +101,7 @@ node adapters/session-catalog.mjs --json --frame   # 契约 §2.2 ctl:catalog �
 | `agentName` / `agentVersion` | 常量 `'DSH'` / 应用版本 | 取自 app bundle `Info.plist` 与 `package.json`：**0.2.0-rc.2** | — | — |
 | `logFormatVersion` | header 的 `version` = **4** | **是日志格式版本，不是应用版本**（自检 A5 专门盯这个混淆） | null | — |
 | `origin` / `parentSession` / `delegationDepth` / `isSeeded` | header 同名字段 | `origin==='subagent'` → `kind='subagent'` | — | — |
+| `variant`（会话形态 cli/desktop） | **派生规则**（非原生字段） | cwd 落在 `~/.dsh/profiles/**` → `cli`（CLI/脚本从 profile 目录启动）；其余 → `desktop`（desktop profile 被 Electron 独占，§5.3） | 降级记录为 null（不猜） | — |
 | `lock`（可选） | `session.lock` 的 `flock` | `'held'` / `'free'` / `'unknown'` | unknown | — |
 
 > ⚠ **两个曾经踩过的坑（已被自检覆盖）**：

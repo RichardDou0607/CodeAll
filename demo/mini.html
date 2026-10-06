@@ -12,7 +12,7 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden;color:var(
   background:rgba(16,20,28,.97);border:1px solid var(--line);border-radius:10px;
   box-shadow:0 14px 34px rgba(0,0,0,.5);cursor:default}
 .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 8px currentColor}
-#m-src{font-size:10px;color:#9db2cc;flex:0 0 auto;max-width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#m-src{font-size:10px;color:#9db2cc;flex:0 0 auto;max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #m-main{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden}
 #m-title{font-size:12px;font-weight:600;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #m-sub{font-size:10.5px;color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -122,6 +122,9 @@ function pickSession(live){
 }
 function render(snap){
   window.__SNAP__=snap;
+  // 服务端重启或页面文件更新 → 自动刷新一次加载新 UI（与 window.html 同机制）
+  const __b=snap.build&&snap.build.mini;
+  if(__b){if(window.__BUILD_ID__===undefined)window.__BUILD_ID__=__b;else if(__b!==window.__BUILD_ID__&&!window.__RELOADED__){window.__RELOADED__=1;try{location.reload()}catch(e){}return}}
   const projList=(snap.catalog&&snap.catalog.projects)||[];
   const live=(snap.sessions||[]).filter(s=>s.kind!=='subagent');
   if(lockSid&&!live.some(s=>s.id===lockSid))lockSid=null;
@@ -138,7 +141,7 @@ function render(snap){
     pend=sel.pending||0;
   }else{
     state=STATE_LABEL[snap.agg]||snap.agg;col=COLOR[snap.agg]||'#8b98a9';
-    const c=snap.counters||{};
+    const c=snap.stateCounts||snap.counters||{};
     title='无进行中会话';
     sub='· '+(projList.length?projList.length+' 个项目':'…')+(c.errors?' · 出错 '+c.errors:'');
     tm='--';

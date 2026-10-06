@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { scanClaudeCatalog, mapClaudeLine } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, mapCodexLine } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, mapKimiLine, scanKimiStatus, scanKimiLegacyCount } from '../adapters/kimi-code-adapter.mjs';
+import { scanCatalog } from '../adapters/session-catalog.mjs';
 import { CLI_TARGETS, availableCliChannels } from '../adapters/cli-control.mjs';
 
 const AS_JSON = process.argv.includes('--json');
@@ -96,7 +97,17 @@ let cx;
     {});
   check('MB6', '行映射：turn_aborted→aborted；session_meta→session.start(workspace+version)',
     e4[0]?.type === 'turn.end' && e4[0]?.data?.status === 'aborted' && e5[0]?.type === 'session.start' && e5[0]?.data?.workspace === '/tmp/x' && e5[0]?.data?.agentVersion === '0.155.0', {});
-  check('MB7', '区分命令行/桌面版本（originator=Codex Desktop → desktop）', cx.sessions.every((s) => s.variant === 'desktop' || s.variant === null) && cx.sessions.filter((s) => s.variant === 'desktop').length >= 10, { desktop: cx.sessions.filter((s) => s.variant === 'desktop').length });
+  {
+    const VARIANTS = new Set(['desktop', 'cli', null]);
+    const badV = cx.sessions.filter((s) => !VARIANTS.has(s.variant ?? null));
+    const desk = cx.sessions.filter((s) => s.variant === 'desktop').length;
+    const cliN = cx.sessions.filter((s) => s.variant === 'cli').length;
+    // 映射正确性：originator 含 desktop → desktop；其余已知 originator → cli；缺失 → null
+    const mapBad = cx.sessions.filter((s) => s.originator != null && ((/desktop/i.test(s.originator)) !== (s.variant === 'desktop')));
+    check('MB7', '区分命令行/桌面版本（originator=Codex Desktop → desktop；codex-tui 等 → cli）',
+      badV.length === 0 && mapBad.length === 0 && desk >= 10,
+      { desktop: desk, cli: cliN, bad: badV.map((s) => [s.sessionId, s.variant]), mapBad: mapBad.map((s) => [s.originator, s.variant]) });
+  }
 }
 
 // ================================================================ M-H Kimi（A 路径：state.json 目录 + wire.jsonl 事件）
@@ -174,6 +185,50 @@ let cx;
     check('MC4', 'CLI 投递通道能力位（canInput/canCreate/canOpen + cliChannels 三家）',
       snap.capabilities?.canInput === true && snap.capabilities?.canCreate === true && ['claude-code', 'codex', 'kimi-code'].every((s) => (snap.capabilities?.cliChannels || []).some((c) => c.source === s)),
       { cliChannels: (snap.capabilities?.cliChannels || []).map((c) => c.source) });
+    // 会话成员口径回归（2026-10-06 修复：workspace.json 只登记 GUI 打开过的子集，不能当成员真相源）
+    {
+      const dshCat = scanCatalog({});
+      const diskProj = (dshCat.projects || []).filter((p) => p.workspaceId).sort((a, b) => b.sessionCount - a.sessionCount)[0];
+      if (diskProj) {
+        const snapProj = (snap.catalog.projects || []).find((p) => p.key === diskProj.workspaceId);
+        const diskMains = diskProj.sessions.filter((s) => s.kind !== 'subagent').length;
+        check('MC5', 'workspace 项目合并磁盘全集（快照会话数 ≥ 磁盘主会话数，注册表子集不再截断列表）',
+          !!snapProj && snapProj.sessionCount >= diskMains,
+          { project: diskProj.title, snap: snapProj?.sessionCount, diskMains, registered: diskProj.registeredSessionCount });
+      }
+      const snapProjs = snap.catalog.projects || [];
+      check('MC6', '进行中计数 ≤ 会话总数（liveCount 只数有效进行中状态，不再按 mtime/见过事件计数）',
+        snapProjs.every((p) => (p.liveCount ?? 0) <= p.sessionCount),
+        { bad: snapProjs.filter((p) => (p.liveCount ?? 0) > p.sessionCount).map((p) => p.name) });
+      check('MC7', 'DSH 未注册磁盘项目各自成组（「未归入项目」不再揉一团：缺席或为空）',
+        !snapProjs.some((p) => p.key === '__none__' && p.sessionCount > 0),
+        { none: snapProjs.find((p) => p.key === '__none__')?.sessionCount ?? null });
+      const names = snapProjs.map((p) => p.name);
+      check('MC8', '侧栏项目显示名唯一（同名项目追加父目录消歧，如两个 jian）',
+        new Set(names).size === names.length,
+        { dup: names.filter((n, i) => names.indexOf(n) !== i) });
+      check('MC9', '临时/已删目录项目沉底（scratch/dead 组排在正常组之后）',
+        (() => { const firstBad = snapProjs.findIndex((p) => p.scratch || p.dead); const lastGood = snapProjs.map((p, i) => (!(p.scratch || p.dead) && !p.unregistered) ? i : -1).filter((i) => i >= 0).pop(); return firstBad === -1 || lastGood === undefined || firstBad > lastGood; })(),
+        {});
+      check('MC10', '扫描耗时无浮点累加噪声（四源 elapsedMs 求和后重取整到 2 位小数）',
+        Number.isFinite(snap.catalog.elapsedMs) && snap.catalog.elapsedMs === Math.round(snap.catalog.elapsedMs * 100) / 100,
+        { elapsedMs: snap.catalog.elapsedMs });
+      // Codex 任务目录折叠回归：~/Documents/Codex/<日期>/<任务名> 的一次性目录不再各自成组（he/qi/jian/xia）
+      {
+        const codexRoot = path.join(os.homedir(), 'Documents', 'Codex');
+        const underRoot = (c) => typeof c === 'string' && (c === codexRoot || c.startsWith(codexRoot + path.sep));
+        const taskSess = (scanCodexCatalog().sessions || []).filter((s) => s.kind !== 'subagent' && underRoot(s.cwd));
+        if (taskSess.length >= 2) {
+          const group = snapProjs.find((p) => p.key === 'codex:tasks');
+          const leaked = snapProjs.filter((p) => p.key !== 'codex:tasks' && underRoot(p.cwd) && (p.sources || []).includes('codex'));
+          check('MC11', 'Codex 任务目录折叠为一组（单会话任务目录不再各自成组，组沉底标临时）',
+            !!group && group.sessionCount === taskSess.length && leaked.length === 0 && group.scratch === true,
+            { group: group ? group.name + ':' + group.sessionCount : null, taskSessions: taskSess.length, leaked: leaked.map((p) => p.name) });
+        } else {
+          check('MC11', 'Codex 任务目录折叠（本机任务目录会话 < 2，条件不满足，跳过深度断言）', true, { taskSessions: taskSess.length });
+        }
+      }
+    }
     // ---- --live：控制→观察闭环（每后端挑一个**最小**旧会话，真实无头投递一条「只回复 ok」，等会话文件增长）----
     if (LIVE) {
       const pickSmallest = (cat, capBytes) => (cat.sessions || [])

@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { createHub, makeMapper, findSessionLog } from './frame.mjs';
-import { scanCatalog, readWorkspaceIndex } from '../adapters/session-catalog.mjs';
+import { scanCatalog, readWorkspaceIndex, DSH_HOME } from '../adapters/session-catalog.mjs';
 import { scanLocalAgents } from '../adapters/local-agents.mjs';
 import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
@@ -31,6 +31,16 @@ import crypto from 'node:crypto';
 
 /** 多源会话目录（M-C）：DSH（workspace 注册表）+ Claude Code（目录即项目）+ Codex（session_meta.cwd 归并）。 */
 const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', agentos: 'AgentOS', opencode: 'OpenCode' };
+
+// Codex 桌面端任务工作目录（~/Documents/Codex/<日期>/<任务名>，每任务一个一次性目录）：
+// 按 cwd 归并会让侧栏出现大量单会话「项目」（he / qi / jian / xia …）——统一折叠为一个「Codex 任务目录」组
+const CODEX_TASKS_ROOT = process.env.CODEX_TASKS_ROOT || path.join(process.env.HOME || '.', 'Documents', 'Codex');
+export const CODEX_TASKS_KEY = 'codex:tasks';
+/** 仅 codex 来源、且 cwd 落在任务目录约定下才算（claude/kimi 在同目录开的会话仍是自己的项目） */
+export function isCodexTaskCwd(source, cwd) {
+  if (source !== 'codex' || typeof cwd !== 'string' || !cwd) return false;
+  return cwd === CODEX_TASKS_ROOT || cwd.startsWith(CODEX_TASKS_ROOT + path.sep);
+}
 
 // ---------- DSH 插件通道（优先）：存在则用进程内事件 + 输入投递；不存在则退回日志 tail + 本地队列 ----------
 const PLUGIN_SOCK = process.env.PET_PLUGIN_SOCK || path.join(process.env.TMPDIR || '/tmp', 'agent-pet', 'dsh-plugin.sock');
@@ -115,6 +125,10 @@ const PET_DIR = path.join(process.env.HOME || '.', '.agent-pet');
 const INPUT_LOG = path.join(PET_DIR, 'input-queue.jsonl');
 const INPUT_MAX_ITEMS = 200;      // 队列条目上限：超出丢弃最旧（补上架构文档 §4 缺失的轮转规格）
 const INPUT_MAX_BYTES = 1 << 20;  // 1MB 硬上限（单条 ≤2000 字符，正常远达不到）
+const HTML_DIR = path.dirname(fileURLToPath(import.meta.url));
+const BOOT_TS = Date.now();
+/** 页面构建号 = max(服务启动时间, 页面文件 mtime)：服务重启或 HTML 更新后，旧页面自行刷新（页面响应 no-store）。 */
+function pageBuild(file) { try { return Math.max(BOOT_TS, fs.statSync(file).mtimeMs); } catch { return BOOT_TS; } }
 
 // ---------- 本地服务鉴权（qa A-1批 E-1：TCP 失去了 Unix socket 的同用户隐含鉴权，必须显式补回） ----------
 // token 落盘 0600：同用户进程可读（与 ADR-3 的 Unix socket 同一信任级别）；
@@ -221,11 +235,29 @@ function multiCatalog(force) {
     try { cc = scanClaudeCatalog(); } catch (e) { cc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
     try { cx = scanCodexCatalog(); } catch (e) { cx = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
     try { km = scanKimiCatalog(); } catch (e) { km = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
-    multiCache = { at: Date.now(), data: { dsh, cc, cx, km, elapsedMs: (dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0) } };
+    multiCache = { at: Date.now(), data: { dsh, cc, cx, km, elapsedMs: Math.round(((dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0)) * 100) / 100 } };
   }
   return multiCache.data;
 }
 const sessionStates = new Map(); // sessionId -> 来自目录的粗粒度状态（无实时事件时用）
+
+// ---------- 进行中口径（修复「N 进行」误报，2026-10-06）----------
+// 实时会话表只增不减：进程被杀/会话结束后，running/thinking 会永远滞留（曾导致已完成会话被计入「进行」）。
+// 目录扫描 ≤5s 刷新且各适配器自带 5min 滞留修正 → 进行中状态需要近期事件佐证，否则信目录结论。
+// waiting / transient-error 不受时间限制（对齐前端规则①：等审批的会话一直在进行中）。
+const STALE_MS = 300_000;
+const TIMED_PROGRESS = new Set(['thinking', 'running', 'working']);
+const PINNED_PROGRESS = new Set(['waiting', 'transient-error']);
+const isProgressState = (st) => TIMED_PROGRESS.has(st) || PINNED_PROGRESS.has(st);
+/** 实时行的有效状态：滞留的进行中状态按目录结论修正（目录无结论则降 idle；ended 归入 UI 的 done 词汇）。 */
+function effectiveState(s, meta, nowMs) {
+  if (TIMED_PROGRESS.has(s.state) && nowMs - (s.lastAt || 0) > STALE_MS) {
+    const m = meta?.state;
+    if (m && m !== 'unknown' && !TIMED_PROGRESS.has(m)) return m === 'ended' ? 'done' : m;
+    return 'idle';
+  }
+  return s.state;
+}
 
 // CLI 控制通道缓存（PATH 探测 60s 缓存，避免每 2s 快照都查）
 let cliChannelsCacheData = { at: 0, data: null };
@@ -301,7 +333,7 @@ function applyEvent(ev) {
   broadcast();
 }
 function snapshot() {
-  const agg = hub.agg();
+  const nowMs = Date.now();
   const multi = multiCatalog(false);
   const cat = multi.dsh;
   const ws = workspaceIndex(false);
@@ -313,22 +345,33 @@ function snapshot() {
   for (const p of multi.km.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   // 子代理判定：插件 session.start 的 origin 立即可判（零延迟）；目录 kind 兜底（≤5s 滞后）
   const isSubagent = (id, s) => s?.origin === 'subagent' || (metaById.get(id)?.kind || 'main') === 'subagent';
-  // projectKey：DSH 注册表优先；claude/codex 按 cwd 归并进同目录 workspace；都不中 → 'path:<cwd>'（M-C）
+  // projectKey：DSH 注册表优先；claude/codex 按 cwd 归并进同目录 workspace；Codex 任务目录折叠为一组；都不中 → 'path:<cwd>'（M-C）
   const keyOfSession = (id, row) => {
     const wid = ws.sessionOwner.get(id);
     if (wid) return wid;
-    const cwd = metaById.get(id)?.cwd ?? row?.cwd ?? null;
+    const meta = metaById.get(id);
+    const cwd = meta?.cwd ?? row?.cwd ?? null;
     if (cwd) { const w = ws.byPath.get(cwd); if (w) return w; }
+    if (isCodexTaskCwd(row?.source ?? meta?.source ?? '', cwd)) return CODEX_TASKS_KEY;
     return cwd ? 'path:' + cwd : '__none__';
   };
-  // 实时区保留全部会话（含已完成）——隐藏由 UI 手动触发（用户反馈：要手动隐藏，不要自动退场）
+  // 实时区 TTL：非进行中且 24h 无事件的会话从实时区退役（目录历史区仍在；防常驻内存无限增长）
+  const RETIRE_MS = 24 * 3600_000;
+  for (const [id, s] of state.sessions) {
+    if (isProgressState(effectiveState(s, metaById.get(id), nowMs))) continue;
+    if (nowMs - (s.lastAt || 0) > RETIRE_MS) {
+      state.sessions.delete(id);
+      const i = state.order.indexOf(id); if (i >= 0) state.order.splice(i, 1);
+    }
+  }
+  // 实时区保留进行中的全部会话——隐藏由 UI 手动触发（用户反馈：要手动隐藏，不要自动退场）
   const live = state.order.map(id => state.sessions.get(id)).filter(Boolean).filter(s => !isSubagent(s.id, s)).map(s => {
     const meta = metaById.get(s.id) || {};
     return {
-      id: s.id, source: s.source, label: meta.title || s.label, state: s.state,
+      id: s.id, source: s.source, label: meta.title || s.label, state: effectiveState(s, meta, nowMs),
       cwd: meta.cwd || s.cwd || null, projectKey: keyOfSession(s.id, s),
       since: s.since, pending: s.pending, activity: s.activity,
-      elapsedMs: Date.now() - s.since,
+      elapsedMs: nowMs - s.since,
       lastActiveMs: s.lastAt ?? s.since,
       agentName: meta.agentName || SOURCE_LABEL[s.source] || 'DSH', model: meta.model || null, reasoningEffort: meta.reasoningEffort || null,
       variant: meta.variant || null,
@@ -336,6 +379,22 @@ function snapshot() {
     };
   });
   const liveIds = new Set(live.map(s => s.id));
+  const liveRowById = new Map(live.map(s => [s.id, s]));
+  // 进行中判定：实时行用修正后的有效状态；未被实时跟随的会话用目录粗粒度（各适配器自带 5min 滞留修正）
+  const inProgressOf = (sid, meta) => isProgressState((liveRowById.get(sid) || meta || {}).state);
+  // 聚合状态改用修正后的实时行计算（hub.agg() 是另一套状态机，曾出现「新建空闲会话 agg=思考中」的不一致）
+  const AGG_PRIORITY = { waiting: 5, 'transient-error': 4, error: 3, working: 2, running: 2, thinking: 1, done: 0, idle: -1 };
+  let agg = 'idle';
+  for (const s of live) if ((AGG_PRIORITY[s.state] ?? -1) > (AGG_PRIORITY[agg] ?? -1)) agg = s.state;
+  // 当前状态计数（顶部 chips 用；counters 是累计事件数，只作诊断，不能再当“当前 N 个在跑”展示）
+  const stateCounts = { thinking: 0, running: 0, waiting: 0, errors: 0, done: 0 };
+  for (const s of live) {
+    if (s.state === 'thinking') stateCounts.thinking++;
+    else if (s.state === 'running' || s.state === 'working') stateCounts.running++;
+    else if (s.state === 'waiting') stateCounts.waiting++;
+    else if (s.state === 'error' || s.state === 'transient-error') stateCounts.errors++;
+    else if (s.state === 'done' && nowMs - (s.since || 0) <= 600_000) stateCounts.done++;
+  }
 
   // ---- 会话列表（多源合并，docs/21 M-C「按 cwd 归一」）----
   //   DSH = workspace 注册表（唯一真相源，原行为保留）；
@@ -350,8 +409,9 @@ function snapshot() {
       if (!extraByWorkspace.has(wid)) extraByWorkspace.set(wid, []);
       extraByWorkspace.get(wid).push(s);
     } else {
-      const key = 'path:' + (s.cwd ?? '(未知目录)');
-      if (!orphanByCwd.has(key)) orphanByCwd.set(key, { cwd: s.cwd, rows: [] });
+      const isTask = isCodexTaskCwd(s.source, s.cwd);
+      const key = isTask ? CODEX_TASKS_KEY : 'path:' + (s.cwd ?? '(未知目录)');
+      if (!orphanByCwd.has(key)) orphanByCwd.set(key, isTask ? { cwd: CODEX_TASKS_ROOT, rows: [], name: 'Codex 任务目录' } : { cwd: s.cwd, rows: [] });
       orphanByCwd.get(key).rows.push(s);
     }
   };
@@ -361,63 +421,118 @@ function snapshot() {
 
   const sidebarProjects = [];
   const listed = new Set();
+  // DSH 磁盘扫描：会话成员的唯一真相源是磁盘（docs/52 §1.2：workspace.json 的 sessionIds
+  // 只登记「GUI 里打开过」的子集——本机 21 个磁盘会话只登记 3 个——不能当成员口径）。
+  /** 取磁盘项目中尚未列出的主会话（按更新时间倒序），并标记为已列出。 */
+  const takeDiskMains = (p) => !p ? [] : (p.sessions || [])
+    .filter(s => s.kind !== 'subagent' && !ws.archived.has(s.sessionId) && !listed.has(s.sessionId))
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .map(s => { listed.add(s.sessionId); return s; });
+  /** 组装侧栏项目组：计数与会话行同源；liveCount = 有效状态为「进行中」的会话数（不是 mtime 近 60s）。 */
+  const projByKey = new Map();
+  const mkProject = (base, rows) => {
+    const proj = {
+      ...base,
+      sessionCount: rows.length, mainCount: rows.length, subagentCount: 0,
+      liveCount: rows.filter(r => inProgressOf(r.sessionId, r)).length,
+      sources: [...new Set(rows.map(r => r.source || 'dsh'))],
+      sessions: rows,
+    };
+    sidebarProjects.push(proj);
+    projByKey.set(proj.key, proj);
+    return proj;
+  };
   for (const wid of ws.order) {
     const w = ws.byId.get(wid);
     if (!w) continue;
     const rows = [];
-    for (const sid of w.sessionIds) {
-      if (ws.archived.has(sid)) continue;
+    for (const sid of w.sessionIds) {            // 已登记会话保持注册表顺序（= DSH GUI 侧栏顺序）
+      if (ws.archived.has(sid) || listed.has(sid)) continue;
       const meta = metaById.get(sid);
       if (!meta || meta.kind === 'subagent') continue;
       listed.add(sid);
       rows.push(meta);
     }
-    const extras = (extraByWorkspace.get(wid) || []).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    for (const e of extras) listed.add(e.sessionId);
-    const all = [...rows, ...extras];
-    sidebarProjects.push({
-      key: wid, projectId: wid, workspaceId: wid, name: w.title, title: w.title, cwd: w.path,
-      sessionCount: all.length, mainCount: all.length, subagentCount: 0,
-      liveCount: all.filter(r => r.live || liveIds.has(r.sessionId)).length,
-      sources: [...new Set(['dsh', ...extras.map(e => e.source).filter(Boolean)])],
-      sessions: all,
-    });
+    // 合并磁盘扫描中属于本项目、但未登记进 workspace.json 的会话（展示 agent 软件内的全部会话）；
+    // 按 workspaceId 或 cwd 匹配，且遍历全部磁盘项目（目录名解码有损，理论上可能多项目同 cwd）
+    for (const p of cat.projects || []) {
+      if (p.workspaceId === wid || (p.cwd && p.cwd === w.path)) rows.push(...takeDiskMains(p));
+    }
+    const extras = (extraByWorkspace.get(wid) || []).filter(e => !listed.has(e.sessionId))
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    for (const e of extras) { listed.add(e.sessionId); rows.push(e); }
+    mkProject({ key: wid, projectId: wid, workspaceId: wid, name: w.title, title: w.title, cwd: w.path }, rows);
   }
-  // 未挂靠任何 workspace 的 claude/codex/kimi 项目组（cwd 自立；同 cwd 的多源会话进同一组）
+  // DSH 磁盘上未注册为 workspace 的项目：各自成组（与 claude/codex 的 cwd 自立组同口径），
+  // 不再混进末尾「未归入项目」（曾把 desktop / selftest 等独立项目的 19 个会话揉成一团）
+  for (const p of [...(cat.projects || [])].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))) {
+    if ((p.workspaceId && ws.byId.has(p.workspaceId)) || (p.cwd && ws.byPath.has(p.cwd))) continue;
+    const rows = takeDiskMains(p);
+    if (!rows.length) continue;
+    mkProject({
+      key: p.cwd ? 'path:' + p.cwd : 'dshproj:' + p.projectDirName,   // 与 keyOfSession 的 path:<cwd> 口径一致
+      projectId: p.projectId, workspaceId: null, name: p.title, title: p.title, cwd: p.cwd ?? null, diskOnly: true,
+    }, rows);
+  }
+  // 未挂靠任何 workspace / DSH 项目的 claude/codex/kimi 会话组（cwd 自立；与已有 DSH 磁盘组同 key 时合并）
   for (const [key, g] of orphanByCwd) {
-    const rows = g.rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    const rows = g.rows.filter(r => !listed.has(r.sessionId)).sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    if (!rows.length) continue;
     for (const r of rows) listed.add(r.sessionId);
-    const name = g.cwd ? path.basename(g.cwd) : '（未知目录）';
-    sidebarProjects.push({
-      key, projectId: key, workspaceId: null, name, title: name, cwd: g.cwd,
-      sessionCount: rows.length, mainCount: rows.length, subagentCount: 0,
-      liveCount: rows.filter(r => r.live || liveIds.has(r.sessionId)).length,
-      sources: [...new Set(rows.map(r => r.source).filter(Boolean))],
-      sessions: rows, unregistered: false,
-    });
+    const existing = projByKey.get(key);
+    if (existing) {
+      existing.sessions.push(...rows);
+      existing.sessionCount = existing.sessions.length;
+      existing.mainCount = existing.sessions.length;
+      existing.liveCount = existing.sessions.filter(r => inProgressOf(r.sessionId, r)).length;
+      existing.sources = [...new Set(existing.sessions.map(r => r.source || 'dsh'))];
+      continue;
+    }
+    const name = g.name || (g.cwd ? path.basename(g.cwd) : '（未知目录）');
+    mkProject({ key, projectId: key, workspaceId: null, name, title: name, cwd: g.cwd, unregistered: false }, rows);
   }
-  // DSH 未注册进任何 workspace 的主会话（如旧版 cwd-only 创建的）归入末尾「未归入项目」组
+  // 兜底：理论上磁盘会话都已被上面的项目组收编；收不完的（如无 cwd 的降级记录）进「未归入项目」
   const unregistered = (cat.sessions || [])
     .filter(s => s.kind !== 'subagent' && !ws.archived.has(s.sessionId) && !ws.sessionOwner.has(s.sessionId) && !listed.has(s.sessionId))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   if (unregistered.length) {
-    sidebarProjects.push({
-      key: '__none__', projectId: '__none__', workspaceId: null, name: '未归入项目', title: '未归入项目', cwd: null,
-      sessionCount: Math.min(unregistered.length, 100), mainCount: Math.min(unregistered.length, 100), subagentCount: 0,
-      liveCount: unregistered.filter(r => r.live || liveIds.has(r.sessionId)).length,
-      sources: ['dsh'],
-      sessions: unregistered.slice(0, 100),
-      unregistered: true,
-    });
+    mkProject({
+      key: '__none__', projectId: '__none__', workspaceId: null, name: '未归入项目', title: '未归入项目', cwd: null, unregistered: true,
+    }, unregistered.slice(0, 100));
   }
-  // 历史行（非实时）：跨源合并，按更新时间排，总量截 40
-  // 完整会话列表：不截断（用户要求展示 agent 软件内的全部会话；本机四源合计 ~100 行，DOM 无压力）
+
+  // ---- 项目列表后处理（冗余治理，2026-10-06）----
+  // ① 同名消歧：撞名时追加父目录名（Codex 的 ~/Documents/Codex/<date>/<name> 目录会产出多个同名项目，如两个 jian）
+  // ② 临时/已删目录标记：/tmp、/var/folders、~/.dsh/profiles 下的项目属临时痕迹；cwd 已不存在 = 死目录
+  // ③ 排序：workspace 组保持注册表顺序；其余正常组按更新时间倒序；临时/已删/兜底组沉底
+  const profRoot = path.join(DSH_HOME, 'profiles');
+  for (const p of sidebarProjects) {
+    p.updatedAt = (p.sessions || []).reduce((m, s) => Math.max(m, s.updatedAt ?? 0), 0);
+    p.cwdExists = p.cwd ? fs.existsSync(p.cwd) : true;
+    p.scratch = !!(p.cwd && (/^\/(private\/)?tmp(\/|$)/.test(p.cwd) || p.cwd.startsWith('/var/folders/') || p.cwd === profRoot || p.cwd.startsWith(profRoot + path.sep) || p.cwd === CODEX_TASKS_ROOT));
+  }
+  const nameCount = new Map();
+  for (const p of sidebarProjects) nameCount.set(p.name, (nameCount.get(p.name) || 0) + 1);
+  for (const p of sidebarProjects) {
+    if ((nameCount.get(p.name) || 0) > 1 && p.cwd) p.name = p.name + '（…/' + path.basename(path.dirname(p.cwd)) + '）';
+    if (p.scratch) p.name = p.name + '（临时）';
+  }
+  sidebarProjects.sort((a, b) => {
+    const rankOf = (p) => p.workspaceId ? 0 : (p.scratch || !p.cwdExists || p.key === '__none__') ? 2 : 1;
+    const r = rankOf(a) - rankOf(b);
+    if (r) return r;
+    if (!a.workspaceId || !b.workspaceId) return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+    return 0;   // workspace 组之间保持注册表顺序（V8 sort 稳定）
+  });
+  // 历史行（非实时）：跨源合并，按更新时间排，不截断（用户要求展示 agent 软件内的全部会话）
+  // 注意：不再按 s.live（mtime<60s）排除——未被实时跟随的进行中会话否则会有 60 秒盲区，哪都不显示
   const history = sidebarProjects.flatMap(p => p.sessions)
-    .filter(s => !liveIds.has(s.sessionId) && !s.live)
+    .filter(s => !liveIds.has(s.sessionId))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .map(s => ({ ...s, source: s.source || 'dsh', projectKey: keyOfSession(s.sessionId, s) }));
   return {
     v: 1, ts: Date.now(), agg,
+    build: { window: pageBuild(path.join(HTML_DIR, 'window.html')), mini: pageBuild(path.join(HTML_DIR, 'mini.html')) },
     sessions: live,
     agents: (() => {
       const counts = {};
@@ -439,6 +554,7 @@ function snapshot() {
     })(),
     agentCounts: agentStatus.counts || {},
     counters: state.counters,
+    stateCounts,
     inputs: state.inputs.slice(-8).reverse(),
     lastEvent: state.lastEvent,
     inputChannel: (() => {
@@ -451,12 +567,13 @@ function snapshot() {
       projects: sidebarProjects.map(p => ({
         key: p.key, projectId: p.projectId, name: p.name, cwd: p.cwd,
         sessionCount: p.sessionCount, mainCount: p.mainCount, subagentCount: p.subagentCount,
-        liveCount: p.liveCount, unregistered: p.unregistered || false,
+        liveCount: p.liveCount, unregistered: p.unregistered || false, diskOnly: p.diskOnly || false,
+        dead: p.cwdExists === false, scratch: !!p.scratch, updatedAt: p.updatedAt || 0,
         sources: p.sources || ['dsh'],
       })),
       history,
       elapsedMs: multi.elapsedMs, scannedAt: cat.scannedAt,
-      source: 'multi:workspace-registry+disk(claude-code,codex,kimi-code)',
+      source: 'multi:disk-full+workspace-order+disk(claude-code,codex,kimi-code)',
     },
     capabilities: (() => {
       const cli = cliChannelsCache();
@@ -582,15 +699,16 @@ async function deliverInput(text, targetId, targetSource) {
   broadcast();
   return item;
 }
-/** 自动挑投递目标：优先实时活跃的**DSH 主**会话（claude/codex 无投递通道，子代理不算），否则 null（插件会挑最新磁盘主会话）。 */
+/** 自动挑投递目标：优先有效状态为进行中的**DSH 主**会话（claude/codex 无投递通道，子代理不算；滞留 running 已被修正），否则 null（插件会挑最新磁盘主会话）。 */
 function pluginTargetSession() {
   const cat = catalog(false);
   const metaById = new Map();
   for (const p of cat.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
+  const nowMs = Date.now();
   const live = state.order.map(id => state.sessions.get(id)).filter(Boolean)
     .filter(s => (s.source ?? 'dsh') === 'dsh')
     .filter(s => (metaById.get(s.id)?.kind || 'main') !== 'subagent');
-  const running = live.find(s => ['running', 'thinking', 'waiting'].includes(s.state)) || live[0];
+  const running = live.find(s => ['running', 'thinking', 'waiting', 'working'].includes(effectiveState(s, metaById.get(s.id), nowMs))) || live[0];
   return running ? running.id : null;
 }
 function persistInput(item) {
@@ -625,7 +743,7 @@ const server = http.createServer(async (req, res) => {
   // 页面路由：/ = 迷你悬浮条（外壳默认入口，单行进度 + 三级切换）；/window.html = App 界面
   //（顶部切 agent / 左侧切项目 / 底部控会话）。token 只替换带引号的 '__PET_TOKEN_VALUE__'（唯一出现，
   // 不得动 window.__PET_TOKEN__ 属性名——2026-10-05 实测踩坑：整页 SyntaxError →「未连接」）。
-  const HTML_DIR = path.dirname(fileURLToPath(import.meta.url));
+  // no-store：页面永不被缓存，配合 snapshot.build 让旧页面在服务重启/HTML 更新后自动刷新。
   const PAGE_BY_ROUTE = {
     '/': path.join(HTML_DIR, 'mini.html'),
     '/mini.html': path.join(HTML_DIR, 'mini.html'),
@@ -633,7 +751,7 @@ const server = http.createServer(async (req, res) => {
     '/app': path.join(HTML_DIR, 'window.html'),
   };
   if (req.method === 'GET' && PAGE_BY_ROUTE[url.pathname]) {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end(fs.readFileSync(PAGE_BY_ROUTE[url.pathname], 'utf8').replace("'__PET_TOKEN_VALUE__'", JSON.stringify(TOKEN)));
     return;
   }
@@ -696,10 +814,10 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(r.ok ? 200 : 502, { 'content-type': 'application/json' });
         res.end(JSON.stringify({
           ok: r.ok, via: 'terminal',
-          session: { sessionId: found.sessionId, title: found.title, source: found.source, cwd: found.cwd },
+          session: { sessionId: found.sessionId, title: found.title, source: found.source, cwd: found.cwd, variant: found.variant ?? null },
           opened: !!r.opened,
           reason: r.ok ? undefined : 'Terminal 打开失败',
-          detail: r.detail || r.via,
+          detail: (r.detail || r.via) + (found.variant === 'desktop' ? '（桌面端会话经 CLI 续接）' : ''),
         }));
         return;
       }

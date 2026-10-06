@@ -141,6 +141,13 @@ for (const s of catalog.sessions) {
 check('A12', '快扫(前8+末2帧) 与深扫(整文件) 的元信息差异 ≤ 25%（差异=会话中途改模型/标题）', divergent.length / Math.max(1, catalog.sessions.length) <= 0.25, { divergent: divergent.length, total: catalog.sessions.length, detail: divergent.map((d) => d.sessionId.slice(0, 20)) });
 check('A13', '深扫同样零降级，且耗时仍 < 300 ms', deep.stats.degraded === 0 && deep.tookMs < 300, { deepTookMs: Number(deep.tookMs.toFixed(1)), degraded: deep.stats.degraded });
 
+// ---------------------------------------------------------------- 会话形态（cli/desktop）
+const variantMains = catalog.sessions.filter((s) => s.kind !== 'subagent' && !s.degraded);
+const badVariant = variantMains.filter((s) => !['desktop', 'cli'].includes(s.variant));
+check('A14', 'DSH 主会话形态可辨（variant=desktop/cli；desktop profile 被 Electron 独占，cwd 落在 profiles/** 的判 CLI）',
+  variantMains.length > 0 && badVariant.length === 0,
+  { mains: variantMains.length, desktop: variantMains.filter((s) => s.variant === 'desktop').length, cli: variantMains.filter((s) => s.variant === 'cli').length, bad: badVariant.map((s) => s.sessionId) });
+
 // ---------------------------------------------------------------- 契约帧
 const frame = toCatalogFrame(catalog);
 const frameOk = frame.ctl === 'catalog' && Array.isArray(frame.projects) && frame.projects.every((p) => typeof p.projectId === 'string' && Array.isArray(p.sessions)) &&

@@ -52,6 +52,8 @@ aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid v
 .pitem .pname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pitem .pcnt{flex:0 0 auto;font-size:10px;color:var(--dim)}
 .pitem .plive{color:var(--run)}
+.pitem.dim{opacity:.42}
+.pitem.dim:hover{opacity:.75}
 #agents{flex:0 0 auto;max-height:132px;overflow:auto;border-top:1px solid var(--line);padding:2px 0}
 .arow{display:flex;align-items:center;gap:7px;padding:4px 12px}
 .arow .adot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 6px currentColor}
@@ -63,10 +65,10 @@ aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid v
 #toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line)}
 .btn{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:8px;font-size:11px;padding:4px 9px;cursor:pointer}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-#sess-filter{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-#sess-filter .fbtn{border:none;border-radius:0;border-right:1px solid var(--line)}
-#sess-filter .fbtn:last-child{border-right:none}
-#sess-filter .fbtn.on{background:#1f6feb;color:#fff}
+#sess-filter,#variant-filter{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+#sess-filter .fbtn,#variant-filter .fbtn{border:none;border-radius:0;border-right:1px solid var(--line)}
+#sess-filter .fbtn:last-child,#variant-filter .fbtn:last-child{border-right:none}
+#sess-filter .fbtn.on,#variant-filter .fbtn.on{background:#1f6feb;color:#fff}
 .srow .unhide{flex:0 0 auto;font-size:10px;color:#9db2cc;cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:0 5px}
 .srow .hbadge{flex:0 0 auto;font-size:9px;color:#e3b341;border:1px solid #e3b34166;border-radius:4px;padding:0 3px}
 .srow .unhide:hover{color:#fff;border-color:#3d4a60}
@@ -75,7 +77,7 @@ aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid v
 .srow{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid rgba(36,44,58,.45);cursor:pointer}
 .srow:hover{background:rgba(255,255,255,.03)}
 .srow.sel{background:rgba(31,111,235,.14);box-shadow:inset 2px 0 0 var(--acc)}
-.srow .src{width:64px;font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}
+.srow .src{width:80px;font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}
 .srow .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .srow .lbl{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .srow .meta{font-size:10.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -131,6 +133,12 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
           <button class="btn fbtn" data-filter="done">完成会话</button>
           <button class="btn fbtn" data-filter="hidden">隐藏会话</button>
         </nav>
+        <nav id="variant-filter" title="会话形态切换：CLI（命令行版）/ 桌面端（App）/ IDE（编辑器插件）">
+          <button class="btn fbtn on" data-variant="">全部形态</button>
+          <button class="btn fbtn" data-variant="cli">CLI</button>
+          <button class="btn fbtn" data-variant="desktop">桌面</button>
+          <button class="btn fbtn" data-variant="ide">IDE</button>
+        </nav>
         <button class="btn" id="toggle-history" title="仅在「活跃会话」视图生效">历史会话</button>
         <button class="btn" id="new-session" disabled>＋ 新建会话</button>
         <span class="sp"></span>
@@ -157,8 +165,8 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
 </div>
 <script>
 window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
-const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错（自动恢复）',error:'连接错误',waiting:'等待你',done:'已完成'};
-const COLOR={idle:'#8b98a9',thinking:'#4aa8ff',running:'#3fb950',working:'#3fb950','transient-error':'#e3b341',error:'#f85149',waiting:'#e3b341',done:'#bc8cff'};
+const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错（自动恢复）',error:'连接错误',waiting:'等待你',done:'已完成',ended:'已结束',unknown:'未知'};
+const COLOR={idle:'#8b98a9',thinking:'#4aa8ff',running:'#3fb950',working:'#3fb950','transient-error':'#e3b341',error:'#f85149',waiting:'#e3b341',done:'#bc8cff',ended:'#bc8cff',unknown:'#8b98a9'};
 const AGENT_STATUS_LABEL={connected:'已连接','open-unconnected':'已打开 · 未连接',closed:'未打开','not-installed':'未下载'};
 const AGENT_STATUS_COLOR={connected:'#3fb950','open-unconnected':'#e3b341',closed:'#8b98a9','not-installed':'#5a6676'};
 const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI']];
@@ -177,6 +185,9 @@ function projNameOf(s,projList){
 }
 function render(snap){
   window.__SNAP__=snap;
+  // 服务端重启或页面文件更新 → 自动刷新一次加载新 UI（旧页面不再滞留；修复后用户无需手杀 App）
+  const __b=snap.build&&snap.build.window;
+  if(__b){if(window.__BUILD_ID__===undefined)window.__BUILD_ID__=__b;else if(__b!==window.__BUILD_ID__&&!window.__RELOADED__){window.__RELOADED__=1;try{location.reload()}catch(e){}return}}
   const now=snap.ts||Date.now();
   // ---- 顶部：agent tabs + 聚合 ----
   const tabsEl=$('agent-tabs');
@@ -185,8 +196,9 @@ function render(snap){
   const agg=snap.agg||'idle';
   $('agg-dot').style.background=COLOR[agg]||'#8b98a9';$('agg-dot').style.color=COLOR[agg]||'#8b98a9';
   $('agg-text').textContent=STATE_LABEL[agg]||agg;$('agg-text').style.color=COLOR[agg]||'#8b98a9';
-  const c=snap.counters||{};
-  $('chips').innerHTML=[['思考中',c.thinking],['运行',c.running],['出错',c.errors],['完成',c.done]].map(kv=>kv[1]?'<span class="chip">'+kv[0]+' '+kv[1]+'</span>':'').join('');
+  // 顶部 chips = 当前状态计数（stateCounts，每快照重算）；counters 是累计事件数（只增不减），不能当“当前在跑”展示
+  const c=snap.stateCounts||snap.counters||{};
+  $('chips').innerHTML=[['思考中',c.thinking],['运行',c.running],['等待',c.waiting],['出错',c.errors],['完成',c.done]].map(kv=>kv[1]?'<span class="chip">'+kv[0]+' '+kv[1]+'</span>':'').join('');
   // ---- 过滤口径：agent tab（顶部）+ 项目（左侧）----
   const agentSel=window.__AGENT__||'';
   const projListAll=(snap.catalog&&snap.catalog.projects)||[];
@@ -197,7 +209,7 @@ function render(snap){
   const inProj=(s)=>!curProj?true:(s.projectKey!==undefined?s.projectKey===curProj.key:(s.cwd?curProj.cwd===s.cwd:false));
   // ---- 左侧：项目 ----
   const projHtml='<div class="pitem'+(pid?'':' on')+'" data-proj="">全部项目<span class="pcnt">'+projList.length+'</span></div>'
-    +projList.map(p=>'<div class="pitem'+(p.key===pid?' on':'')+'" data-proj="'+esc(p.key)+'" title="'+esc(p.cwd||'')+'"><span class="pname">'+esc(p.name)+'</span><span class="pcnt">'+(p.liveCount?'<span class="plive">'+p.liveCount+' 进行</span> · ':'')+p.sessionCount+'</span></div>').join('');
+    +projList.map(p=>'<div class="pitem'+(p.key===pid?' on':'')+((p.dead||p.scratch)?' dim':'')+'" data-proj="'+esc(p.key)+'" title="'+esc(p.cwd||'')+(p.dead?'（目录已删除）':p.scratch?'（临时目录）':'')+'"><span class="pname">'+esc(p.name)+'</span><span class="pcnt">'+(p.liveCount?'<span class="plive">'+p.liveCount+' 进行</span> · ':'')+p.sessionCount+'</span></div>').join('');
   const projEl=$('projects');
   if(projEl.__petLastHtml!==projHtml){projEl.innerHTML=projHtml;projEl.__petLastHtml=projHtml}
   // ---- 软件状态独立页（视图=view-status 时展示，不与会话页重叠） ----
@@ -244,7 +256,7 @@ function render(snap){
     const st = s.state;
     if (PROGRESS_STATES.includes(st)) return 'all';
     const fresh = now - (s.lastActiveMs ?? s.updatedAt ?? s.since ?? 0) < ACTIVE_MS;
-    if (st === 'done') return (now - (s.since ?? s.updatedAt ?? 0) <= DONE_GRACE_MS) ? 'all' : 'done';
+    if (st === 'done' || st === 'ended') return (now - (s.since ?? s.updatedAt ?? 0) <= DONE_GRACE_MS) ? 'all' : 'done';   // ended=正常结束（DSH 目录口径），与 done 同档
     return fresh ? 'all' : 'hidden';   // idle / error / unknown
   };
   const SORT_RANK = { waiting: 0, 'transient-error': 1, running: 2, thinking: 3, done: 4, error: 5, idle: 6, unknown: 7 };
@@ -265,15 +277,29 @@ function render(snap){
   const histAll = ((snap.catalog && snap.catalog.history) || [])
     .filter(s => (!agentSel || s.source === agentSel) && s.kind !== 'subagent' && inProj(s));
   const liveIds = new Set(liveAll.map(s => s.id));
-  const histPool = histAll.filter(s => !liveIds.has(s.sessionId) && !s.live);   // 不截断：展示全部会话
-  let showLive = liveAll.filter(s => tierOf(s) === 'all');
-  let showHistRows = (filter !== 'all' || showHist || curProj) ? histPool.filter(s => tierOf(s) === 'all') : [];
+  const histPool = histAll.filter(s => !liveIds.has(s.sessionId));   // 不截断、不按 mtime 排除：展示全部会话（含未被实时跟随的进行中会话）
+  // ---- 形态切换（CLI / 桌面端 / IDE）：作用于实时行与历史行；三档计数与列表随之联动 ----
+  // 形态计数在过滤前统计（否则切到 CLI 后其他档计数恒为 0，没法知道别处还有多少）
+  const variantSel = window.__VARIANT__ || '';
+  const variantOk = (s) => !variantSel || s.variant === variantSel;
+  const vCountOf = {};
+  for (const s of liveAll) vCountOf[s.variant ?? null] = (vCountOf[s.variant ?? null] ?? 0) + 1;
+  for (const s of histPool) vCountOf[s.variant ?? null] = (vCountOf[s.variant ?? null] ?? 0) + 1;
+  const liveV = liveAll.filter(variantOk), histV = histPool.filter(variantOk);
+  let showLive, showHistRows;
   if (filter === 'done') {
-    showLive = liveAll.filter(s => tierOf(s) === 'done');
-    showHistRows = histPool.filter(s => tierOf(s) === 'done');
+    showLive = liveV.filter(s => tierOf(s) === 'done');
+    showHistRows = histV.filter(s => tierOf(s) === 'done');
   } else if (filter === 'hidden') {
-    showLive = liveAll.filter(s => tierOf(s) === 'hidden');
-    showHistRows = histPool.filter(s => tierOf(s) === 'hidden');
+    showLive = liveV.filter(s => tierOf(s) === 'hidden');
+    showHistRows = histV.filter(s => tierOf(s) === 'hidden');
+  } else if (curProj) {
+    // 项目钻取 = 展示该项目全部会话（实时行按优先级排在前，历史行按更新时间排在后），不再只给活跃档
+    showLive = liveV.slice();
+    showHistRows = histV.slice();
+  } else {
+    showLive = liveV.filter(s => tierOf(s) === 'all');
+    showHistRows = showHist ? histV.filter(s => tierOf(s) === 'all') : [];
   }
   // 活跃视图按优先级排序（等你确认最前，空闲殿后）
   showLive = [...showLive].sort((a, b) => (SORT_RANK[a.state] ?? 9) - (SORT_RANK[b.state] ?? 9) || (b.lastActiveMs ?? b.since ?? 0) - (a.lastActiveMs ?? a.since ?? 0));
@@ -286,7 +312,8 @@ function render(snap){
     const st = s.state, col = COLOR[st] || '#8b98a9';
     const sel = window.__TARGET__ === s.id;
     const proj = curProj ? '' : ' · ' + esc(projNameOf(s, projListAll));
-    return '<div class="srow' + (sel ? ' sel' : '') + '" data-session="' + esc(s.id) + '" title="点击选为投递目标"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src">' + esc(srcLabel(s)) + '</span>'
+    const sl = srcLabel(s);
+    return '<div class="srow' + (sel ? ' sel' : '') + '" data-session="' + esc(s.id) + '" title="点击选为投递目标"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src" title="' + esc(sl) + '">' + esc(sl) + '</span>'
       + '<span class="mid"><span class="lbl">' + esc(s.label || s.title || s.id) + '</span><span class="meta">' + esc(metaLine(s)) + proj + '</span></span>'
       + '<span class="st" style="color:' + col + '">' + (STATE_LABEL[st] || st) + '</span>'
       + (s.pending ? '<span class="pend">待办 ' + s.pending + '</span>' : '')
@@ -297,37 +324,53 @@ function render(snap){
     const col = COLOR[s.state] || '#8b98a9';
     const sel = window.__TARGET__ === s.sessionId;
     const proj = curProj ? '' : ' · ' + esc(projNameOf(s, projListAll));
-    return '<div class="srow hist' + (sel ? ' sel' : '') + '" data-session="' + esc(s.sessionId) + '" title="点击选为投递目标并打开"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src">' + esc(srcLabel(s)) + '</span>'
+    const sl = srcLabel(s);
+    return '<div class="srow hist' + (sel ? ' sel' : '') + '" data-session="' + esc(s.sessionId) + '" title="点击选为投递目标并打开"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src" title="' + esc(sl) + '">' + esc(sl) + '</span>'
       + '<span class="mid"><span class="lbl">' + esc(s.title || String(s.sessionId).slice(0, 12)) + '</span><span class="meta">' + esc(metaLine(s)) + proj + ' · ' + new Date(s.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + '</span></span>'
       + (filter === 'hidden' && isManuallyHidden(s) ? '<span class="hbadge">手动</span><span class="unhide" data-unhide="' + esc(s.sessionId) + '" title="恢复显示该会话">恢复</span>' : '<span class="hx" data-hide="' + esc(s.sessionId) + '" title="手动隐藏该会话（有新活动时自动恢复显示）">✕</span>')
       + '<span class="st" style="color:' + col + '">' + (STATE_LABEL[s.state] || s.state) + '</span><span class="tm">打开</span></div>';
   };
   let html = '';
   const EMPTY_TEXT = { all: '暂无活跃会话（进行中 / 10 分钟内完成 / 1 小时内有过活动）', done: '没有已完成的会话（结束超 10 分钟的 ✓ 会话）', hidden: '没有隐藏会话（未活跃=空闲/出错超 1 小时无消息，自动判定；或用行内 ✕ 手动隐藏）' };
-  html += rows.length ? rows.map(mkLiveRow).join('') : '<div class="empty">' + EMPTY_TEXT[filter] + '</div>';
-  if (filter !== 'all' || showHist || curProj) html += hist.length ? hist.map(mkHistRow).join('') : '';
+  const emptyText = variantSel ? '当前口径下没有「' + VARIANT_LABEL[variantSel] + '」形态的会话' : (filter === 'all' && curProj) ? '该项目暂无会话' : EMPTY_TEXT[filter];
+  html += (rows.length || hist.length) ? rows.map(mkLiveRow).join('') : '<div class="empty">' + emptyText + '</div>';
+  if (filter !== 'all' || showHist || curProj) html += hist.map(mkHistRow).join('');
   const FILT_LABELS = [
-    ['all', '活跃会话', '进行中（思考/运行/等你确认/瞬态错误，不限时间）＋ 完成且结束 ≤10 分钟 ＋ 空闲/出错但 1 小时内有消息'],
-    ['done', '完成会话', '状态 = 完成，且结束已超过 10 分钟缓冲期'],
+    ['all', '活跃会话', '进行中（思考/运行/等你确认/瞬态错误，不限时间）＋ 完成且结束 ≤10 分钟 ＋ 空闲/出错但 1 小时内有消息；选中左侧项目时改为展示该项目全部会话'],
+    ['done', '完成会话', '状态 = 完成/已结束，且结束已超过 10 分钟缓冲期'],
     ['hidden', '隐藏会话', '空闲或持久出错，且 1 小时内无任何消息活动（未活跃，自动判定）'],
   ];
   const counts = { all: 0, done: 0, hidden: 0 };
-  for (const s of liveAll) counts[tierOf(s)]++;
-  for (const s of histPool) counts[tierOf(s)]++;
+  for (const s of liveV) counts[tierOf(s)]++;
+  for (const s of histV) counts[tierOf(s)]++;
   const filtEl = $('sess-filter');
   const filtHtml = FILT_LABELS.map(([v, l, tip]) => '<button class="btn fbtn' + (filter === v ? ' on' : '') + '" data-filter="' + v + '" title="' + esc(tip) + '">' + l + ' ' + counts[v] + '</button>').join('');
   if (filtEl.__petLastHtml !== filtHtml) { filtEl.innerHTML = filtHtml; filtEl.__petLastHtml = filtHtml }
+  // 形态切换控件（CLI / 桌面端 / IDE）：计数在当前 agent+项目口径下统计；「全部形态」= 实时+历史去重后的总行数
+  const VARIANT_TABS = [
+    ['', '全部', '不过滤会话形态（CLI / 桌面端 / IDE / 未识别）'],
+    ['cli', 'CLI', '只看命令行版（CLI）发起的会话'],
+    ['desktop', '桌面', '只看桌面版 App 发起的会话'],
+    ['ide', 'IDE', '只看 IDE 插件（如 VS Code）发起的会话'],
+  ];
+  const vfEl = $('variant-filter');
+  const vfHtml = VARIANT_TABS.map(([v, l, tip]) => '<button class="btn fbtn' + (variantSel === v ? ' on' : '') + '" data-variant="' + v + '" title="' + esc(tip) + '">' + l + ' ' + (v ? (vCountOf[v] || 0) : (liveAll.length + histPool.length)) + '</button>').join('');
+  if (vfEl.__petLastHtml !== vfHtml) { vfEl.innerHTML = vfHtml; vfEl.__petLastHtml = vfHtml }
   const sessEl = $('sessions');
   if (sessEl.__petLastHtml !== html) { sessEl.innerHTML = html; sessEl.__petLastHtml = html }
-  $('proj-hint').textContent = (agentSel ? ('仅 ' + agentSel.toUpperCase() + ' · ') : '') + (curProj ? curProj.name : '全部项目') + ' · 活跃 ' + counts.all + ' · 完成 ' + counts.done + ' · 隐藏 ' + counts.hidden;
+  // 口径说明：钻取模式下列表 = 该项目全部会话，计数必须是「全部 N」（三档只是参考）——否则出现「活跃 0」旁边挂 16 行的困惑
+  const scopeTxt = (agentSel ? '仅 ' + agentSel.toUpperCase() + ' · ' : '') + (curProj ? curProj.name : '全部项目') + (variantSel ? ' · 仅' + VARIANT_LABEL[variantSel] : '');
+  $('proj-hint').textContent = curProj
+    ? scopeTxt + ' · 列出全部 ' + (liveV.length + histV.length) + ' 会话（活跃 ' + counts.all + ' · 完成 ' + counts.done + ' · 隐藏 ' + counts.hidden + '）'
+    : scopeTxt + ' · 活跃 ' + counts.all + ' · 完成 ' + counts.done + ' · 隐藏 ' + counts.hidden;
   // ---- 投递目标行 ----
   const tgtEl=$('target');
   if(window.__TARGET__){
     const src=tgtHit?(tgtHit.source||'dsh'):'dsh';
     const label=esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12));
     tgtEl.innerHTML=src!=='dsh'
-      ?('投递目标：<b>'+label+'</b> · 经 '+esc(src.toUpperCase())+' CLI 投递（点击恢复自动）')
-      :('投递目标：<b>'+label+'</b>（点击恢复自动）');
+      ?('投递目标：<b>'+label+'</b>（'+esc(tgtHit?srcLabel(tgtHit):src.toUpperCase())+'）· 经 CLI 通道投递（点击恢复自动）')
+      :('投递目标：<b>'+label+'</b>（'+esc(tgtHit?srcLabel(tgtHit):'DSH')+'）（点击恢复自动）');
   }else{
     tgtEl.innerHTML='投递目标：自动 · 最近活跃主会话（点击会话行可指定）';
   }
@@ -347,7 +390,7 @@ function render(snap){
   }).join('');
   const last=snap.lastEvent;
   $('note').textContent='只读会话日志 · '+(projList.length?('项目 '+projList.length+' · 会话 '+(projList.reduce((a,p)=>a+p.sessionCount,0))+' · 扫描 '+(snap.catalog&&snap.catalog.elapsedMs||0)+'ms'):'目录扫描中')+' · 最后事件 '+(last?last.type:'—');
-  window.__RENDER_OUT__={agg:agg,agent:agentSel,rows:rows.length,hist:hist.length,projects:projList.length,queueShown:qs.length,targetShown:!!window.__TARGET__};
+  window.__RENDER_OUT__={agg:agg,agent:agentSel,variant:variantSel,rows:rows.length,hist:hist.length,projects:projList.length,queueShown:qs.length,targetShown:!!window.__TARGET__};
   return window.__RENDER_OUT__;
 }
 async function api(path,payload,method){
@@ -376,12 +419,12 @@ async function openSession(id){
 $('send').onclick=send;
 $('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
 $('sess-filter').addEventListener('click',e=>{const b=e.target.closest('[data-filter]');if(!b)return;window.__FILTER__=b.getAttribute('data-filter');if(window.__SNAP__)render(window.__SNAP__)});
+$('variant-filter').addEventListener('click',e=>{const b=e.target.closest('[data-variant]');if(!b)return;window.__VARIANT__=b.getAttribute('data-variant')||'';if(window.__SNAP__)render(window.__SNAP__)});
 $('view-sessions').onclick=function(){window.__VIEW__='sessions';if(window.__SNAP__)render(window.__SNAP__)};
 $('view-status').onclick=function(){window.__VIEW__='status';if(window.__SNAP__)render(window.__SNAP__)};
 $('agent-tabs').addEventListener('click',e=>{const t=e.target.closest('[data-agent]');if(!t)return;window.__AGENT__=t.getAttribute('data-agent');if(window.__SNAP__)render(window.__SNAP__)});
 $('projects').addEventListener('click',e=>{const t=e.target.closest('[data-proj]');if(!t)return;window.__PROJECT__=t.getAttribute('data-proj')||'';if(window.__SNAP__)render(window.__SNAP__)});
 $('toggle-history').onclick=function(){window.__SHOW_HISTORY__=!window.__SHOW_HISTORY__;if(window.__SNAP__)render(window.__SNAP__)};
-function persistHidden(){try{localStorage.setItem('agent-pet-hidden',JSON.stringify(window.__HIDDEN__||[]))}catch(e){}}
 // 新建会话：agent tab 指定了后端就用它；否则按项目来源挑（DSH 插件优先，其次 CLI）
 $('new-session').onclick=async function(){
   const snap=window.__SNAP__||{};
@@ -392,8 +435,10 @@ $('new-session').onclick=async function(){
   let src=window.__AGENT__||'';
   if(!src&&p&&p.sources){src=(p.sources.indexOf('dsh')>=0&&caps.plugin&&caps.plugin.available)?'dsh':['claude-code','codex','kimi-code'].filter(s=>p.sources.indexOf(s)>=0&&cliSrc.indexOf(s)>=0)[0]||(cliSrc[0]||'dsh')}
   if(!src)src='dsh';
+  // 形态标注：DSH=桌面端插件进程内创建；claude/codex/kimi 只支持经各自 CLI（终端窗口）新建——桌面端无官方新建通道
+  const surf=src==='dsh'?'DSH·桌面（插件）':(String(src).toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI')+(cliSrc.indexOf(src)>=0?'·CLI（终端窗口）':''));
   const j=await api('/api/new',{cwd:p?p.cwd:'',source:src});
-  $('note').textContent='新建会话（'+String(src).toUpperCase()+'）：'+(j.ok?(j.via||'已创建')+'；目录将在几秒内出现':((j.detail&&String(j.detail).slice(0,90))||(j.reason&&String(j.reason).slice(0,90))||j.error||'未知'));
+  $('note').textContent='新建会话（'+surf+'）：'+(j.ok?(j.via||'已创建')+'；目录将在几秒内出现':((j.detail&&String(j.detail).slice(0,90))||(j.reason&&String(j.reason).slice(0,90))||j.error||'未知'));
   try{await api('/api/catalog?refresh=1',undefined,'GET')}catch(err){}
 };
 // 会话行点击 = 选为投递目标（再点一次取消）；历史行同时打开

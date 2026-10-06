@@ -195,6 +195,18 @@ export function pickLogFile(sessionDir) {
   return best;
 }
 
+/**
+ * DSH 会话形态（cli/desktop）判定：
+ *  - desktop profile 被 Electron 应用独占（docs/52 §5.3），桌面端是唯一正常生产会话的客户端 → 默认 'desktop'；
+ *  - cwd 落在 ~/.dsh/profiles/** 的会话是 CLI/脚本从 profile 目录启动的痕迹 → 'cli'；
+ *  - cwd 不可得（降级记录）→ null（不猜）。
+ */
+export function dshVariantOf(cwd) {
+  if (typeof cwd !== 'string' || !cwd) return null;
+  const profRoot = path.join(DSH_HOME, 'profiles');
+  return (cwd === profRoot || cwd.startsWith(profRoot + path.sep)) ? 'cli' : 'desktop';
+}
+
 /** 解析单个会话目录 → 会话记录；任何失败都降级为 sessionId + 时间 + 大小。 */
 export function parseSession(sessionRoot, projectDirName, sessionDirName, opts = {}) {
   const o = { ...DEFAULT_OPTS, ...opts };
@@ -206,6 +218,7 @@ export function parseSession(sessionRoot, projectDirName, sessionDirName, opts =
     agentVersion: AGENT_VERSION, state: 'unknown', stateSource: null, live: false,
     createdAt: null, updatedAt: null, bytes: 0, logFile: null, logFormatVersion: null,
     origin: null, parentSession: null, delegationDepth: null, isSeeded: null, kind: 'main', label: null,
+    variant: null,
     degraded: false, error: null, metaSources: {}, conflicts: [], selection: null, lock: 'unknown',
     metaComplete: false, metaApproximate: true, framesScanned: 0, readBytes: 0, readMode: 'window',
   };
@@ -257,6 +270,7 @@ export function parseSession(sessionRoot, projectDirName, sessionDirName, opts =
       delegationDepth: header?.delegationDepth ?? null,
       isSeeded: header?.isSeeded ?? null,
       kind: header?.origin === 'subagent' ? 'subagent' : 'main',
+      variant: dshVariantOf(header?.cwd),
       label: events.find((r) => r?.type === 'subagent/descriptor')?.data?.label ?? null,
       state: st.state, stateSource: st.stateSource,
       live: (now - log.mtimeMs) < o.liveWindowMs,
@@ -381,6 +395,7 @@ export function toCatalogFrame(catalog) {
       sessions: p.sessions.map((s) => ({
         sessionId: s.sessionId, title: s.title, agentName: s.agentName, provider: s.provider, model: s.model,
         reasoningEffort: s.reasoningEffort, agentPreset: s.agentPreset, state: s.state, kind: s.kind,
+        variant: s.variant ?? null,
         createdAt: s.createdAt, updatedAt: s.updatedAt, live: s.live,
       })),
     })),

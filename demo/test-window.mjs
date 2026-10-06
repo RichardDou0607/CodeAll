@@ -11,7 +11,7 @@ const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
 let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 script = script.replace(/let es=null;[\s\S]*$/, ''); // 去掉自动连接
 
-const ids = ['agg-dot','agg-text','chips','agent-tabs','toggle-pet','projects','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note','view-sessions','view-status','status-page','status-cards','main','toolbar','sess-filter'];
+const ids = ['agg-dot','agg-text','chips','agent-tabs','toggle-pet','projects','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note','view-sessions','view-status','status-page','status-cards','main','toolbar','sess-filter','variant-filter'];
 const store = new Map();
 const mkEl = (id) => ({
   id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false, title: '',
@@ -43,7 +43,7 @@ const now = Date.now();
 const snap = {
   v: 1, ts: now, agg: 'waiting',
   sessions: [
-    { id: 'session-1', lastActiveMs: now - 30000, source: 'dsh', label: 'agent桌宠', state: 'running', activity: '运行命令', elapsedMs: 74000, pending: 0, agentName: 'DSH', model: 'deepseek-flash', reasoningEffort: 'max', kind: 'main', projectKey: 'ws-1' },
+    { id: 'session-1', lastActiveMs: now - 30000, source: 'dsh', label: 'agent桌宠', state: 'running', activity: '运行命令', elapsedMs: 74000, pending: 0, agentName: 'DSH', model: 'deepseek-flash', reasoningEffort: 'max', kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
     { id: 'session-2', lastActiveMs: now - 30000, source: 'claude-code', label: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, agentName: 'Claude Code', model: 'glm-5.3', reasoningEffort: 'high', kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
     { id: 'session-3', lastActiveMs: now - 30000, source: 'codex', label: 'docs', state: 'waiting', activity: '等待你批准', elapsedMs: 4000, pending: 2, agentName: 'Codex', model: 'gpt-6-sol', kind: 'main', projectKey: 'ws-1', variant: 'cli' },
     { id: 'session-4', lastActiveMs: now - 30000, source: 'dsh', label: 'web-ui', state: 'error', activity: '连接错误', elapsedMs: 2000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-2' },
@@ -53,6 +53,7 @@ const snap = {
     { id: 'session-sub', source: 'dsh', label: '子代理内部', state: 'running', kind: 'subagent', projectKey: 'ws-1' },
   ],
   counters: { thinking: 1, running: 1, errors: 1, done: 1 },
+  stateCounts: { thinking: 1, running: 1, waiting: 1, errors: 1, done: 1 },
   agents: [
     { id: 'dsh', name: 'DeepSeek Harness', source: 'dsh', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'plugin', processes: 3, lastActivityMs: now - 2000, version: '0.2.0-rc.2', evidence: ['/Applications/DeepSeek Harness.app'] },
     { id: 'claude-code-cli', name: 'Claude Code CLI', source: 'claude-code', base: 'claude-code', variantTag: 'cli', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 2, lastActivityMs: now - 9000, version: '2.1.278', variants: { cli: 13 }, evidence: ['~/.local/bin/claude'] },
@@ -72,6 +73,7 @@ const snap = {
   ],
   inputChannel: { mode: 'cli', detail: 'x' },
   lastEvent: { type: 'tool.call', ts: now, sessionId: 'session-1' },
+  build: { window: 1730000000000, mini: 1730000000000 },
   capabilities: { canCatalog: true, canOpen: true, canCreate: true, canInput: true, cliChannels: [{ source: 'claude-code' }, { source: 'codex' }, { source: 'kimi-code' }], plugin: { available: false } },
   catalog: {
     elapsedMs: 55,
@@ -79,13 +81,15 @@ const snap = {
       { key: 'ws-1', projectId: 'ws-1', name: 'agent桌宠', cwd: '/Users/demo/Desktop/agent桌宠', sessionCount: 9, liveCount: 3, sources: ['dsh', 'claude-code', 'codex'] },
       { key: 'ws-2', projectId: 'ws-2', name: '原生AI操作系统', cwd: '/Users/demo/Desktop/原生AI操作系统', sessionCount: 4, liveCount: 0, sources: ['dsh'] },
       { key: '__none__', projectId: '__none__', name: '未归入项目', cwd: null, sessionCount: 2, liveCount: 0, unregistered: true, sources: ['dsh'] },
+      { key: 'path:/tmp/x', projectId: 'path:/tmp/x', name: 'x（临时）', cwd: '/tmp/x', sessionCount: 1, liveCount: 0, sources: ['dsh'], dead: true, scratch: true },
     ],
     history: [
-      { sessionId: 'hist-1', title: '创建一个HTML', state: 'done', source: 'dsh', agentName: 'DSH', model: 'deepseek-v4-pro', updatedAt: now - 86400000, kind: 'main', projectKey: 'ws-1' },
+      { sessionId: 'hist-1', title: '创建一个HTML', state: 'done', source: 'dsh', agentName: 'DSH', model: 'deepseek-v4-pro', updatedAt: now - 86400000, kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
       { sessionId: 'hist-cc', title: '修复 replay fixture', state: 'done', source: 'claude-code', agentName: 'Claude Code', model: 'glm-5.3', updatedAt: now - 5400000, kind: 'main', projectKey: 'ws-1', variant: 'cli' },
       { sessionId: 'hist-cx', title: 'SVG鹈鹕动画', state: 'done', source: 'codex', agentName: 'Codex', model: 'gpt-6-sol', updatedAt: now - 6600000, kind: 'main', projectKey: 'ws-2', variant: 'desktop' },
       { sessionId: 'hist-km', title: '前端简洁科技感重设计', state: 'idle', source: 'kimi-code', agentName: 'Kimi Code', model: 'k3', updatedAt: now - 9000000, kind: 'main', projectKey: '__none__' },
       { sessionId: 'hist-act', title: '半小时前完成的会话', state: 'done', source: 'dsh', agentName: 'DSH', model: 'deepseek-flash', updatedAt: now - 1800000, kind: 'main', projectKey: 'ws-1' },
+      { sessionId: 'hist-ended', title: '昨天正常结束的会话', state: 'ended', source: 'dsh', agentName: 'DSH', model: 'deepseek-flash', updatedAt: now - 86400000, kind: 'main', projectKey: 'ws-2' },
       { sessionId: 'hist-sub', title: '子代理历史', state: 'idle', agentName: 'DSH', kind: 'subagent', projectKey: 'ws-1', updatedAt: now - 1000 },
     ],
   },
@@ -109,6 +113,7 @@ sandbox.window.__AGENT__ = '';
 sandbox.window.__PROJECT__ = 'ws-1';
 sandbox.render(snap);
 const rowsProj = getEl('sessions').innerHTML;
+const hintProj = getEl('proj-hint').textContent;
 sandbox.window.__PROJECT__ = '';
 sandbox.render(snap);
 // 场景 3.5：软件状态独立页（视图切换，不与会话页重叠）
@@ -152,6 +157,24 @@ sandbox.render(snap);
 const rowsMhStale = getEl('sessions').innerHTML;
 sandbox.window.__HIDDEN__ = {};
 sandbox.render(snap);
+// 场景 3.9：形态切换（CLI / 桌面端 / IDE）——实时行与历史行都按 variant 过滤，计数与 hint 联动
+sandbox.window.__VARIANT__ = 'cli';
+sandbox.render(snap);
+const rowsCli = getEl('sessions').innerHTML;
+const vfCli = getEl('variant-filter').innerHTML;
+const hintCli = getEl('proj-hint').textContent;
+sandbox.window.__VARIANT__ = 'desktop';
+sandbox.render(snap);
+const rowsDesk = getEl('sessions').innerHTML;
+// 组合：项目钻取 + 形态过滤（ws-1 的 CLI 会话 = session-3 + 历史 hist-cc，桌面会话 session-1/2 不出现）
+sandbox.window.__VARIANT__ = 'cli';
+sandbox.window.__PROJECT__ = 'ws-1';
+sandbox.render(snap);
+const rowsProjCli = getEl('sessions').innerHTML;
+const hintProjCli = getEl('proj-hint').textContent;
+sandbox.window.__PROJECT__ = '';
+sandbox.window.__VARIANT__ = '';
+sandbox.render(snap);
 // 场景四：投递目标 = claude 会话 → CLI 通道标注
 sandbox.window.__TARGET__ = 'session-2';
 sandbox.render(snap);
@@ -167,8 +190,11 @@ const checks = [
   ['默认实时行=活跃档 5 行（1-4 进行中/出错 + session-6 刚完成缓冲；session-5 完成/session-7 隐藏已分档；子代理过滤）', (rows.match(/class="srow"/g) || []).length === 5 && rows.includes('data-session="session-6"') && !rows.includes('data-session="session-5"') && !rows.includes('data-session="session-7"') && !rows.includes('session-sub')],
   ['会话行可辨来源与项目（来源列 + 项目名进 meta）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('· agent桌宠')],
   ['实时行来源形态徽标（CLAUDE·桌面 / CODEX·CLI）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('>CODEX·CLI</span>')],
+  ['DSH 会话也带形态徽标（DSH·桌面），实时行与历史行一致', rows.includes('>DSH·桌面</span>') && rowsDone.includes('>DSH·桌面</span>')],
+  ['来源徽标带 title 全文（截断时可悬停读全）', rows.includes('class="src" title="CLAUDE·桌面"') && rowsDone.includes('class="src" title="CODEX·桌面"')],
   ['完成/隐藏视图的历史行徽标（CODEX·桌面 在完成；KIMI 在隐藏）', rowsDone.includes('>CODEX·桌面</span>') && rowsHiddenView.includes('>KIMI</span>')],
-  ['左侧项目列表（全部项目 + 3 项，含进行中计数）', (projHtml.match(/class="pitem/g) || []).length === 4 && projHtml.includes('3 进行') && projHtml.includes('agent桌宠')],
+  ['左侧项目列表（全部项目 + 4 项，含进行中计数）', (projHtml.match(/class="pitem/g) || []).length === 5 && projHtml.includes('3 进行') && projHtml.includes('agent桌宠')],
+  ['临时/已删项目淡化标记（pitem dim + 目录已删除提示）', projHtml.includes('class="pitem dim"') && projHtml.includes('（目录已删除）') && projHtml.includes('x（临时）')],
   ['软件状态独立页：9 张卡片（CLI 与桌面端拆行）+ 四态徽标', (statusCards.match(/class="scard"/g) || []).length === 9 && ['已连接', '已打开 · 未连接', '未打开', '未下载'].every(t => statusCards.includes(t))],
   ['CLI 与桌面端各自独立行（Claude Code CLI / Claude Code 桌面端 / Codex CLI / Codex 桌面端 / Kimi CLI / Kimi Code 桌面端）', ['Claude Code CLI','Claude Code 桌面端','Codex CLI','Codex 桌面端','Kimi CLI','Kimi Code 桌面端'].every(n=>statusCards.includes(n))],
   ['独立页不与会话页重叠（main 隐藏 / status on / 会话工具栏隐藏）', mainDisplay === 'none' && statusCls === 'on' && sessToolbarVisible === 'hidden'],
@@ -180,13 +206,25 @@ const checks = [
   ['顶部切 CLAUDE → 项目侧栏只留含 claude 的项目（仅 ws-1）', (projClaude.match(/class="pitem/g) || []).length === 2 && projClaude.includes('agent桌宠') && !projClaude.includes('原生AI操作系统')],
   ['proj-hint 反映 agent 过滤', hintClaude.includes('CLAUDE-CODE') && hintClaude.includes('claude') === false],
   ['左侧选项目 ws-1 → 只留该项目活跃行（session-1/2/3/6；ws-2 的 session-4/7 不在）', ['session-1','session-2','session-3','session-6'].every(id=>rowsProj.includes('data-session="'+id+'"')) && !rowsProj.includes('data-session="session-4"') && !rowsProj.includes('data-session="session-7"')],
+  ['项目钻取=该项目全部会话（ws-1 还含完成档 session-5 与历史 hist-1/hist-cc/hist-act）', ['session-5','hist-1','hist-cc','hist-act'].every(id=>rowsProj.includes('data-session="'+id+'"'))],
+  ['项目钻取不含其它项目的历史行（ws-2 的 hist-cx / hist-ended 不在）', !rowsProj.includes('data-session="hist-cx"') && !rowsProj.includes('data-session="hist-ended"')],
+  ['项目钻取 hint 用「列出全部 N」口径（列表数=全部会话数，三档只作参考，消除「活跃 0 却列出一堆」的不一致）', hintProj.includes('列出全部') && hintProj.includes('活跃')],
+  ['形态分段控件渲染 4 档（全部/CLI/桌面/IDE）带选中态', (vfCli.match(/class="btn fbtn/g) || []).length === 4 && /class="btn fbtn on" data-variant="cli"/.test(vfCli) && vfCli.includes('data-variant="desktop"') && vfCli.includes('data-variant="ide"')],
+  ['形态计数在当前口径统计（CLI 档 = session-3 实时 + hist-cc 历史 = 2；「全部」恒为未过滤总数 13）', vfCli.includes('>CLI 2<') && vfCli.includes('>桌面 4<') && vfCli.includes('>全部 13<')],
+  ['形态切到 CLI → 仅 CLI 会话（session-3 在；桌面的 session-1/2 不在）', rowsCli.includes('data-session="session-3"') && !rowsCli.includes('data-session="session-1"') && !rowsCli.includes('data-session="session-2"')],
+  ['形态切到 CLI → proj-hint 标注 仅CLI', hintCli.includes('仅CLI')],
+  ['形态切到桌面端 → 桌面会话在（session-1/2），CLI 的 session-3 不在', rowsDesk.includes('data-session="session-1"') && rowsDesk.includes('data-session="session-2"') && !rowsDesk.includes('data-session="session-3"')],
+  ['项目钻取 + 形态组合：ws-1 仅 CLI = session-3 + hist-cc（含完成档历史），桌面行与其它项目不在', rowsProjCli.includes('data-session="session-3"') && rowsProjCli.includes('data-session="hist-cc"') && !rowsProjCli.includes('data-session="session-1"') && !rowsProjCli.includes('data-session="hist-cx"')],
+  ['组合口径 hint 同时含 仅CLI 与 列出全部', hintProjCli.includes('仅CLI') && hintProjCli.includes('列出全部')],
   ['选项目后历史区出现该项目的活跃档（ws-1 无活跃历史则无历史行）', !rowsProj.includes('data-session="hist-cx"')],
-  ['非 DSH 目标标注 CLI 投递通道', targetCli.includes('api-fix') && targetCli.includes('经 CLAUDE-CODE CLI 投递')],
-  ['DSH 目标为常规目标行', targetDsh.includes('agent桌宠') && targetDsh.includes('点击恢复自动') && !targetDsh.includes('CLI 投递')],
+  ['非 DSH 目标标注来源形态与 CLI 投递通道（api-fix（CLAUDE·桌面）· 经 CLI 通道投递）', targetCli.includes('api-fix') && targetCli.includes('（CLAUDE·桌面）') && targetCli.includes('经 CLI 通道投递')],
+  ['DSH 目标为常规目标行（含 DSH·桌面 徽标）', targetDsh.includes('agent桌宠') && targetDsh.includes('（DSH·桌面）') && targetDsh.includes('点击恢复自动') && !targetDsh.includes('CLI 通道')],
   ['活跃视图=三档之「活跃」：进行中 + 10 分钟内完成(session-6) + 1h 内有活动；不含 2h 前完成与 2h 闲置', rowsAll.includes('data-session="session-6"') && rowsAll.includes('data-session="session-1"') && !rowsAll.includes('data-session="session-5"') && !rowsAll.includes('data-session="session-7"')],
   ['活跃视图排序：waiting(session-3) 在 running(session-1) 前', rowsAll.indexOf('data-session="session-3"') < rowsAll.indexOf('data-session="session-1"')],
   ['三态分段控件带规则提示与计数', (getEl('sess-filter').innerHTML.match(/class="btn fbtn/g) || []).length === 3 && getEl('sess-filter').innerHTML.includes('隐藏会话') && /data-filter="hidden"[^>]*title="[^"]*1 小时内无任何消息活动/.test(getEl('sess-filter').innerHTML)],
   ['「完成会话」视图：done>10min（session-5 + done 历史），不含缓冲期内的 session-6', rowsDone.includes('data-session="session-5"') && rowsDone.includes('data-session="hist-1"') && !rowsDone.includes('data-session="session-6"') && !rowsDone.includes('data-session="session-1"')],
+  ['DSH 目录 ended 状态归「完成」档且有中文标签（已结束，不裸显英文）', rowsDone.includes('data-session="hist-ended"') && rowsDone.includes('已结束') && !rowsDone.includes('>ended</span>')],
+  ['顶部 chips 用当前状态计数 stateCounts（含 等待 1），不是累计事件数', getEl('chips').innerHTML.includes('等待 1')],
   ['「隐藏会话」视图：仅空闲/出错超 1h（session-7 + 老 idle 历史），不含完成档与活跃档', rowsHiddenView.includes('data-session="session-7"') && rowsHiddenView.includes('data-session="hist-km"') && !rowsHiddenView.includes('data-session="session-5"') && !rowsHiddenView.includes('data-session="session-1"')],
   ['三档互斥：proj-hint 计数齐全', getEl('proj-hint').textContent.includes('活跃') && getEl('proj-hint').textContent.includes('完成') && getEl('proj-hint').textContent.includes('隐藏')],
   ['waiting 即使 2 小时无消息仍属活跃（规则①不限时间）', rowsStale.includes('data-session="session-5"')],
@@ -199,7 +237,7 @@ const checks = [
   ['聚合状态=等待你', getEl('agg-text').textContent === '等待你'],
   ['新建按钮可用（CLI 通道就绪）', getEl('new-session').disabled === false],
   ['hint 显示 CLI 投递模式', getEl('hint').textContent.includes('CLI 投递')],
-  ['渲染统计返回（rows=活跃档 5 / projects）', out.rows === 5 && typeof out.hist === 'number' && out.projects === 3],
+  ['渲染统计返回（rows=活跃档 5 / projects=4）', out.rows === 5 && typeof out.hist === 'number' && out.projects === 4],
   ['原生窗口控制（红黄绿）接管关闭/缩放/全屏：页面无自绘窗口按钮', true],
   ['token 注入后脚本仍可执行' + (injectedOk ? '' : '：' + injectedErr), injectedOk],
   ['esc 转义', sandbox.esc('a"b<c') === 'a&quot;b&lt;c'],
