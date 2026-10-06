@@ -1,0 +1,115 @@
+# 变更日志（文档与契约）
+
+## 2026-10-05
+
+### 契约 v1.2（Lead 冻结，docs/00-interface-contract.md）
+- **计数口径统一**：**16 个 type 字符串 / 16 行**（v0.1 文本误写「14 种」；v1.2 又把 step.*/tool.* 拆成独立行，故行数与 type 数均为 16）。
+- **必填标注规则**写入 §2.3：`*` 必填、`?` 可选、未标注 = 必填。
+- **审批/提问强制关联 ID**：`approval.request/resolved` 必填 `requestId`；找不到未决项计 `orphanApprovals`/`orphanAnswers`（≤不再按 FIFO 猜）。
+- **控制帧概念**：`ctl = hello | ack | decide | snapshot`（与事件区分）；补 ack 超时/重试、版本不匹配回包、`resumeAfter` 续传。
+- **超时拆分为两条独立规则**：§4.4 的 45 s 判连接（source 离线并清聚合）、§4.5 的 10 min 清会话（基准 `lastStateChangeTs`，心跳不刷新）。
+- **状态枚举统一**：`agent.status.state` 仅 `idle|thinking|working|waiting|error`（`done` 为本地过渡态）。
+- **新增 §4.7 瞬态/持久错误**：`step.end/tool.result(error)` = `transient-error`（TTL 2 s）；`turn.end(error)`/`error.raised(fatal)` = 持久；连续 3 次瞬态升级。
+- **会话级例外条款**：`turn.end(aborted)`/`session.end(aborted)` 只改该会话状态，不打断其他会话的 `waiting`。
+- **Phase 1 只读**：明确桌宠不回写任何决定；Phase 2 通过 `canDecide` 能力协商才允许 `ctl:decide`。
+- **工作框保证（§8）**：`pet.snapshot` 必须含 `now`/`counters`/`clearedPending`；新增 `sessions[].title/workspace/lastTool/elapsedMs/pending` 与顶层 `degradedSources`；会话行渲染规则（首行 40 px + 会话行 28 px × 最多 5 行 + `+N` 脚注）。
+- **`observes` 能力协商（§5.2.1）**：适配器声明实际能产生的事件族，工作框据此隐藏不可用指标。
+- **`unknownEvents` 语义澄清**：只统计不在 §3 的 16 个 type 内的类型；已知但 no-op 的事件计 `noop`。
+- **Windows 命名管道更正**为 `\\.\pipe\agent-pet-<source>`；socket 增加单实例锁文件。
+
+### 用户方向更新
+- **产品主界面 = 工作框（Work Frame）**：默认悬浮卡片；首行显示状态/动作/计时/未决，其下每会话一行；**宠物形象默认关闭**，可选开启（用户 2026-10-05 确认）。
+- 内存验收口径定为 `phys_footprint` 合计（RSS 参考）。
+- 分发方式倾向 DMG 直分发（`macOSPrivateApi` 与 App Store 审核冲突，见 R-12）。
+
+### 任务与产出
+- T1 技术栈 spike（Swift/Tauri/Electron）、T2 产品规格、T3 后端适配矩阵、T5 风险登记册、T7 DSH 桥接验证、T8 工作框规格 均已完成；T4 路线图与 T6 独立验收进行中。
+- 独立验收（docs/99）首轮报出的 4 个 P0 + 16 个 P1 已在 v1.2 逐条闭环（详见 docs/99 的 v1.2 复验节）。
+
+### 修复（2026-10-05 下午，悬浮窗三问题：选会话投递 / 新建会话 / 子代理误识别）
+
+**demo/framed.mjs**
+- 插件探测端点 `/state` → **`/health`**（插件只有 /health，原探测永远 404 → canCreate/canOpen/canInput 恒 false、直投恒不可用）；能力位从 `capabilities` 子对象归一化。
+- `POST /api/input` 接受可选 **`sessionId`**（支持前缀），`resolveTarget` 校验目标必须是已知**主**会话，子代理目标 404 拒绝；`deliverInput(text, targetId)` 显式目标优先，重发沿用原目标。
+- 子代理不再混入会话列表：snapshot 的 `sessions`/`catalog.history` 过滤 `kind==='subagent'`；项目摘要新增 `mainCount/subagentCount`；`pluginTargetSession` 跳过子代理；日志跟随默认目标改为「最新主会话日志」（原按 mtime 全局挑最新会选中子代理日志）。
+
+**demo/window.html**
+- 新增**投递目标选择**：点击会话行（实时/历史）选中为投递目标（高亮 + composer 顶部目标行，点击目标行恢复自动）；发送携带 `sessionId`；陈旧目标自动回退自动。
+- 项目下拉显示主会话数；子代理行双重过滤。
+
+**plugins/dsh-pet/index.js**
+- **HMR 竞态修复**：dispose 改为 inode 对照只删自己的 socket、锁加 token 区分同进程新旧实例（原 dispose 无条件 unlink 会删掉后继实例的 socket，造成「内核在听、文件不在」的孤儿，插件活着却 ENOENT 不可达）；锁心跳定时器每 5s 自检 socket 文件，丢失自动重绑。
+- **投递顺序改为 agents 优先**：desktop profile 进程内直调 `sessionController.prompt` 必丢 cancellation signal（`signal.throwIfAborted` 抛 undefined，DSH 侧问题），实测 `agents.get/resume + followup` 在 desktop 与 /tmp 预演均真实送达；prompt 降级为回退并保留诊断。
+- `buildCatalog` 跳过子代理（live 按 delegationDepth/parent，磁盘按 header.origin）。
+- 新增 `POST /diag`（服务句柄/方法探测 + prompt 形态试验）与 socket 同目录 `plugin-debug.log` 生命周期日志。
+
+**实测（真实 desktop profile，2026-10-05 15:4x–16:0x）**：`/api/new` 经 `sessionController.create` 建会话 ✅；`/api/open` 经 `resolveAgent` 定位（前缀匹配）✅；`/api/input` 显式 sessionId 经 `agents.followup` 送达并落盘会话日志 ✅；子代理目标被拒 ✅；`node plugins/dsh-pet/probe.mjs all` 全绿 ✅。注意：插件代码更新需重启 DSH（宿主进程内模块缓存，patch 变更只重新 apply）。
+
+### 追加修复：悬浮窗页面「未连接」（token 注入损坏脚本，2026-10-05 16:0x）
+
+- **根因**：服务端注入 token 用 `html.replace('__PET_TOKEN__', TOKEN)`，而该占位符在页面里的**首次出现是 `window.__PET_TOKEN__` 的属性名**（非字符串字面量），被替换成 `window.<hex>`——数字开头的非法标识符 → 整个内联脚本 `SyntaxError` → SSE/render 均未运行，页面停在「未连接」。渲染自检此前只跑占位符版本，抓不到该问题。
+- **修复**：字符串字面量改用独立占位符 `'__PET_TOKEN_VALUE__'`（页面中唯一出现），服务端只替换带引号的这一处（`demo/window.html` + `demo/framed.mjs`）。
+- **防回归**：`demo/test-window.mjs` 新增断言「token 注入后脚本仍可执行」（22 项断言全过）；浏览器实测：SSE 连接、聚合状态/会话行/主会话计数渲染、点击选投递目标、控制台零报错。
+
+### 修复与增强（2026-10-05 16:1x：新建会话落错项目 / 置顶可关 / 一键安装）
+
+1. **新建会话落进指定项目**（两个根源都修了）：
+   - 插件 `createSession`：DSH 的 create 只带 `cwd` 时**不会**把会话挂进 workspace（界面归到默认项目）。现先 `workspaceRegistry.resolveByPath/create` 拿到 workspace，优先带 `workspaceId` 创建（DSH 内部会 attachSession），agents.create 回退路径手动 `attachSession`；带 workspaceId 被拒时退回纯 cwd。预演实测：`/new` 返回 `workspaceId`，且会话出现在 workspace 的 `sessionIds` 里。**注意：需重启 DSH 加载新插件代码后生效。**
+   - 外壳注入的 `wireNewHint`：能力位 `canCreate=true` 后不再接管「新建会话」按钮（原先一次点击会触发两次 `/api/new`——页面 handler + explainNew 的 `cwd:''`——多出一个落进默认项目的会话）。
+   - 附带发现：`workspaceRegistry.create` 对不存在的目录会失败，因此 /api/new 的 cwd 必须是已存在的项目目录（UI 里列出的都是真实项目，不受影响）。
+2. **置顶可关**：窗口默认 `alwaysOnTop=false`（可被其他窗口正常覆盖）；标题栏新增 📌 按钮随时切换置顶（偏好记忆在 localStorage）；远程能力补 `core:window:allow-set/is-always-on-top`。已重建并替换运行中的外壳（日志确认 `WINDOW_SHOWN always_on_top=false`）。
+3. **一键启用**：`apps/shell/run.sh --install` 构建并安装到 `/Applications`，以后从启动台/Spotlight 打开「AgentPet」即可（外壳自动拉起本地服务）；README 快速开始已更新。
+
+### 会话列表 = DSH 左侧列表（workspace 注册表为准），2026-10-05 16:4x
+
+**口径变更**：悬浮窗的项目/会话列表不再按磁盘扫描自由组织，改以 **DSH 左侧会话列表的唯一真相源**（`~/.dsh/storages/workspace.json`，只读）为准：
+- 项目 = 注册表 workspace，顺序 = `global.workspaceIds`（= DSH 侧栏顺序）；成员 = 各 `workspace.sessionIds`（保留注册顺序）；已归档会话不显示。
+- 子代理彻底消失：注册表本就不含子代理，另有目录 kind + 插件 `session.start` 新增的 `origin`/`delegationDepth` 字段双保险（后者零延迟，不等 5s 目录缓存）。
+- 未注册进任何 workspace 的主会话（如旧版 cwd-only 创建的）归入末尾「未归入项目」组，不打乱注册表项目成员。
+- `pet.heartbeat`/`sessionId='backend'` 的来源级帧不再被画成会话行（修掉名为 backend 的幽灵行）。
+
+**配套修复**（上一轮分析报告的四点方案）：
+1. 项目过滤改按 **projectKey**（workspaceId）匹配：曾按 `label===项目名` 过滤，label 是目录名、项目名是 workspace 标题，口径不一致 → 选中项目后实时行 100% 消失（实测 10 行→0 行）。快照的实时行/历史行/项目现在都带 `projectKey`，前端匹配之（旧快照回退 cwd 匹配）。
+2. 渲染抗竞态：`#sessions` 与项目下拉 innerHTML **内容不变不重写**。此前每 ~1.2s 全量替换（2s 心跳 + 每事件），mousedown/mouseup 之间节点被换 → click 落到容器被吞（「点不中会话行」实测主因之一）。
+3. `/api/new` 对不存在的 cwd 先 `mkdir -p`：`workspaceRegistry.create` 对不存在目录会失败，导致会话落不进项目。
+4. 插件 `session.start` 携带 `origin`/`delegationDepth`；`adapters/session-catalog.mjs` 新增 `readWorkspaceIndex()`（order/byId/byPath/sessionOwner/archived/pinned）。
+
+**验证**：`test-window.mjs` 25 项断言全过（新增 projectKey 过滤/未注册组/注入执行）；实测：项目下拉=DSH 侧栏顺序+未归入组、选中 agent综合管理平台 只显示其 1 个注册会话、无 backend/子代理行、6 连点目标切换全部生效。注意：DSH 重启后插件才会在新建时挂 workspace（旧模块 cwd-only 创建的会话会进「未归入项目」组）。
+
+### 启动方式落地 + 多 Agent 接入计划（2026-10-05 22:1x）
+
+- **免命令行启动（已实测）**：`apps/shell/run.sh --install` 一次性装入 /Applications（并注册 LaunchServices）；日常从 启动台/Spotlight 打开「AgentPet」即全自动（外壳自拉 demo/framed.mjs、连 DSH 插件、出窗口）。开机自启可选：系统设置 → 登录项 添加 AgentPet。注意：仓库移动后需重跑 --install（编译期路径定位）。
+- **新增 docs/21-multi-agent-adoption-plan.md**：多 Agent（Claude Code / Codex / ACP）接入总体计划——复用契约 v1.3 多源设计与 KNOWN_AGENTS 扩展点；M-A/B 观察适配（映射草案基于本机 292 Claude 转录 + 32 Codex rollout 实测）→ M-C 多源目录/UI → M-G 打包常驻 → M-D/E 控制（tmux 注入 / `--resume -p` / `codex exec`，方案待 spike）→ M-F ACP 杠杆；含排期（W1–W4+）与风险对策。
+
+## 2026-10-06
+
+### 多 Agent 接入计划升级 v2（docs/21）
+- **全盘软件盘点**（§1 新增）：PATH/npm/brew + /Applications Info.plist + AS 数据目录 + 进程四路核对，确认本机 11 项 agent 相关软件，逐项标注版本/证据/数据位置/接入分级（A 核心 / B 新增 / C 观望 / D 元信息 / E 排除）。
+- **后端清单扩充**：新增 Kimi Code 1.0.4（M-H，先 spike 数据位置）、OpenCode（M-I，首选 ACP、备选 opencode.db 只读快照）、AgentOS M1 自研 CLI（M-J，兼作控制通道实验场）、CC Switch 供应商元信息（M-K）。
+- **排除项成文**（§1.3）：Claude.app/ChatGPT.app（无本机观察通道）、影刀 RPA（范式不符）；Codex++/Nowdex/CC Switch 定性为壳/工具而非 agent 本体。
+- **阻塞项发现**：codex CLI 与 opencode CLI 当前均不在 PATH（仅存数据目录与桌面壳）——M-E 落地前需恢复；观察通道不受影响。
+- **新增里程碑** M-H/M-I/M-J/M-K 与排期调整（W3 加 Kimi spike，W4 加 OpenCode，W5+ ACP/AgentOS）；风险表增补 3 条（Electron 存储不稳、第三方壳目录分叉、卸载残留误接入）。
+
+### 多 Agent 接入计划 v3（同日，用户方向确认）
+- **首批接入范围锁定（用户指定）**：DSH（已完成）+ Claude Code + Codex + **Kimi Code（M-H 由 P1 提入首批）**；W1 即排 Kimi 数据定位 spike，W2 末目标改为**四源同窗演示**。当前仅更新计划，未启动开发。
+- **终局架构定性（§6 新增）**：AgentPet = Agent 总控，**双域模型**——本地域直接控制各 agent 软件；远端域经 AgentOS（自研执行体，每台远端服务器一个实例）同时控制多台服务器。远端机器不装各家桌面 agent，AgentOS 是远端唯一汇聚入口。
+- **M-J 重构为三步轨道**：J1 本地观察（提前至 W4，兼作控制通道彩排）→ J2 远端观察（SSH 只读，Phase 3）→ J3 远端控制（`ssh <host> agent -s` 白名单投递，Phase 3）。
+- **source 命名规范提案**：远端 AgentOS 用 `agentos@<host>`，per-(source, sessionId) seq 天然隔离，契约 v1.3 无破坏性变更（待 Lead 确认写入附录）。
+- **安全红线成文（§6.4）**：总控不存储/不代理 SSH 凭证；远端投递仅 `agent` 子命令白名单；远端回传仅状态级字段。
+- **风险表 v3 增补 3 条**：远端链路抖动误判离线（断连=链路中断≠会话结束）、远端命令注入/越权、多主机规模（首版 ≤5 台预算）。
+- **README 同步**：产品定位改为「工作框 / Agent 总控」（观察+控制+远端）；目标表新增 Phase 3 行。
+
+### 本地域开发：软件四态面板（2026-10-06，代码）
+- **新增 `adapters/local-agents.mjs`**：本机 agent 软件四态探测（DSH / Claude Code / Codex / Kimi Code / AgentOS M1 / OpenCode）。三级探测全只读：安装 = App 包/CLI/配置目录存在性（cc-switch 同款思路），运行 = 每轮单次 `ps axo pid,ucomm,args` + 每 agent 一条收窄正则（大小写敏感防误匹配 Claude.app），连接 = 观察通道 45s 内有数据（对齐契约 §4.4；DSH 插件 socket = 真连接，由 framed 注入）。本机实测 38ms/轮。
+- **framed.mjs**：快照新增 `agents`/`agentCounts` 字段 + `GET /api/agents` 端点；3s 轮询，探测失败保持上次结果。
+- **window.html**：新增「软件状态」面板（aggbar 与会话列表之间，可折叠）：每软件一行四态（已连接/已打开·未连接/未打开/未下载）+ 版本 + 通道（插件/日志）+ 进程数 + 上次活动相对时间；缺 agents 字段显示探测占位不报错。
+- **test-window.mjs**：24 → 35 项断言（四态文案/通道/折叠/缺字段容错等 11 项新增），全部通过。
+- **本机实测**：DSH 已连接（插件通道，5 进程）、Claude Code 已连接（日志通道）、Codex/Kimi Code/AgentOS/OpenCode 未打开（含版本与上次活动时间）。
+- **注意**：正在运行的 AgentPet（7799）需重启外壳/服务才能加载新快照字段；window.html 是每请求读盘、刷新即生效。
+
+### 人机交互总体方案 v1（2026-10-06，docs/55 新增）
+- **双面模型**：常驻层（悬浮卡片，docs/51 全规格保留，只答「在干什么/多久了/等我没有」）+ 控制台层（demo/window.html 演进版，承载全部控制功能）；同源双视图、控制台可关、待办是唯一双向入口。
+- **软件四态 × 动作表**：每态一个明确动作无死路——已连接=过滤其会话、已打开未连接=差异化连接指引、未打开=启动（只启动不代装）、未下载=安装指引+里程碑；探测失败显式 ⚠ 不回退。
+- **选择模型三规则**：行点击=设投递目标；过滤器只影响显示不影响目标（目标被过滤时黄色警示条，替换现状的静默回退——列为 P0 投递安全项）；「打开」独立于选择。
+- **术语统一**：队列用户文案只用 待投递/已送达/失败/已取消；toast ≤3s；删除 5s 可撤销。
+- **新增 10 条 UX-A 验收断言** + 与现状差异清单（7 项，P0 两项：目标不静默回退、软件区可点联动）+ 与 51/50 冲突消解表 + 远端主机分组（Phase 3）与用户旅程。

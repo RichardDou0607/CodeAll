@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "pet-window", "runtimeExecutable": "node", "runtimeArgs": ["demo/framed.mjs", "--port", "7800"], "port": 7800 }
+  ]
+}

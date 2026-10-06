@@ -1,0 +1,177 @@
+#!/usr/bin/env node
+/**
+ * scripts/catalog-check.mjs — 会话目录自检（真实数据 + 断言 + 性能实测）
+ *
+ * 用法：
+ *   node scripts/catalog-check.mjs            # 人类可读报告（真实输出可原样贴文档）
+ *   node scripts/catalog-check.mjs --json     # 机器可读（CI 用）
+ *   node scripts/catalog-check.mjs --locks    # 附带 flock 占用探测（多花 ~50ms）
+ *   node scripts/catalog-check.mjs --runs 20  # 性能轮数（默认 10）
+ *
+ * 断言清单（全部基于**本机真实数据**）：
+ *   A1 会话根目录可读，项目数 ≥ 3
+ *   A2 会话数 ≥ 12
+ *   A3 每条会话都有非空 sessionId 与有限 updatedAt；bytes ≥ 0
+ *   A4 model / reasoningEffort 的**来源可追溯**：metaSources 指向已知原生事件；且与
+ *      「整文件全量解析」的抽样对照结果一致（这是防回归的关键断言）
+ *   A5 agentVersion（应用版本）≠ logFormatVersion（日志格式版本 4）——两者曾被混淆过
+ *   A6 title 来源可追溯（session/title 或 subagent/descriptor.label）
+ *   A7 activity 摘要**零泄漏**：全部取自固定字典，≤80 字符，且不含真实工具参数/命令原文
+ *   A8 解析失败必须降级（合成坏日志：仍返回 sessionId/updatedAt/bytes）
+ *   A9 性能：12+ 会话整体扫描中位数 < 300 ms（含真实 2 MB 级日志）
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { scanCatalog, toCatalogFrame, pickLogFile, probeLock, encodeProjectDirName, SESSIONS_ROOT } from '../adapters/session-catalog.mjs';
+import { decodeZstdFrames, extractMeta, activityOf, ACTIVITY_TEXT, ACTIVITY_TEXT_MAX, AGENT_VERSION } from '../adapters/dsh-meta.mjs';
+
+const argv = process.argv.slice(2);
+const AS_JSON = argv.includes('--json');
+const WITH_LOCKS = argv.includes('--locks');
+const RUNS = (() => { const i = argv.indexOf('--runs'); return i >= 0 ? Math.max(1, Number(argv[i + 1]) || 10) : 10; })();
+
+const results = [];
+function check(id, name, pass, detail) { results.push({ id, name, pass: !!pass, detail }); return pass; }
+
+// ---------------------------------------------------------------- 扫描 + 性能
+const times = [];
+let catalog;
+for (let i = 0; i < RUNS; i++) {
+  const t0 = process.hrtime.bigint();
+  catalog = scanCatalog();
+  times.push(Number(process.hrtime.bigint() - t0) / 1e6);
+}
+const sorted = [...times].sort((a, b) => a - b);
+const perf = { runs: RUNS, min: sorted[0], median: sorted[Math.floor(RUNS / 2)], max: sorted.at(-1), avg: times.reduce((a, b) => a + b, 0) / RUNS };
+
+check('A1', '会话根目录可读且项目数 ≥ 3', catalog.stats.projects >= 3, { root: catalog.root, projects: catalog.stats.projects });
+check('A2', '会话数 ≥ 12', catalog.stats.sessions >= 12, { sessions: catalog.stats.sessions, main: catalog.stats.mainSessions, subagent: catalog.stats.subagentSessions });
+
+const badId = catalog.sessions.filter((s) => typeof s.sessionId !== 'string' || !s.sessionId.length);
+const badTs = catalog.sessions.filter((s) => !Number.isFinite(s.updatedAt) || s.updatedAt <= 0);
+const badBytes = catalog.sessions.filter((s) => !Number.isFinite(s.bytes) || s.bytes < 0);
+check('A3', '每条会话都有 sessionId + updatedAt + bytes', badId.length === 0 && badTs.length === 0 && badBytes.length === 0, { badId: badId.length, badTs: badTs.length, badBytes: badBytes.length });
+
+// ---------------------------------------------------------------- 元信息来源可追溯
+const KNOWN_SOURCES = /^(request\/header|model\/selection|subagent\/descriptor|agent-preset\/selected|session\/title|header)\b/;
+const withModel = catalog.sessions.filter((s) => s.model);
+const badSource = withModel.filter((s) => !KNOWN_SOURCES.test(String(s.metaSources.model ?? '')));
+check('A4a', 'model 来源可追溯（metaSources.model 指向已知原生事件）', withModel.length > 0 && badSource.length === 0, { withModel: withModel.length, badSource: badSource.map((s) => [s.sessionId, s.metaSources.model]) });
+const withEffort = catalog.sessions.filter((s) => s.reasoningEffort);
+const badEffort = withEffort.filter((s) => !KNOWN_SOURCES.test(String(s.metaSources.reasoningEffort ?? '')));
+check('A4b', 'reasoningEffort 来源可追溯', withEffort.length > 0 && badEffort.length === 0, { withEffort: withEffort.length, badEffort: badEffort.length });
+
+// A4c 抽样全量对照：把整份日志全解一遍，用「最后一个 request/header.config」复核目录里的 model/effort
+const sample = [...withModel].sort((a, b) => b.bytes - a.bytes).slice(0, 2);
+const crossChecks = [];
+for (const s of sample) {
+  const log = pickLogFile(s.dir);
+  const full = decodeZstdFrames(fs.readFileSync(log.file));
+  const header = full.records.find((r) => r.type === 'session') ?? null;
+  const meta = extractMeta(full.records, { header });
+  crossChecks.push({ sessionId: s.sessionId, frames: full.frames, events: full.records.length, catalog: [s.provider, s.model, s.reasoningEffort], fullScan: [meta.provider, meta.model, meta.reasoningEffort], same: s.model === meta.model && s.reasoningEffort === meta.reasoningEffort && s.provider === meta.provider });
+}
+check('A4c', '抽样：目录结果与整文件全量解析一致', crossChecks.length > 0 && crossChecks.every((c) => c.same), crossChecks);
+
+// ---------------------------------------------------------------- agentVersion ≠ 日志格式版本
+const versionBug = catalog.sessions.filter((s) => String(s.agentVersion) === String(s.logFormatVersion));
+check('A5', 'agentVersion（应用版本）≠ logFormatVersion（日志格式版本）', versionBug.length === 0 && AGENT_VERSION === '0.2.0-rc.2', { agentVersion: AGENT_VERSION, logFormatVersions: [...new Set(catalog.sessions.map((s) => s.logFormatVersion))], buggy: versionBug.length });
+
+// ---------------------------------------------------------------- 标题来源
+const KNOWN_TITLE_SOURCES = /^(session\/title|subagent\/descriptor|derived:)/;
+const badTitle = catalog.sessions.filter((s) => !s.title || !KNOWN_TITLE_SOURCES.test(String(s.metaSources.title ?? '')));
+check('A6', 'title 来源可追溯（session/title 或子代理 label）', badTitle.length === 0, { badTitle: badTitle.map((s) => [s.sessionId, s.metaSources.title, s.title]) });
+
+// ---------------------------------------------------------------- activity 零泄漏
+const ALLOWED_TEXTS = new Set(Object.values(ACTIVITY_TEXT));
+let acts = 0, badText = 0, tooLong = 0, leaked = 0;
+const leakNeedles = [];
+for (const s of catalog.sessions.slice(0, 8)) {
+  const log = pickLogFile(s.dir);
+  const full = decodeZstdFrames(fs.readFileSync(log.file), { maxRecords: 4000 });
+  // 真实泄漏探针：把日志里出现过的命令/路径片段当"针"，确认它们绝不出现在 activity 文案里
+  for (const r of full.records) {
+    if (r?.type === 'tool/call') {
+      const v = r.data?.input?.command ?? r.data?.input?.file_path ?? r.data?.input?.path ?? r.data?.input?.query;
+      if (typeof v === 'string' && v.length >= 12) leakNeedles.push(v.slice(0, 24));
+    }
+  }
+  for (const r of full.records) {
+    const a = activityOf(r);
+    if (!a) continue;
+    acts++;
+    if (!ALLOWED_TEXTS.has(a.text)) badText++;
+    if (Array.from(a.text).length > ACTIVITY_TEXT_MAX) tooLong++;
+    for (const n of leakNeedles) if (a.text.includes(n)) leaked++;
+  }
+}
+check('A7', 'activity 摘要来自固定字典 / ≤80 字符 / 零参数泄漏', acts > 0 && badText === 0 && tooLong === 0 && leaked === 0, { activities: acts, badText, tooLong, leaked, needles: leakNeedles.length });
+
+// ---------------------------------------------------------------- 降级路径（合成坏数据）
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-check-'));
+let degradedOk = false, degradedDetail = null;
+try {
+  const proj = path.join(tmpRoot, '--tmp-broken--');
+  const sdir = path.join(proj, 'session-broken-0001');
+  fs.mkdirSync(sdir, { recursive: true });
+  fs.writeFileSync(path.join(sdir, 'session.v4.jsonl.zstd'), Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x01, 0x02, 0x03, 0x04, 0x05])); // 非 zstd 有效帧
+  const cat = scanCatalog({ root: tmpRoot });
+  const s = cat.sessions[0];
+  degradedOk = !!s && s.degraded === true && s.sessionId === 'session-broken-0001' && Number.isFinite(s.updatedAt) && Number.isFinite(s.bytes);
+  degradedDetail = s ? { sessionId: s.sessionId, degraded: s.degraded, error: s.error, updatedAt: s.updatedAt, bytes: s.bytes } : null;
+} finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+check('A8', '坏日志降级：仍给出 sessionId/updatedAt/bytes', degradedOk, degradedDetail);
+
+// ---------------------------------------------------------------- 性能
+check('A9', '扫描耗时中位数 < 300 ms', perf.median < 300, perf);
+
+// ---------------------------------------------------------------- 目录名编码（与 DSH 落盘规则对照）
+const encBad = catalog.projects.filter((p) => p.cwdSource === 'log-header' && encodeProjectDirName(p.cwd) !== p.projectDirName);
+check('A11', '项目目录名与 DSH projectKey 编码规则一致（用真实 cwd 反推）', encBad.length === 0, { checked: catalog.projects.filter((p) => p.cwdSource === 'log-header').length, bad: encBad.map((p) => [p.cwd, p.projectDirName, encodeProjectDirName(p.cwd)]) });
+
+// ---------------------------------------------------------------- 窗口近似度（快扫 vs 深扫，诚实报告）
+const deep = scanCatalog({ deep: true });
+const keyOf = (s) => [s.provider, s.model, s.reasoningEffort, s.agentPreset, s.title].join('|');
+const divergent = [];
+for (const s of catalog.sessions) {
+  const d = deep.sessions.find((x) => x.sessionId === s.sessionId);
+  if (d && keyOf(s) !== keyOf(d)) divergent.push({ sessionId: s.sessionId, window: [s.model, s.reasoningEffort, s.title], deep: [d.model, d.reasoningEffort, d.title] });
+}
+check('A12', '快扫(前8+末2帧) 与深扫(整文件) 的元信息差异 ≤ 25%（差异=会话中途改模型/标题）', divergent.length / Math.max(1, catalog.sessions.length) <= 0.25, { divergent: divergent.length, total: catalog.sessions.length, detail: divergent.map((d) => d.sessionId.slice(0, 20)) });
+check('A13', '深扫同样零降级，且耗时仍 < 300 ms', deep.stats.degraded === 0 && deep.tookMs < 300, { deepTookMs: Number(deep.tookMs.toFixed(1)), degraded: deep.stats.degraded });
+
+// ---------------------------------------------------------------- 契约帧
+const frame = toCatalogFrame(catalog);
+const frameOk = frame.ctl === 'catalog' && Array.isArray(frame.projects) && frame.projects.every((p) => typeof p.projectId === 'string' && Array.isArray(p.sessions)) &&
+  frame.projects.flatMap((p) => p.sessions).every((s) => s.sessionId && 'model' in s && 'reasoningEffort' in s && 'title' in s && 'state' in s && 'live' in s);
+check('A10', '契约 §2.2 ctl:catalog 帧形状正确', frameOk, { projects: frame.projects.length, sessions: frame.projects.flatMap((p) => p.sessions).length });
+
+// ---------------------------------------------------------------- flock（可选）
+let locks = null;
+if (WITH_LOCKS) {
+  locks = [];
+  for (const s of catalog.sessions) locks.push({ sessionId: s.sessionId, kind: s.kind, live: s.live, lock: await probeLock(path.join(s.dir, 'session.lock')) });
+}
+
+// ---------------------------------------------------------------- 报告
+const failed = results.filter((r) => !r.pass);
+if (AS_JSON) {
+  console.log(JSON.stringify({ root: catalog.root, stats: catalog.stats, perf, results, locks, ok: failed.length === 0 }, null, 2));
+} else {
+  console.log('会话目录自检  ·  root = ' + catalog.root);
+  console.log('本机实际：' + catalog.stats.projects + ' 个项目 / ' + catalog.stats.sessions + ' 个会话（主 ' + catalog.stats.mainSessions + ' · 子代理 ' + catalog.stats.subagentSessions + ' · 活跃 ' + catalog.stats.live + ' · 降级 ' + catalog.stats.degraded + '）');
+  console.log('性能：' + perf.runs + ' 轮 min ' + perf.min.toFixed(1) + ' / 中位 ' + perf.median.toFixed(1) + ' / max ' + perf.max.toFixed(1) + ' ms（阈值 300 ms；实际读取 ' + (catalog.stats.readBytes / 1024).toFixed(0) + ' KB）');
+  console.log('');
+  for (const r of results) console.log((r.pass ? '  ✅ ' : '  ❌ ') + r.id + ' ' + r.name + (r.pass ? '' : '  → ' + JSON.stringify(r.detail)));
+  console.log('');
+  console.log('会话清单（会话行只显示粗粒度信息）：');
+  for (const p of catalog.projects) {
+    console.log('  ' + p.title + '  [' + p.cwd + ']  ' + p.sessionCount + ' 个会话');
+    for (const s of p.sessions) console.log('    - ' + String(s.sessionId).slice(0, 42).padEnd(43) + String(s.kind).padEnd(9) + String(s.model ?? '—').padEnd(16) + String(s.reasoningEffort ?? '—').padEnd(5) + String(s.state).padEnd(7) + (s.live ? 'LIVE ' : '     ') + '← ' + (s.metaSources.model ?? '—'));
+  }
+  if (locks) { console.log(''); console.log('flock 占用探测：' + locks.map((l) => l.sessionId.slice(0, 18) + '=' + l.lock).join('  ')); }
+  console.log('');
+  console.log(failed.length === 0 ? '全部 ' + results.length + ' 项断言通过 ✅' : failed.length + '/' + results.length + ' 项断言失败 ❌');
+}
+process.exit(failed.length ? 1 : 0);

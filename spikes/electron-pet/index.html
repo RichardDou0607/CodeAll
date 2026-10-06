@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <title>electron-pet spike</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: transparent; overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        -webkit-user-select: none; user-select: none; }
+      body { width: 240px; height: 240px; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; }
+      #pet { width: 120px; height: 120px; border-radius: 50%; display: flex; align-items: center;
+        justify-content: center; font-size: 56px; background: #7f8c9b; transition: background .25s ease; }
+      #label { margin-top: 10px; font-size: 14px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); }
+    </style>
+  </head>
+  <body>
+    <div id="pet">&#128564;</div>
+    <div id="label">idle</div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Agent 悬浮窗 · 启动中</title>
+<style>
+  :root{--line:#242c3a;--txt:#e6edf3;--dim:#8b98a9;--acc:#4aa8ff;--warn:#e3b341;--err:#f85149}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:transparent;overflow:hidden;color:var(--txt);
+    font:13px/1.5 -apple-system,"PingFang SC",system-ui,sans-serif;
+    -webkit-user-select:none;user-select:none}
+  .card{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;
+    background:rgba(16,20,28,.97);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 26px 60px rgba(0,0,0,.55)}
+  .bar{height:30px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
+    background:rgba(255,255,255,.02);border-bottom:1px solid var(--line)}
+  .bar .grip{width:9px;height:9px;border-radius:50%;background:#2f3a4d}
+  .bar .ttl{flex:1;font-size:11px;color:var(--dim);letter-spacing:.04em}
+  .bar .ver{font-size:10px;color:#5c6a7e}
+  .body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:12px}
+  .spin{width:26px;height:26px;border-radius:50%;border:2px solid #263042;border-top-color:var(--acc);
+    animation:sp .9s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .spin.err{border-top-color:var(--err);animation:none}
+  .msg{font-size:13px;font-weight:600}
+  .sub{font-size:11px;color:var(--dim);text-align:center;max-width:300px}
+  .el{font-size:10px;color:#5c6a7e}
+  .log{width:100%;max-height:64px;overflow:auto;margin:2px 0 0;padding:6px 8px;border-radius:8px;
+    background:#0d1117;border:1px solid var(--line);color:#93a1b5;font:10px/1.5 ui-monospace,Menlo,monospace;
+    white-space:pre-wrap;word-break:break-all}
+  .foot{flex:0 0 auto;display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line);background:rgba(255,255,255,.015)}
+  .foot .sp{flex:1}
+  button{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:7px;
+    font-size:11px;padding:5px 10px;cursor:pointer}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.p{background:#1f6feb;border-color:#1f6feb;color:#fff}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="bar" data-tauri-drag-region>
+    <span class="grip"></span><span class="ttl">AGENT 悬浮窗 · 桌面外壳</span>
+    <span class="ver" id="ver"></span>
+  </div>
+  <div class="body">
+    <div class="spin" id="spin"></div>
+    <div class="msg" id="msg">启动中…</div>
+    <div class="sub" id="sub">正在检查本地状态服务</div>
+    <div class="el" id="el">0.0s</div>
+    <pre class="log" id="log"></pre>
+  </div>
+  <div class="foot">
+    <button id="openlog">日志</button>
+    <span class="sp"></span>
+    <button id="retry" disabled>重试</button>
+    <button id="quit">退出</button>
+  </div>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var T = window.__TAURI__;
+  var INVOKE = T && T.core && T.core.invoke ? T.core.invoke : null;
+
+  var started = Date.now();
+  var PORT = 7799;
+  var busy = false;
+
+  function secs() { return ((Date.now() - started) / 1000).toFixed(1) + 's'; }
+  function setMsg(m, s) {
+    $('msg').textContent = m;
+    if (s !== undefined) $('sub').textContent = s;
+  }
+  function addLog(l) {
+    var p = $('log');
+    p.textContent += (p.textContent ? '\n' : '') + l;
+    p.scrollTop = p.scrollHeight;
+  }
+  function fail(m, s) {
+    $('spin').className = 'spin err';
+    setMsg(m, s);
+    $('retry').disabled = false;
+    busy = false;
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  setInterval(function () { $('el').textContent = secs(); }, 200);
+
+  async function main() {
+    if (busy) return;
+    busy = true;
+    $('spin').className = 'spin';
+    $('retry').disabled = true;
+    if (!INVOKE) { fail('外壳 IPC 不可用', 'window.__TAURI__ 未注入，请用 apps/shell/run.sh 启动'); return; }
+
+    var st;
+    try { st = await INVOKE('shell_status'); }
+    catch (e) { fail('外壳状态读取失败', String(e)); return; }
+
+    PORT = st.port;
+    $('ver').textContent = 'v' + st.version;
+    addLog('外壳 v' + st.version + ' · 目标 127.0.0.1:' + PORT);
+    addLog('仓库根 ' + st.repoRoot);
+    addLog('服务脚本 ' + (st.serverScriptExists ? '存在' : '缺失！') + ' → ' + st.serverScript);
+    try { await INVOKE('shell_report', { stage: 'splash_ready', detail: 'port=' + PORT }); } catch (e) {}
+
+    setMsg('启动中…', '正在检查本地状态服务 127.0.0.1:' + PORT);
+    var r;
+    try { r = await INVOKE('shell_ensure_server', { port: PORT }); }
+    catch (e) { r = { up: false, error: String(e) }; }
+
+    if (!r.up) {
+      addLog('服务未就绪：' + (r.error || '未知错误'));
+      try { await INVOKE('shell_report', { stage: 'error', detail: 'ensure_server: ' + (r.error || '') }); } catch (e) {}
+      fail('本地服务未能启动', (r.error || '') + '（日志：' + (r.log || st.serverLog) + '）');
+      return;
+    }
+    addLog(r.launched ? ('已拉起本地服务（' + (r.owner || 'shell') + '）') : '本地服务已在运行（外部进程）');
+
+    setMsg('启动中…', '等待页面就绪');
+    // 探活必须由外壳（Rust 侧）做：本页源为 tauri://localhost，
+    // 对 http://127.0.0.1 的 fetch 属跨源请求，会被 CORS 直接拦掉。
+    var ok = false;
+    var lastDetail = '';
+    for (var i = 0; i < 60; i++) {
+      var p = null;
+      try { p = await INVOKE('shell_http_probe', { port: PORT, path: '/api/state' }); }
+      catch (e) { p = { ok: false, detail: String(e) }; }
+      if (p && p.ok) {
+        addLog('服务就绪 · ' + p.detail);
+        ok = true; break;
+      }
+      lastDetail = (p && p.detail) || '未知错误';
+      if (i === 0 || i === 59) addLog('探活 ' + (i + 1) + '/60 失败：' + lastDetail);
+      await sleep(150);
+    }
+    if (!ok) {
+      try { await INVOKE('shell_report', { stage: 'error', detail: 'http_probe: ' + lastDetail }); } catch (e) {}
+      fail('页面未就绪', '服务已监听，但 HTTP /api/state 无响应：' + lastDetail);
+      return;
+    }
+
+    setMsg('就绪，正在加载悬浮窗…', 'http://127.0.0.1:' + PORT + '/');
+    try { await INVOKE('shell_navigating', { url: 'http://127.0.0.1:' + PORT + '/' }); } catch (e) {}
+    location.replace('http://127.0.0.1:' + PORT + '/');
+  }
+
+  $('retry').addEventListener('click', function () { $('log').textContent = ''; busy = false; main(); });
+  $('quit').addEventListener('click', function () { if (INVOKE) INVOKE('shell_quit'); });
+  $('openlog').addEventListener('click', function () { if (INVOKE) INVOKE('shell_open_log'); });
+
+  main();
+})();
+</script>
+</body>
+</html>

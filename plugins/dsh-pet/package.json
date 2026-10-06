@@ -1,0 +1,21 @@
+{
+  "name": "dsh-pet-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agent 悬浮窗的 DSH 进程内桥接插件：事件直推 + 输入投递 + 新建/打开会话（契约 v1.3）",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./probe": "./probe.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "probe": "node probe.mjs all",
+    "probe:dump": "node probe.mjs dump",
+    "probe:stop": "node probe.mjs stop"
+  },
+  "license": "MIT"
+}

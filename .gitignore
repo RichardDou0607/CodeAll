@@ -1,0 +1,15 @@
+# build artifacts / dependencies
+node_modules/
+dist/
+target/
+**/target/
+*.app/
+.DS_Store
+*.log
+
+# local runtime data (never commit)
+.agent-pet/
+*.pet.jsonl.zstd
+
+# keep fixture recordings that are meant to be committed
+!fixtures/*.pet.jsonl

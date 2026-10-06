@@ -1,0 +1,39 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-loopback",
+  "description": "本地服务页面（http://127.0.0.1:<port>）的最小能力：标题栏拖拽、隐藏/显示、切换尺寸。只为回环地址开放，远程域一律不放行。说明：URLPattern 的通配端口（http://127.0.0.1:*）实测不匹配，所以这里逐个列出端口；用 --port 换到列表外的端口时，外壳会打日志 REMOTE_IPC_UNAVAILABLE 并自动退回全局背景拖拽。",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:7799",
+      "http://127.0.0.1:7800",
+      "http://127.0.0.1:7801",
+      "http://127.0.0.1:7802",
+      "http://127.0.0.1:7803",
+      "http://127.0.0.1:7804",
+      "http://127.0.0.1:7805",
+      "http://127.0.0.1:7806",
+      "http://127.0.0.1:7807",
+      "http://127.0.0.1:7808",
+      "http://127.0.0.1:7809",
+      "http://127.0.0.1:7810"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-size",
+    "core:window:allow-inner-size",
+    "core:window:allow-outer-size",
+    "core:window:allow-scale-factor",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-is-always-on-top"
+  ]
+}

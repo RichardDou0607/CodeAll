@@ -1,0 +1,1485 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-pet.local/schema/pet-event.schema.json",
+  "title": "Agent 桌宠规范事件与帧 v1.2（契约 docs/00-interface-contract.md v1.2 §2/§3/§5）",
+  "description": "覆盖契约 **v1.2** 的§2.1 事件信封 + §3 的 16 个 type 字符串 / 16 行事件，以及 §2.2 的 4 种控制帧（hello/ack/decide/snapshot）。【判别顺序】一行 JSONL 先判 ctl：有 ctl 走 #/$defs/controlFrame 的 4 个分支；否则判 type 走 16 个事件分支。【未知 type 策略】type 不在 16 个已知值内时，消费方必须 unknownEvents += 1 并丢弃该行，不得抛异常、不得中断整条流（契约 §1.5 / §7.3）；#/$defs/unknownType 仅用于说明，不参与顶层 oneOf。【控制帧】ack/snapshot/decide 都不是事件，绝不能被当成非法 type 拒绝；decide 仅 Phase 2 且 canDecide=true 时允许。【额外字段策略】信封与 data 均为 additionalProperties=false：未声明字段判非法，新增字段必须先改契约；§2.3 的『未标注 = 必填』已落成 required，可选字段（?）允许省略，只有显式标注 type 含 null 的字段可填 null。【大小上限】单事件序列化后 ≤ 8 KB；超限时截断 data.summary / data.text 并在 privacy.fields 标注。【seq 作用域】per-(source, sessionId)，去重键 (source, sessionId, seq)。【v1.2 增量】session.start 必填 startedAt、session.end 必填 endedAt（工作框计时）；ctl:snapshot 必填 contract，sessions[] 增 title/workspace/lastTool/elapsedMs/pending，顶层增 degradedSources/clearedPending/now/counters；ctl:hello 增可选 observes（§5.2.1 观测能力等级）。【unknownEvents 语义（v1.2 澄清）】只有不在 §3 的 16 个 type 字符串之内的类型计入；已知 type 但不改变状态的（pet.heartbeat、message.assistant、tool.result(ok|denied)、step.end(ok)）走 no-op 路径计 noop，不计入 unknownEvents。",
+  "$comment": "依据 docs/00-interface-contract.md **v1.2**（Lead 冻结 2026-10-05，上一版 v1.1）。自检：node schema/validate-pet-event.mjs --self-test（含缺 startedAt/endedAt/contract 的负例）；fixture 校验：node schema/validate-pet-event.mjs fixtures/contract-sample.pet.jsonl。",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/sessionStart"
+    },
+    {
+      "$ref": "#/$defs/sessionEnd"
+    },
+    {
+      "$ref": "#/$defs/petHeartbeat"
+    },
+    {
+      "$ref": "#/$defs/turnStart"
+    },
+    {
+      "$ref": "#/$defs/turnEnd"
+    },
+    {
+      "$ref": "#/$defs/stepStart"
+    },
+    {
+      "$ref": "#/$defs/stepEnd"
+    },
+    {
+      "$ref": "#/$defs/messageAssistant"
+    },
+    {
+      "$ref": "#/$defs/toolCall"
+    },
+    {
+      "$ref": "#/$defs/toolResult"
+    },
+    {
+      "$ref": "#/$defs/approvalRequest"
+    },
+    {
+      "$ref": "#/$defs/approvalResolved"
+    },
+    {
+      "$ref": "#/$defs/userQuestion"
+    },
+    {
+      "$ref": "#/$defs/userAnswer"
+    },
+    {
+      "$ref": "#/$defs/agentStatus"
+    },
+    {
+      "$ref": "#/$defs/errorRaised"
+    },
+    {
+      "$ref": "#/$defs/controlFrame"
+    }
+  ],
+  "$defs": {
+    "envelope": {
+      "title": "事件信封（契约 §2.1 / §2.3）",
+      "type": "object",
+      "description": "契约 §2.1 的公共信封。§2.3 必填规则：v/seq/ts/source/sessionId/workspace/type/data 全部必填；sessionId 与 workspace 可为 null 但键必须存在（后端级事件用保留值 sessionId=\"backend\"）。单事件序列化后 ≤ 8 KB；超限截断 data.summary/data.text 并在 privacy.fields 标注。",
+      "required": [
+        "v",
+        "seq",
+        "ts",
+        "source",
+        "sessionId",
+        "workspace",
+        "type",
+        "data"
+      ],
+      "properties": {
+        "v": {
+          "const": 1,
+          "description": "契约主版本号；破坏性变更才 +1。v1.1 文档修订不改此值，仍为 1。"
+        },
+        "seq": {
+          "type": "integer",
+          "description": "per-(source, sessionId) 单调递增序号，从 0 开始；去重键 = (source, sessionId, seq)。",
+          "minimum": 0
+        },
+        "ts": {
+          "type": "integer",
+          "description": "事件发生时刻的 Unix 毫秒（不是收到时刻）。",
+          "minimum": 0
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "后端 ID：dsh | claude-code | codex | cursor | acp | …（开放集合）。"
+        },
+        "sessionId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "后端原生会话 ID（不透明）；后端级事件为 null（§2.4 另规定上行用保留值 \"backend\"）。"
+        },
+        "workspace": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "工作目录绝对路径；未知为 null。"
+        },
+        "agent": {
+          "type": "object",
+          "description": "可选：后端身份。",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "description": "后端显示名，如 DSH。"
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "后端版本，如 0.2.0-rc.2。"
+            }
+          },
+          "additionalProperties": false
+        },
+        "type": {
+          "type": "string",
+          "description": "规范事件类型；已知取值见本 schema oneOf 的 16 个事件分支（16 个 type / 16 行）。未知 type 的处理见顶层 description。"
+        },
+        "data": {
+          "type": "object",
+          "description": "类型专属载荷；必填字段由对应 oneOf 分支约束（§2.3：标 * 必填、标 ? 可选、未标 = 必填）。"
+        },
+        "privacy": {
+          "type": "object",
+          "description": "可选：本事件被脱敏的字段名列表。",
+          "required": [
+            "redacted"
+          ],
+          "properties": {
+            "redacted": {
+              "type": "boolean"
+            },
+            "fields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "sessionStart": {
+      "title": "session.start",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "session.start"
+            },
+            "data": {
+              "type": "object",
+              "description": "一个新会话出现（DSH：会话日志首行 session / 会话目录创建）。v1.2：startedAt 必填（工作框计时起点）。 额外字段策略：additionalProperties=false，未列出字段必须省略；可选项拿不到就省略，不填 null。",
+              "required": [
+                "nativeSessionId",
+                "startedAt"
+              ],
+              "properties": {
+                "nativeSessionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "后端原生会话 ID。"
+                },
+                "workspace": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "工作目录（可选）。"
+                },
+                "agentName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "后端显示名（可选）。"
+                },
+                "agentVersion": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "后端版本（可选）。"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "会话标题（可选）。"
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "兼容字段：v1.1 §3.1 已从 data 表移除（信封 source 已表达），保留为可选以兼容 v0.1 fixture。"
+                },
+                "startedAt": {
+                  "type": "integer",
+                  "description": "会话开始时刻 Unix ms（v1.2 新增必填；工作框用它起计时）。DSH：日志首行 header.createdAt。",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "sessionEnd": {
+      "title": "session.end",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "session.end"
+            },
+            "data": {
+              "type": "object",
+              "description": "会话结束。DSH 原生日志无对应事件，见 docs/35-dsh-pet-bridge.md §9 第 2 行的兜底。v1.2：endedAt 必填。 额外字段策略：additionalProperties=false。",
+              "required": [
+                "nativeSessionId",
+                "endedAt",
+                "reason"
+              ],
+              "properties": {
+                "nativeSessionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "后端原生会话 ID。"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "done",
+                    "aborted",
+                    "error",
+                    "unknown"
+                  ],
+                  "description": "结束原因（必填）。"
+                },
+                "summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "结束摘要（可选）。"
+                },
+                "endedAt": {
+                  "type": "integer",
+                  "description": "会话结束时刻 Unix ms（v1.2 新增必填；工作框用它结束计时并归档卡片）。",
+                  "minimum": 0
+                },
+                "durationMs": {
+                  "type": "integer",
+                  "description": "会话总时长 ms（可选；= endedAt - startedAt）。",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "petHeartbeat": {
+      "title": "pet.heartbeat",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "pet.heartbeat"
+            },
+            "data": {
+              "type": "object",
+              "description": "保活/负载上报；无事件时每 15 s 一条。不改变状态、不计入 §4.5 的 10 min 会话陈旧计时。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [],
+              "properties": {
+                "nativeSessionId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "可为 null（适配器/后端级心跳）。"
+                },
+                "load": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "负载 0..1；缺省 0。"
+                },
+                "sessionCount": {
+                  "type": "integer",
+                  "description": "该 source 当前活跃会话数（可选）。",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "turnStart": {
+      "title": "turn.start",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "turn.start"
+            },
+            "data": {
+              "type": "object",
+              "description": "一轮对话开始。DSH：turn/start。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "turnId",
+                "inputKind"
+              ],
+              "properties": {
+                "turnId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "轮次 ID（DSH：turn-<data.turn>）。"
+                },
+                "inputKind": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "system",
+                    "webhook",
+                    "unknown"
+                  ],
+                  "description": "轮次输入来源。"
+                },
+                "nativeSessionId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "后端原生会话 ID；契约未标注（v1.1 §3.2/§3.3 已从 data 移除），保留为兼容字段，可省略。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "turnEnd": {
+      "title": "turn.end",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "turn.end"
+            },
+            "data": {
+              "type": "object",
+              "description": "一轮对话结束。DSH：turn/end（status 由 data.reason.kind 折叠）。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "turnId",
+                "status"
+              ],
+              "properties": {
+                "turnId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "轮次 ID。"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ok",
+                    "aborted",
+                    "error"
+                  ],
+                  "description": "轮次结果（必填）。"
+                },
+                "durationMs": {
+                  "type": "integer",
+                  "description": "轮次耗时毫秒（可选）。",
+                  "minimum": 0
+                },
+                "summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "轮次摘要（可选）。"
+                },
+                "nativeSessionId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "后端原生会话 ID；契约未标注（v1.1 §3.2/§3.3 已从 data 移除），保留为兼容字段，可省略。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "stepStart": {
+      "title": "step.start",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "step.start"
+            },
+            "data": {
+              "type": "object",
+              "description": "模型单步（一个工具批次）开始。DSH：step/start。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "turnId",
+                "stepId",
+                "index"
+              ],
+              "properties": {
+                "turnId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "所属轮次 ID。"
+                },
+                "stepId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "步骤 ID（建议 turn-<n>/step-<index>）。"
+                },
+                "index": {
+                  "type": "integer",
+                  "description": "步骤序号（DSH：data.step，从 1 开始）。",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "stepEnd": {
+      "title": "step.end",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "step.end"
+            },
+            "data": {
+              "type": "object",
+              "description": "单步结束。DSH：step/end（原生不带 status/durationMs，由适配器按该步内 tool/result 与 step/start 时间派生）。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "turnId",
+                "stepId",
+                "index",
+                "status"
+              ],
+              "properties": {
+                "turnId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "所属轮次 ID。"
+                },
+                "stepId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "步骤 ID。"
+                },
+                "index": {
+                  "type": "integer",
+                  "description": "步骤序号。",
+                  "minimum": 0
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ok",
+                    "error",
+                    "aborted"
+                  ],
+                  "description": "步骤结果（必填）。"
+                },
+                "durationMs": {
+                  "type": "integer",
+                  "description": "步骤耗时毫秒（可选，适配器派生）。",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "messageAssistant": {
+      "title": "message.assistant",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "message.assistant"
+            },
+            "data": {
+              "type": "object",
+              "description": "助手输出（已截断/脱敏，≤280 字符）。DSH：assistant/message 的 content[type=text]（reasoning 与 tool-call 部分不传）。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "turnId",
+                "text",
+                "truncated"
+              ],
+              "properties": {
+                "turnId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "所属轮次 ID。"
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 280,
+                  "description": "已截断/已脱敏文本，≤280 字符。"
+                },
+                "truncated": {
+                  "type": "boolean",
+                  "description": "text 是否被截断（必填）。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "toolCall": {
+      "title": "tool.call",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool.call"
+            },
+            "data": {
+              "type": "object",
+              "description": "工具开始执行。DSH：tool/call。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "callId",
+                "toolName",
+                "category",
+                "risk"
+              ],
+              "properties": {
+                "callId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "工具调用 ID，用于与 tool.result 配对。"
+                },
+                "toolName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "工具名（DSH：data.name，如 bash / run_code / Read）。"
+                },
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write",
+                    "exec",
+                    "net",
+                    "other"
+                  ],
+                  "description": "工具类别，决定桌宠动作。"
+                },
+                "risk": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 3,
+                  "description": "风险等级 0..3。"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "调用摘要（截断）。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "toolResult": {
+      "title": "tool.result",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool.result"
+            },
+            "data": {
+              "type": "object",
+              "description": "工具结束。DSH：tool/result（isError 权威；denied 由文本启发式）。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "callId",
+                "status"
+              ],
+              "properties": {
+                "callId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "与 tool.call 配对的调用 ID。"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "ok",
+                    "error",
+                    "denied"
+                  ],
+                  "description": "工具结果（必填）。"
+                },
+                "durationMs": {
+                  "type": "integer",
+                  "description": "工具耗时毫秒（可选，适配器派生）。",
+                  "minimum": 0
+                },
+                "summary": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "结果摘要（可选，截断）。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "approvalRequest": {
+      "title": "approval.request",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "approval.request"
+            },
+            "data": {
+              "type": "object",
+              "description": "后端等待用户批准 → 桌宠强提醒 → waiting。DSH：approval/asked。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "requestId",
+                "kind",
+                "summary",
+                "risk"
+              ],
+              "properties": {
+                "requestId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "审批请求 ID；approval.resolved 必须用它配对（找不到未决请求 → orphanApprovals）。"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "command",
+                    "file-write",
+                    "network",
+                    "permission",
+                    "other"
+                  ],
+                  "description": "审批种类（必填）。"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "审批内容摘要（截断，必填）。"
+                },
+                "risk": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 3,
+                  "description": "风险等级 0..3。"
+                },
+                "callId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "关联的工具调用 ID（可选；非工具审批省略）。"
+                },
+                "expiresAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "过期时刻 Unix ms（可选）。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "approvalResolved": {
+      "title": "approval.resolved",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "approval.resolved"
+            },
+            "data": {
+              "type": "object",
+              "description": "审批有结果。DSH：approval/decided（outcome 折叠为 allow|deny|timeout）。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "requestId",
+                "decision"
+              ],
+              "properties": {
+                "requestId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "与 approval.request 配对的请求 ID。"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "timeout"
+                  ],
+                  "description": "审批结论（必填）。"
+                },
+                "latencyMs": {
+                  "type": "integer",
+                  "description": "从 approval.request 到本事件的毫秒数（可选）。",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "userQuestion": {
+      "title": "user.question",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "user.question"
+            },
+            "data": {
+              "type": "object",
+              "description": "后端向用户提问（或工具提问）→ 强提醒 → waiting。DSH：无原生事件，由 ask_user_question 类 tool/call 映射。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "questionId",
+                "text"
+              ],
+              "properties": {
+                "questionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "问题 ID；user.answer 必须用它配对（找不到未决项 → orphanAnswers）。"
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "问题文本（截断，必填）。"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "可选项（可选）。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "userAnswer": {
+      "title": "user.answer",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "user.answer"
+            },
+            "data": {
+              "type": "object",
+              "description": "提问得到回答。DSH：对应 ask_user_question 的 tool/result。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "questionId",
+                "choice"
+              ],
+              "properties": {
+                "questionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "回答的问题 ID。"
+                },
+                "choice": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "用户选择/回答（必填）。"
+                },
+                "custom": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "自定义回答（可选）。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "agentStatus": {
+      "title": "agent.status",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "agent.status"
+            },
+            "data": {
+              "type": "object",
+              "description": "后端主动给出的粗粒度状态。覆盖规则见契约 §3.4：10 s 内有效、优先级 ≥ 当前聚合优先级，或 force=true；不支持 done/blocked。 额外字段策略：additionalProperties=false。",
+              "required": [
+                "state"
+              ],
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "idle",
+                    "thinking",
+                    "working",
+                    "waiting",
+                    "error"
+                  ],
+                  "description": "后端可上报的 5 个状态（不含本地过渡态 done）。v1.2：idle 的语义是「会话级 idle」——只把该会话置空闲，聚合状态按契约 §4.3 取各会话最高优先级。"
+                },
+                "detail": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "补充说明（可选）。"
+                },
+                "force": {
+                  "type": "boolean",
+                  "description": "true 时无视优先级直接生效（缺省 false）。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "errorRaised": {
+      "title": "error.raised",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "error.raised"
+            },
+            "data": {
+              "type": "object",
+              "description": "运行时错误。fatal=true → 离线角标 + 置该 source 为 error；fatal=false → 仅记录。 额外字段策略：additionalProperties=false，表中未列出的字段必须省略；拿不到的**可选**字段直接省略（不要填 null），仅下述显式允许 null 的字段可填 null。",
+              "required": [
+                "scope",
+                "message",
+                "fatal"
+              ],
+              "properties": {
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "session",
+                    "tool",
+                    "llm",
+                    "adapter"
+                  ],
+                  "description": "错误范围（必填）。"
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "错误信息（截断，必填）。"
+                },
+                "code": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "错误码（可选）。"
+                },
+                "fatal": {
+                  "type": "boolean",
+                  "description": "是否致命（必填）。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "controlFrame": {
+      "title": "控制帧（契约 §2.2）",
+      "description": "控制帧**没有 type 字段**，用 ctl 区分，消费方必须先判 ctl 再判 type。上行：hello（适配器连接后立即发）。下行：ack（Hub 3 s 内回）、snapshot（Hub→订阅者广播）、decide（仅 Phase 2，canDecide=true 时）。",
+      "oneOf": [
+        {
+          "title": "ctl:hello",
+          "type": "object",
+          "required": [
+            "ctl",
+            "contract",
+            "source"
+          ],
+          "properties": {
+            "ctl": {
+              "const": "hello"
+            },
+            "contract": {
+              "const": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "description": "后端 ID。"
+            },
+            "adapterVersion": {
+              "type": "string",
+              "minLength": 1,
+              "description": "适配器版本（可选）。"
+            },
+            "resumeAfter": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "断线续传：Hub 只接受 seq > resumeAfter 的事件。首次连接为 null。"
+            },
+            "canDecide": {
+              "type": "boolean",
+              "description": "Phase 1 必须 false（只读）。"
+            },
+            "observes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "观测能力等级（v1.2 §5.2.1，可选）：适配器声明实际能产生的事件族，glob 形式，如 [\"turn.*\",\"step.*\",\"tool.*\",\"approval.*\",\"session.*\"]。缺省=全部 16 种 type 都可能出现。Hub 据此在工作框隐藏该后端不支持的指标。"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "title": "ctl:ack",
+          "type": "object",
+          "required": [
+            "ctl",
+            "contract",
+            "ok"
+          ],
+          "properties": {
+            "ctl": {
+              "const": "ack"
+            },
+            "contract": {
+              "const": 1
+            },
+            "ok": {
+              "type": "boolean",
+              "description": "false 时适配器必须停止发送事件、打印可读错误并以非 0 退出。"
+            },
+            "error": {
+              "type": "string",
+              "minLength": 1,
+              "description": "ok=false 时的原因，如 unsupported-contract。"
+            },
+            "heartbeatMs": {
+              "type": "integer",
+              "description": "Hub 期望的心跳间隔（可选，15000）。",
+              "minimum": 1
+            },
+            "canDecide": {
+              "type": "boolean",
+              "description": "Phase 1 为 false。"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "title": "ctl:decide（Phase 2 才允许）",
+          "type": "object",
+          "required": [
+            "ctl",
+            "requestId",
+            "decision"
+          ],
+          "properties": {
+            "ctl": {
+              "const": "decide"
+            },
+            "requestId": {
+              "type": "string",
+              "minLength": 1,
+              "description": "对应的 approval.request.requestId。"
+            },
+            "decision": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "deny"
+              ],
+              "description": "写回决定；Phase 1 不得发送。"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "title": "ctl:snapshot（Hub → 订阅者）",
+          "type": "object",
+          "required": [
+            "ctl",
+            "contract",
+            "ts",
+            "agg",
+            "sessions"
+          ],
+          "properties": {
+            "ctl": {
+              "const": "snapshot"
+            },
+            "ts": {
+              "type": "integer",
+              "description": "快照时刻 Unix ms。",
+              "minimum": 0
+            },
+            "agg": {
+              "type": "string",
+              "enum": [
+                "idle",
+                "thinking",
+                "working",
+                "waiting",
+                "error",
+                "done"
+              ],
+              "description": "聚合状态（含本地过渡态 done）。"
+            },
+            "sessions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "source",
+                  "sessionId",
+                  "state",
+                  "since"
+                ],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "后端 ID。"
+                  },
+                  "sessionId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "会话 ID。"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "idle",
+                      "thinking",
+                      "working",
+                      "waiting",
+                      "error",
+                      "done"
+                    ],
+                    "description": "该会话状态。"
+                  },
+                  "since": {
+                    "type": "integer",
+                    "description": "进入该状态的时刻。",
+                    "minimum": 0
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "会话标题（v1.2 工作框会话行渲染）。"
+                  },
+                  "workspace": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "会话工作目录（v1.2 工作框会话行渲染）。"
+                  },
+                  "lastTool": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "该会话最近一次工具摘要（v1.2 工作框会话行渲染）。"
+                  },
+                  "elapsedMs": {
+                    "type": "integer",
+                    "description": "该会话已持续 ms（v1.2 工作框会话行渲染）。",
+                    "minimum": 0
+                  },
+                  "pending": {
+                    "type": "integer",
+                    "description": "该会话未决审批/提问数（v1.2 工作框会话行渲染）。",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "bubble": {
+              "type": "object",
+              "required": [
+                "kind",
+                "text"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "approval",
+                    "question",
+                    "message",
+                    "none"
+                  ],
+                  "description": "气泡种类。"
+                },
+                "text": {
+                  "type": "string",
+                  "maxLength": 280
+                },
+                "requestId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "关联的 approval.request.requestId（可选）。"
+                }
+              },
+              "additionalProperties": false
+            },
+            "effect": {
+              "type": "string",
+              "enum": [
+                "none",
+                "alert",
+                "celebrate",
+                "cloud",
+                "shrug"
+              ],
+              "description": "特效指令。"
+            },
+            "unknownEvents": {
+              "type": "integer",
+              "description": "未知事件计数。",
+              "minimum": 0
+            },
+            "offlineSources": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "contract": {
+              "const": 1,
+              "description": "契约版本（v1.2 起必填，与 hello/ack 一致）。"
+            },
+            "degradedSources": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "v1.2：守护重启失败/降级中的 source。与 offlineSources 区分：offline=完全无事件，degraded=能收事件但有缺口。非空时工作框必须显式标注「粗略模式」。"
+            },
+            "clearedPending": {
+              "type": "array",
+              "description": "v1.2：被清理的未决项（超时/陈旧），工作框据此撤下审批卡片。",
+              "items": {
+                "type": "object",
+                "required": [
+                  "kind",
+                  "clearedAt",
+                  "reason"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "approval",
+                      "question"
+                    ],
+                    "description": "未决项种类。"
+                  },
+                  "requestId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "approval 类未决项的 requestId。"
+                  },
+                  "questionId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "question 类未决项的 questionId。"
+                  },
+                  "clearedAt": {
+                    "type": "integer",
+                    "description": "清理时刻 Unix ms。",
+                    "minimum": 0
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "stale",
+                      "offline",
+                      "resolved",
+                      "replaced"
+                    ],
+                    "description": "清理原因。"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "now": {
+              "type": "object",
+              "description": "v1.2：工作框所需的最小当前投影（Hub 保证字段存在）。",
+              "required": [
+                "startedAt",
+                "elapsedMs"
+              ],
+              "properties": {
+                "turnId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "当前轮次 ID。"
+                },
+                "stepIndex": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "当前步骤序号。"
+                },
+                "startedAt": {
+                  "type": "integer",
+                  "description": "当前轮次/步骤开始时刻 Unix ms。",
+                  "minimum": 0
+                },
+                "elapsedMs": {
+                  "type": "integer",
+                  "description": "已持续 ms。",
+                  "minimum": 0
+                },
+                "lastTool": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "最近工具摘要。"
+                }
+              },
+              "additionalProperties": false
+            },
+            "counters": {
+              "type": "object",
+              "description": "v1.2：Hub 侧计数器（工作框「粗略模式」判定依据）。",
+              "properties": {
+                "unknownEvents": {
+                  "type": "integer",
+                  "description": "不在 §3 的 16 个 type 字符串之内的类型计数（v1.2 澄清：已知 type 但不改变状态的走 no-op 路径计 noop）。",
+                  "minimum": 0
+                },
+                "lateEvents": {
+                  "type": "integer",
+                  "description": "窗口外迟到事件数。",
+                  "minimum": 0
+                },
+                "duplicates": {
+                  "type": "integer",
+                  "description": "重复事件数。",
+                  "minimum": 0
+                },
+                "orphanApprovals": {
+                  "type": "integer",
+                  "description": "找不到未决请求的 approval.resolved 数。",
+                  "minimum": 0
+                },
+                "orphanAnswers": {
+                  "type": "integer",
+                  "description": "找不到未决提问的 user.answer 数。",
+                  "minimum": 0
+                },
+                "overrideRejected": {
+                  "type": "integer",
+                  "description": "被拒绝的 agent.status 覆盖数。",
+                  "minimum": 0
+                },
+                "recoveredErrors": {
+                  "type": "integer",
+                  "description": "瞬态错误 TTL 到期恢复数（§4.7）。",
+                  "minimum": 0
+                },
+                "escalatedErrors": {
+                  "type": "integer",
+                  "description": "升级为持久错误的次数（§4.7）。",
+                  "minimum": 0
+                },
+                "noop": {
+                  "type": "integer",
+                  "description": "已知 type 但不改变状态的 no-op 事件数。",
+                  "minimum": 0
+                },
+                "stale": {
+                  "type": "integer",
+                  "description": "10 min 会话陈旧清理数（§4.5）。",
+                  "minimum": 0
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false,
+          "description": "Hub → 订阅者快照（契约 §5.3），工作框的唯一数据源。v1.2：contract 必填；sessions[] 增 title/workspace/lastTool/elapsedMs/pending（全部可选但工作框默认渲染）；顶层增 degradedSources/clearedPending/now/counters。 会话行渲染规则（契约 §8.1）：卡片首行 40 px + 每个会话一行 28 px；MAX_SESSION_ROWS = 5（只数会话行，不含首行），第 6 个会话起折叠为 +N 脚注（高 22 px）；窗口高度 = 40 + 28×min(N,5) + (N>5 ? 22 : 0)。 额外字段策略：additionalProperties=false。"
+        }
+      ]
+    },
+    "unknownType": {
+      "title": "未知 type（故意不参与 oneOf）",
+      "type": "object",
+      "description": "契约 §1.5：未知事件类型必须被忽略并计数（unknownEvents），不得抛异常。消费方先判 ctl（控制帧）、再判 type 白名单；type 未命中即 unknownEvents += 1 并丢弃，**绝不因为 schema 校验失败而中断整条流**。本 def 不参与顶层 oneOf。",
+      "required": [
+        "v",
+        "seq",
+        "ts",
+        "source",
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "not": {
+            "enum": [
+              "session.start",
+              "session.end",
+              "pet.heartbeat",
+              "turn.start",
+              "turn.end",
+              "step.start",
+              "step.end",
+              "message.assistant",
+              "tool.call",
+              "tool.result",
+              "approval.request",
+              "approval.resolved",
+              "user.question",
+              "user.answer",
+              "agent.status",
+              "error.raised"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
