@@ -223,3 +223,8 @@
 - **CLI 与桌面端拆行**（参考 cc-switch 按安装位置/进程路径区分的方法）：local-agents 三家各拆两行（claude-code-cli / claude-code-desktop、codex-cli / codex-desktop、kimi-cli / kimi-desktop）——进程按路径特征分家（桌面=`.app/Contents`、`Claude-3p`、`Codex++`；CLI=裸二进制路径），安装证据分开（CLI=npm bin；桌面=App 包/App Support），版本分开（npm package.json vs PlistBuddy）；状态页 9 张卡片，每行带自己形态的会话计数（Claude CLI 14 / 桌面 34·IDE 4；Kimi CLI 5 / 桌面 5）。会话级区分不变（entrypoint/originator/composer）。
 - **修复链**：scanLocalAgents 输出补 base/variantTag 透传（形态计数曾不显示）；状态页会话总数条件改通用。
 - **完整测试**：6 套件回归 + --live 34 项（三家真实投递闭环）全绿；正式版重启终验（历史 102 全量、陈旧态 0、9 行软件拆分）。
+
+### 手动隐藏回归（叠加在自动三档之上，2026-10-06 深夜 VII）
+
+- 完整规则：**tierOf = 手动隐藏（且无新活动）→ 隐藏；否则按自动三档**。手动隐藏对任意状态会话生效（活跃的也能藏）；被隐藏会话**有新活动（lastActiveMs/updatedAt > hiddenAt）自动解除**；隐藏视图内手动项带「手动」徽标 + 行内恢复按钮，自动未活跃项不带；全部视图行内 ✕ 可隐藏，localStorage 持久（agent-pet-manual-hidden）。
+- 验证：test-window 新增 4 断言（活跃会话可藏/藏后进隐藏视图带徽标与恢复/新活动自动解除/自动项无手动徽标）；浏览器实测 ✕ 隐藏 → 手动徽标 → 恢复清零全链路。

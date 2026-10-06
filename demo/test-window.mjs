@@ -138,6 +138,20 @@ const rowsStale = getEl('sessions').innerHTML;
 sandbox.render(snap);
 sandbox.window.__FILTER__ = 'all';
 sandbox.render(snap);
+// 场景 3.8：手动隐藏（叠加在自动三档上）——活跃会话也可手动藏，新活动自动解除
+sandbox.window.__HIDDEN__ = { 'session-2': now };   // 手动隐藏一个活跃会话
+sandbox.render(snap);
+const rowsMh = getEl('sessions').innerHTML;
+sandbox.window.__FILTER__ = 'hidden';
+sandbox.render(snap);
+const rowsMhView = getEl('sessions').innerHTML;
+sandbox.window.__FILTER__ = 'all';
+// 新活动自动解除：hiddenAt 早于 lastActiveMs（session-2 活动在 30s 前）
+sandbox.window.__HIDDEN__ = { 'session-2': now - 100000 };
+sandbox.render(snap);
+const rowsMhStale = getEl('sessions').innerHTML;
+sandbox.window.__HIDDEN__ = {};
+sandbox.render(snap);
 // 场景四：投递目标 = claude 会话 → CLI 通道标注
 sandbox.window.__TARGET__ = 'session-2';
 sandbox.render(snap);
@@ -176,6 +190,10 @@ const checks = [
   ['「隐藏会话」视图：仅空闲/出错超 1h（session-7 + 老 idle 历史），不含完成档与活跃档', rowsHiddenView.includes('data-session="session-7"') && rowsHiddenView.includes('data-session="hist-km"') && !rowsHiddenView.includes('data-session="session-5"') && !rowsHiddenView.includes('data-session="session-1"')],
   ['三档互斥：proj-hint 计数齐全', getEl('proj-hint').textContent.includes('活跃') && getEl('proj-hint').textContent.includes('完成') && getEl('proj-hint').textContent.includes('隐藏')],
   ['waiting 即使 2 小时无消息仍属活跃（规则①不限时间）', rowsStale.includes('data-session="session-5"')],
+  ['手动隐藏：活跃会话从「活跃」视图消失', !rowsMh.includes('data-session="session-2"') && rowsMh.includes('data-session="session-1"')],
+  ['手动隐藏的会话进「隐藏会话」视图，带 手动 标记与 恢复 按钮', rowsMhView.includes('data-session="session-2"') && rowsMhView.includes('>手动</span>') && rowsMhView.includes('data-unhide="session-2"')],
+  ['被隐藏会话有新活动 → 自动解除隐藏（回到活跃视图）', rowsMhStale.includes('data-session="session-2"')],
+  ['隐藏视图的自动未活跃行不带 手动 标记', rowsHiddenView.includes('data-session="session-7"') && !rowsHiddenView.includes('data-unhide="session-7"')],
   ['队列只显示未完成：delivered 不出现，queued/failed 在', !queueHtml.includes('这条已送达') && queueHtml.includes('把进度总结成三行') && queueHtml.includes('失败') && queueHtml.includes('data-resend')],
   ['队列项有复制/删除入口', queueHtml.includes('data-copy') && queueHtml.includes('data-del')],
   ['聚合状态=等待你', getEl('agg-text').textContent === '等待你'],

@@ -68,6 +68,7 @@ aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid v
 #sess-filter .fbtn:last-child{border-right:none}
 #sess-filter .fbtn.on{background:#1f6feb;color:#fff}
 .srow .unhide{flex:0 0 auto;font-size:10px;color:#9db2cc;cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:0 5px}
+.srow .hbadge{flex:0 0 auto;font-size:9px;color:#e3b341;border:1px solid #e3b34166;border-radius:4px;padding:0 3px}
 .srow .unhide:hover{color:#fff;border-color:#3d4a60}
 #toolbar .sp{flex:1}
 #sessions{flex:1;overflow:auto;padding:4px 0}
@@ -247,6 +248,17 @@ function render(snap){
     return fresh ? 'all' : 'hidden';   // idle / error / unknown
   };
   const SORT_RANK = { waiting: 0, 'transient-error': 1, running: 2, thinking: 3, done: 4, error: 5, idle: 6, unknown: 7 };
+  // ---- 手动隐藏（叠加在自动三档之上）----
+  // 记录 {sessionId: hiddenAt}；被隐藏会话一旦有新活动（lastActiveMs/updatedAt > hiddenAt）自动解除
+  if (!window.__HIDDEN__) { try { window.__HIDDEN__ = JSON.parse(localStorage.getItem('agent-pet-manual-hidden') || '{}') } catch (e) { window.__HIDDEN__ = {} } }
+  const manualHidden = window.__HIDDEN__;
+  const sidOf = (s) => s.id ?? s.sessionId;
+  const isManuallyHidden = (s) => {
+    const at = manualHidden[sidOf(s)];
+    if (!at) return false;
+    return (s.lastActiveMs ?? s.updatedAt ?? s.since ?? 0) <= at;   // 有更新活动 → 自动解除
+  };
+  const tierOf = (s) => isManuallyHidden(s) ? 'hidden' : classify(s);
   const filter = window.__FILTER__ || 'all';
   const showHist = window.__SHOW_HISTORY__ === true;
   const liveAll = (snap.sessions || []).filter(s => (!agentSel || s.source === agentSel) && s.kind !== 'subagent' && inProj(s));
@@ -254,14 +266,14 @@ function render(snap){
     .filter(s => (!agentSel || s.source === agentSel) && s.kind !== 'subagent' && inProj(s));
   const liveIds = new Set(liveAll.map(s => s.id));
   const histPool = histAll.filter(s => !liveIds.has(s.sessionId) && !s.live);   // 不截断：展示全部会话
-  let showLive = liveAll.filter(s => classify(s) === 'all');
-  let showHistRows = (filter !== 'all' || showHist || curProj) ? histPool.filter(s => classify(s) === 'all') : [];
+  let showLive = liveAll.filter(s => tierOf(s) === 'all');
+  let showHistRows = (filter !== 'all' || showHist || curProj) ? histPool.filter(s => tierOf(s) === 'all') : [];
   if (filter === 'done') {
-    showLive = liveAll.filter(s => classify(s) === 'done');
-    showHistRows = histPool.filter(s => classify(s) === 'done');
+    showLive = liveAll.filter(s => tierOf(s) === 'done');
+    showHistRows = histPool.filter(s => tierOf(s) === 'done');
   } else if (filter === 'hidden') {
-    showLive = liveAll.filter(s => classify(s) === 'hidden');
-    showHistRows = histPool.filter(s => classify(s) === 'hidden');
+    showLive = liveAll.filter(s => tierOf(s) === 'hidden');
+    showHistRows = histPool.filter(s => tierOf(s) === 'hidden');
   }
   // 活跃视图按优先级排序（等你确认最前，空闲殿后）
   showLive = [...showLive].sort((a, b) => (SORT_RANK[a.state] ?? 9) - (SORT_RANK[b.state] ?? 9) || (b.lastActiveMs ?? b.since ?? 0) - (a.lastActiveMs ?? a.since ?? 0));
@@ -278,6 +290,7 @@ function render(snap){
       + '<span class="mid"><span class="lbl">' + esc(s.label || s.title || s.id) + '</span><span class="meta">' + esc(metaLine(s)) + proj + '</span></span>'
       + '<span class="st" style="color:' + col + '">' + (STATE_LABEL[st] || st) + '</span>'
       + (s.pending ? '<span class="pend">待办 ' + s.pending + '</span>' : '')
+      + (filter === 'hidden' && isManuallyHidden(s) ? '<span class="hbadge">手动</span><span class="unhide" data-unhide="' + esc(s.id) + '" title="恢复显示该会话">恢复</span>' : '<span class="hx" data-hide="' + esc(s.id) + '" title="手动隐藏该会话（有新活动时自动恢复显示）">✕</span>')
       + '<span class="tm">' + (st === 'idle' ? '--' : st === 'done' ? '完成' : mmss(s.elapsedMs || 0)) + '</span></div>';
   };
   const mkHistRow = (s) => {
@@ -286,10 +299,11 @@ function render(snap){
     const proj = curProj ? '' : ' · ' + esc(projNameOf(s, projListAll));
     return '<div class="srow hist' + (sel ? ' sel' : '') + '" data-session="' + esc(s.sessionId) + '" title="点击选为投递目标并打开"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src">' + esc(srcLabel(s)) + '</span>'
       + '<span class="mid"><span class="lbl">' + esc(s.title || String(s.sessionId).slice(0, 12)) + '</span><span class="meta">' + esc(metaLine(s)) + proj + ' · ' + new Date(s.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + '</span></span>'
+      + (filter === 'hidden' && isManuallyHidden(s) ? '<span class="hbadge">手动</span><span class="unhide" data-unhide="' + esc(s.sessionId) + '" title="恢复显示该会话">恢复</span>' : '<span class="hx" data-hide="' + esc(s.sessionId) + '" title="手动隐藏该会话（有新活动时自动恢复显示）">✕</span>')
       + '<span class="st" style="color:' + col + '">' + (STATE_LABEL[s.state] || s.state) + '</span><span class="tm">打开</span></div>';
   };
   let html = '';
-  const EMPTY_TEXT = { all: '暂无活跃会话（进行中 / 10 分钟内完成 / 1 小时内有过活动）', done: '没有已完成的会话（结束超 10 分钟的 ✓ 会话）', hidden: '没有隐藏会话（空闲/出错 超 1 小时无消息才会进入这里）' };
+  const EMPTY_TEXT = { all: '暂无活跃会话（进行中 / 10 分钟内完成 / 1 小时内有过活动）', done: '没有已完成的会话（结束超 10 分钟的 ✓ 会话）', hidden: '没有隐藏会话（未活跃=空闲/出错超 1 小时无消息，自动判定；或用行内 ✕ 手动隐藏）' };
   html += rows.length ? rows.map(mkLiveRow).join('') : '<div class="empty">' + EMPTY_TEXT[filter] + '</div>';
   if (filter !== 'all' || showHist || curProj) html += hist.length ? hist.map(mkHistRow).join('') : '';
   const FILT_LABELS = [
@@ -298,8 +312,8 @@ function render(snap){
     ['hidden', '隐藏会话', '空闲或持久出错，且 1 小时内无任何消息活动（未活跃，自动判定）'],
   ];
   const counts = { all: 0, done: 0, hidden: 0 };
-  for (const s of liveAll) counts[classify(s)]++;
-  for (const s of histPool) counts[classify(s)]++;
+  for (const s of liveAll) counts[tierOf(s)]++;
+  for (const s of histPool) counts[tierOf(s)]++;
   const filtEl = $('sess-filter');
   const filtHtml = FILT_LABELS.map(([v, l, tip]) => '<button class="btn fbtn' + (filter === v ? ' on' : '') + '" data-filter="' + v + '" title="' + esc(tip) + '">' + l + ' ' + counts[v] + '</button>').join('');
   if (filtEl.__petLastHtml !== filtHtml) { filtEl.innerHTML = filtHtml; filtEl.__petLastHtml = filtHtml }
@@ -384,6 +398,10 @@ $('new-session').onclick=async function(){
 };
 // 会话行点击 = 选为投递目标（再点一次取消）；历史行同时打开
 $('sessions').addEventListener('click',e=>{
+  const u=e.target.closest('[data-unhide]');
+  if(u){e.stopPropagation();const id=u.getAttribute('data-unhide');delete window.__HIDDEN__[id];try{localStorage.setItem('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__))}catch(err){};$('note').textContent='已恢复显示该会话';if(window.__SNAP__)render(window.__SNAP__);return}
+  const h=e.target.closest('[data-hide]');
+  if(h){e.stopPropagation();const id=h.getAttribute('data-hide');window.__HIDDEN__[id]=Date.now();try{localStorage.setItem('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__))}catch(err){};$('note').textContent='已手动隐藏（有新活动时自动恢复显示；可在「隐藏会话」视图恢复）';if(window.__SNAP__)render(window.__SNAP__);return}
   const t=e.target.closest('[data-session]');
   if(!t)return;
   const id=t.getAttribute('data-session');
