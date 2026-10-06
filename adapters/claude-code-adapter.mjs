@@ -162,6 +162,11 @@ export function parseClaudeSession(file, opts = {}) {
   const now = Number.isFinite(o.now) ? o.now : Date.now();
   const title = customTitle ?? aiTitle ?? agentNameTitle ?? null;
   const updatedAt = Math.round(Math.max(st.mtimeMs, lastTs ?? 0));
+  // 会话形态（命令行版 vs 桌面版）：entrypoint 实测 ∈ cli / sdk-cli / claude-desktop-3p / claude-vscode
+  const variant = entrypoint == null ? null
+    : /desktop/i.test(entrypoint) ? 'desktop'
+    : /vscode/i.test(entrypoint) ? 'ide'
+    : 'cli';                                   // cli / sdk-cli 及其他 CLI 形态
   return {
     ...base,
     title: title ?? path.basename(cwd ?? decodeClaudeProjectDir(base.projectDirName) ?? sessionId),
@@ -170,7 +175,7 @@ export function parseClaudeSession(file, opts = {}) {
     cwdSource: cwd ? 'line:cwd' : 'dir-name(lossy)',
     createdAt, updatedAt, model,
     agentVersion: version,
-    gitBranch, entrypoint,
+    gitBranch, entrypoint, variant,
     state: coarse.state, stateSource: coarse.stateSource,
     live: now - st.mtimeMs < o.liveWindowMs,
     metaComplete: false, metaApproximate: true,      // 窗口近似：与 DSH 快扫同口径

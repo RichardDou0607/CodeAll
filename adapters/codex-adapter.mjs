@@ -146,6 +146,8 @@ export function parseCodexSession(file, opts = {}) {
   const coarse = coarseStateFromLines(tail.length ? tail : lines);
   const now = Number.isFinite(o.now) ? o.now : Date.now();
   const isSub = parent != null && parent !== '';
+  // 会话形态：originator 本机实测 "Codex Desktop"（Codex++ 壳）；CLI 发起的会话为 codex/codex-cli 等
+  const variant = originator == null ? null : /desktop/i.test(originator) ? 'desktop' : 'cli';
   return {
     ...base,
     title: nickname ?? (cwd ? path.basename(cwd) : sessionId.slice(0, 8)),
@@ -158,6 +160,7 @@ export function parseCodexSession(file, opts = {}) {
     origin: isSub ? 'subagent' : 'main',
     parentSession: isSub ? parent : null,
     kind: isSub ? 'subagent' : 'main',
+    variant,
     label: nickname,
     state: isSub ? coarse.state : coarse.state, stateSource: coarse.stateSource,
     live: now - st.mtimeMs < o.liveWindowMs,

@@ -85,6 +85,7 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
     <nav id="agent-tabs"></nav>
     <span class="aggchip"><span class="dot" id="agg-dot"></span><span id="agg-text">连接中…</span></span>
     <span class="chips" id="chips"></span>
+    <button class="hbtn" id="toggle-pet" title="显示 / 隐藏迷你条（附属单行悬浮条，隐藏后可从托盘菜单唤回）">◧ 迷你条</button>
   </header>
   <div id="main">
     <aside>
@@ -125,6 +126,8 @@ const $=id=>document.getElementById(id);
 function esc(s){return String(s).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]))}
 function mmss(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 function relTime(ms,now){if(!ms)return '';const s=Math.max(0,Math.floor((now-ms)/1000));if(s<60)return s+' 秒前';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400)return Math.floor(s/3600)+' 小时前';return Math.floor(s/86400)+' 天前'}
+const VARIANT_LABEL={cli:'CLI',desktop:'桌面',ide:'IDE'};
+function srcLabel(s){const base=String(s&&s.source||'dsh').toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI');return base+(s&&s.variant&&VARIANT_LABEL[s.variant]?'·'+VARIANT_LABEL[s.variant]:'')}
 function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);return p.join(' · ')}
 function projNameOf(s,projList){
   if(!s)return '';
@@ -172,6 +175,7 @@ function render(snap){
     if(st==='closed'&&a.lastActivityMs)meta.push('上次活动 '+relTime(a.lastActivityMs,now));
     if(st==='open-unconnected'&&a.note)meta.push(a.note);
     if(st==='not-installed')meta.push('未检测到安装痕迹');
+    if(a.variants){const parts=[];if(a.variants.cli)parts.push('CLI '+a.variants.cli);if(a.variants.desktop)parts.push('桌面 '+a.variants.desktop);if(a.variants.ide)parts.push('IDE '+a.variants.ide);if(parts.length)meta.push(parts.join(' · ')+' 会话')}
     return '<div class="arow" data-agent="'+esc(a.id)+'" title="'+esc((a.evidence||[]).join('\n')+(a.note?'\n'+a.note:''))+'">'
       +'<span class="adot" style="background:'+col+';color:'+col+'"></span>'
       +'<span class="aname">'+esc(a.name)+'</span><span class="ameta">'+esc(meta.join(' · '))+'</span>'
@@ -195,7 +199,7 @@ function render(snap){
       const st=s.state,col=COLOR[st]||'#8b98a9';
       const sel=window.__TARGET__===s.id;
       const proj=curProj?'':' · '+esc(projNameOf(s,projListAll));
-      return '<div class="srow'+(sel?' sel':'')+'" data-session="'+esc(s.id)+'" title="点击选为投递目标"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(String(s.source||'dsh').toUpperCase())+'</span>'
+      return '<div class="srow'+(sel?' sel':'')+'" data-session="'+esc(s.id)+'" title="点击选为投递目标"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(srcLabel(s))+'</span>'
         +'<span class="mid"><span class="lbl">'+esc(s.label||s.title||s.id)+'</span><span class="meta">'+esc(metaLine(s))+proj+'</span></span>'
         +'<span class="st" style="color:'+col+'">'+(STATE_LABEL[st]||st)+'</span>'
         +(s.pending?'<span class="pend">待办 '+s.pending+'</span>':'')
@@ -209,7 +213,7 @@ function render(snap){
       const col=COLOR[s.state]||'#8b98a9';
       const sel=window.__TARGET__===s.sessionId;
       const proj=curProj?'':' · '+esc(projNameOf(s,projListAll));
-      return '<div class="srow hist'+(sel?' sel':'')+'" data-session="'+esc(s.sessionId)+'" title="点击选为投递目标并打开"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(String(s.source||'dsh').toUpperCase())+'</span>'
+      return '<div class="srow hist'+(sel?' sel':'')+'" data-session="'+esc(s.sessionId)+'" title="点击选为投递目标并打开"><span class="dot" style="background:'+col+';color:'+col+'"></span><span class="src">'+esc(srcLabel(s))+'</span>'
         +'<span class="mid"><span class="lbl">'+esc(s.title||String(s.sessionId).slice(0,12))+'</span><span class="meta">'+esc(metaLine(s))+proj+' · '+new Date(s.updatedAt).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+'</span></span>'
         +'<span class="st" style="color:'+col+'">'+(STATE_LABEL[s.state]||s.state)+'</span><span class="tm">打开</span></div>';
     }).join(''):'<div class="empty">没有历史会话</div>';
@@ -309,6 +313,16 @@ $('queue').addEventListener('click',async e=>{
   const rs=e.target.closest('[data-resend]');
   if(rs){const id=rs.getAttribute('data-resend');try{const j=await api('/api/input/'+encodeURIComponent(id)+'/resend',{});$('note').textContent=j.ok?'重发已送达 ✓':'重发未送达：'+((j.item&&(j.item.detail||j.item.status))||'')}catch(err){$('note').textContent='重发失败：'+err.message}return}
 });
+$('toggle-pet').onclick=async function(){
+  // 跨窗口操作 main（迷你条）：优先 Tauri 全局 API；托盘「显示悬浮窗」是保底路径
+  const icon=this;
+  try{
+    const T=window.__TAURI__;
+    if(T&&T.window&&T.window.WebviewWindow&&T.window.WebviewWindow.getByLabel){const w=T.window.WebviewWindow.getByLabel('main');if(w){await w.isVisible()?await w.hide():await w.show();return}}
+    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|show',{label:'main'});await window.__TAURI_INTERNALS__.invoke('plugin:window|set_focus',{label:'main'})}
+  }catch(e){}
+  icon.title='显示迷你条（若无效请用托盘菜单「显示悬浮窗」）';
+};
 document.addEventListener('keydown',e=>{if(e.altKey&&e.metaKey&&e.key.toLowerCase()==='i'){e.preventDefault();$('input').focus()}});
 let es=null;
 function connect(){

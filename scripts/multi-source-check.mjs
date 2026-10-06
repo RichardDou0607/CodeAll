@@ -63,6 +63,11 @@ let cc;
     {});
   check('MA7', '事件信封含 source/sessionId/seq（供状态机与去重）',
     ev1[0]?.source === 'claude-code' && ev1[0]?.sessionId === 's1' && Number.isInteger(ev1[0]?.seq), {});
+  {
+    const withVariant = cc.sessions.filter((s) => s.variant);
+    const kinds = new Set(cc.sessions.map((s) => s.variant).filter(Boolean));
+    check('MA8', '区分命令行/桌面版本（entrypoint → variant，本机同时存在多形态）', withVariant.length >= cc.stats.sessions * 0.6 && kinds.size >= 2, { withVariant: withVariant.length, kinds: [...kinds] });
+  }
 }
 
 // ================================================================ M-B Codex
@@ -91,6 +96,7 @@ let cx;
     {});
   check('MB6', '行映射：turn_aborted→aborted；session_meta→session.start(workspace+version)',
     e4[0]?.type === 'turn.end' && e4[0]?.data?.status === 'aborted' && e5[0]?.type === 'session.start' && e5[0]?.data?.workspace === '/tmp/x' && e5[0]?.data?.agentVersion === '0.155.0', {});
+  check('MB7', '区分命令行/桌面版本（originator=Codex Desktop → desktop）', cx.sessions.every((s) => s.variant === 'desktop' || s.variant === null) && cx.sessions.filter((s) => s.variant === 'desktop').length >= 10, { desktop: cx.sessions.filter((s) => s.variant === 'desktop').length });
 }
 
 // ================================================================ M-H Kimi（A 路径：state.json 目录 + wire.jsonl 事件）
@@ -123,6 +129,10 @@ let cx;
   check('MK8', '状态快照走 A 路径（非降级，observes 含审批族）', st.degraded === false && st.sessionCount === km.stats.sessions && st.observes.includes('approval.request'), { degraded: st.degraded, count: st.sessionCount });
   const legacy = scanKimiLegacyCount();
   check('MK9', 'LevelDB 兜底通道仍在（近似计数可用）', legacy.count >= 1 && legacy.approximate === true, { legacy: legacy.count });
+  {
+    const kinds = new Set(km.sessions.map((s) => s.variant).filter(Boolean));
+    check('MK10', '区分命令行/桌面版本（clientMetadata composer → desktop；本机两种都有）', kinds.size >= 1 && km.sessions.some((s) => s.variant), { kinds: [...kinds] });
+  }
 }
 
 // ================================================================ M-D/E/H 控制层（CLI 通道）

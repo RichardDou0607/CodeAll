@@ -150,11 +150,18 @@ export function parseKimiSession(sessionDir, opts = {}) {
   let wireSt = null;
   try { wireSt = fs.statSync(wireFile); } catch { /* 无 wire（仅 CLI 建过目录） */ }
   const metaSources = { cwd: 'state.json.cwd', title: st.titleKind === 'custom' || st.isCustomTitle ? 'state.json.title(custom)' : 'state.json.title(generated)' };
+  let variant = null;   // wire: turn.prompt.origin.clientMetadata 含 kimi_code_composer = 桌面版；无 = CLI
   if (wireSt) {
     rec.logFile = wireFile; rec.logName = 'wire.jsonl'; rec.bytes = wireSt.size;
     try {
       const { head, tail, bytesRead } = readWireWindows(wireFile, { size: wireSt.size, headBytes: o.wireHeadBytes, tailBytes: o.wireTailBytes });
       let model = null, provider = null, effort = null;
+      for (const l of [...head, ...tail]) {
+        if (l.type === 'turn.prompt') {
+          const meta = JSON.stringify(l.origin?.clientMetadata ?? '');
+          variant = meta ? (/composer/i.test(meta) ? 'desktop' : 'cli') : 'cli';
+        }
+      }
       for (const l of head) {
         if (l.type === 'profile.bind') {
           if (typeof l.modelAlias === 'string') { model = l.modelAlias.split('/').pop(); provider = l.modelAlias.includes('/') ? l.modelAlias.split('/').slice(0, -1).join('/') : null; metaSources.model = 'wire:profile.bind'; }
@@ -178,6 +185,7 @@ export function parseKimiSession(sessionDir, opts = {}) {
     rec.state = 'idle'; rec.stateSource = 'no-wire';
   }
   rec.metaSources = metaSources;
+  rec.variant = variant;
   return rec;
 }
 

@@ -169,3 +169,12 @@
 - **App 用 macOS 原生窗口控制**：decorations=true（红=隐藏/黄=缩放/绿=全屏），移除自绘标题栏按钮。
 - **拖拽 bug 修复**：根因是外壳注入脚本只认 `.titlebar` 挂 mousedown 拖拽，新版式没有该元素。迷你条改为自挂 mousedown → start_dragging（整条可拖，按钮除外），App 走原生标题栏。
 - **验证**：cargo check 干净；`run.sh --install` 重建安装；受控启动日志确认 `REMOTE_COMMITTED[main]+[app]`、REMOTE_IPC_OK、单服务进程（app 引导页探活优先生效）；浏览器实测迷你条动态机制（自动跟随 CLAUDE 运行中会话 → ⟳ 锁定 DSH → 环回自动）；test-mini 重写 11 项、test-window 调整后 24 项全绿。
+
+### 双窗启动即并存 + 迷你条定位为附属 + 区分命令行/桌面版本（2026-10-06 深夜）
+
+- **启动即双窗并存**（此前 app 窗口 visible:false 依赖 ⤢ 唤出，跨窗口 show 若失效则"无法并存"）：app 窗口改为 `visible:true`——启动即 **App 主界面 + 迷你条同屏**，不依赖任何按钮；⤢/托盘仍是唤出/聚焦的补充路径。重建安装并受控重启实测：`REMOTE_COMMITTED[main]+[app]`、SHELL_NAVIGATE ×2、单服务进程。
+- **迷你条定位为附属品**：App 是主界面（启动聚焦）；迷你条新增 ✕ 自隐藏按钮，App 头部新增「◧ 迷你条」开关（跨窗口 show/hide），托盘「显示悬浮窗」为保底唤回路径。
+- **区分命令行版本与桌面版本**（每个会话/每软件可辨来源形态）：
+  - 适配器新增 `variant` 字段：Claude ← `entrypoint`（本机实测 cli×13 / sdk-cli / claude-desktop-3p×243 / claude-vscode → CLI/桌面/IDE）；Codex ← `session_meta.originator`（Codex Desktop → 桌面，CLI 发起 → CLI）；Kimi ← `turn.prompt.origin.clientMetadata` 含 kimi_code_composer → 桌面，否则 CLI（本机 CLI 3 / 桌面 6）。
+  - UI：来源徽标带形态（`CLAUDE·桌面` / `CODEX·桌面` / `KIMI·CLI`），迷你条同款；软件四态面板每行显示「CLI n · 桌面 m 会话」计数（实测 Claude Code：CLI 13 · 桌面 33 · IDE 4）。
+- 验证：34 项验收（新增 MA8/MB7/MK10 形态断言）+ App 24 项 + 迷你条 11 项全绿；浏览器实测 App/迷你条徽标与面板计数。

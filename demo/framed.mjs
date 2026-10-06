@@ -328,6 +328,7 @@ function snapshot() {
       since: s.since, pending: s.pending, activity: s.activity,
       elapsedMs: Date.now() - s.since,
       agentName: meta.agentName || SOURCE_LABEL[s.source] || 'DSH', model: meta.model || null, reasoningEffort: meta.reasoningEffort || null,
+      variant: meta.variant || null,
       agentPreset: meta.agentPreset || null, title: meta.title || null, kind: 'main', live: true,
     };
   });
@@ -415,7 +416,14 @@ function snapshot() {
   return {
     v: 1, ts: Date.now(), agg,
     sessions: live,
-    agents: agentStatus.agents,
+    agents: (() => {
+      const counts = {};
+      const bump = (src, v) => { if (!v) return; counts[src] = counts[src] || {}; counts[src][v] = (counts[src][v] || 0) + 1; };
+      for (const s of multi.cc.sessions || []) bump('claude-code', s.variant);
+      for (const s of multi.cx.sessions || []) bump('codex', s.variant);
+      for (const s of multi.km.sessions || []) bump('kimi-code', s.variant);
+      return (agentStatus.agents || []).map((a) => ({ ...a, variants: counts[a.source] || null }));
+    })(),
     agentCounts: agentStatus.counts || {},
     counters: state.counters,
     inputs: state.inputs.slice(-8).reverse(),

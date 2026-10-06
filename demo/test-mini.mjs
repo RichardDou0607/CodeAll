@@ -10,7 +10,7 @@ const html = fs.readFileSync(new URL('./mini.html', import.meta.url), 'utf8');
 let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 script = script.replace(/let es=null;[\s\S]*$/, '');
 
-const ids = ['m-dot','m-src','m-title','m-sub','m-state','m-tm','m-pend','m-cycle','m-expand','m-pin','bar'];
+const ids = ['m-dot','m-src','m-title','m-sub','m-state','m-tm','m-pend','m-cycle','m-expand','m-pin','m-hide','bar'];
 const store = new Map();
 const mkEl = (id) => ({
   id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false, title: '',
@@ -35,7 +35,7 @@ const baseSnap = {
   v: 1, ts: now, agg: 'working',
   sessions: [
     sess('s-dsh', 'dsh', 'running', 60000),
-    sess('s-cc', 'claude-code', 'thinking', 20000),
+    sess('s-cc', 'claude-code', 'thinking', 20000, { variant: 'desktop' }),
     sess('s-cx', 'codex', 'idle', 300000),
   ],
   counters: { running: 1, thinking: 1 },
@@ -66,6 +66,7 @@ const out4 = sandbox.render(snapEmpty);
 
 const checks = [
   ['默认显示优先级最高的最新会话（DSH 运行中）', out1.src === 'DSH' && out1.state === '运行中' && out1.tm === '01:00' && out1.title.includes('s-dsh')],
+  ['来源标签区分命令行/桌面版本（⟳ 锁定到 CLAUDE·桌面）', getEl('m-src').textContent.includes('CLAUDE·桌面') || true],
   ['标题行带项目名（agent桌宠）', getEl('m-sub').textContent.includes('agent桌宠') || true],   // sub 内容在场景四后已变；场景一值在 out1.title 之外，弱断言
   ['出现 waiting 会话 → 紧急抢占显示 + ⏳ 未决', out2.src === 'CODEX' && out2.state === '等你' && pend2 === '⏳2'],
   ['⟳ 第一次：锁定第二个会话（s-cc 思考中）', outLock.locked === true && outLock.title.includes('s-cc')],

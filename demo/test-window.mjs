@@ -11,7 +11,7 @@ const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
 let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 script = script.replace(/let es=null;[\s\S]*$/, ''); // 去掉自动连接
 
-const ids = ['agg-dot','agg-text','chips','agent-tabs','projects','agents','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note'];
+const ids = ['agg-dot','agg-text','chips','agent-tabs','toggle-pet','projects','agents','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note'];
 const store = new Map();
 const mkEl = (id) => ({
   id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false, title: '',
@@ -44,15 +44,15 @@ const snap = {
   v: 1, ts: now, agg: 'waiting',
   sessions: [
     { id: 'session-1', source: 'dsh', label: 'agent桌宠', state: 'running', activity: '运行命令', elapsedMs: 74000, pending: 0, agentName: 'DSH', model: 'deepseek-flash', reasoningEffort: 'max', kind: 'main', projectKey: 'ws-1' },
-    { id: 'session-2', source: 'claude-code', label: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, agentName: 'Claude Code', model: 'glm-5.3', reasoningEffort: 'high', kind: 'main', projectKey: 'ws-1' },
-    { id: 'session-3', source: 'codex', label: 'docs', state: 'waiting', activity: '等待你批准', elapsedMs: 4000, pending: 2, agentName: 'Codex', model: 'gpt-6-sol', kind: 'main', projectKey: 'ws-1' },
+    { id: 'session-2', source: 'claude-code', label: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, agentName: 'Claude Code', model: 'glm-5.3', reasoningEffort: 'high', kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
+    { id: 'session-3', source: 'codex', label: 'docs', state: 'waiting', activity: '等待你批准', elapsedMs: 4000, pending: 2, agentName: 'Codex', model: 'gpt-6-sol', kind: 'main', projectKey: 'ws-1', variant: 'cli' },
     { id: 'session-4', source: 'dsh', label: 'web-ui', state: 'error', activity: '连接错误', elapsedMs: 2000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-2' },
     { id: 'session-sub', source: 'dsh', label: '子代理内部', state: 'running', kind: 'subagent', projectKey: 'ws-1' },
   ],
   counters: { thinking: 1, running: 1, errors: 1, done: 1 },
   agents: [
     { id: 'dsh', name: 'DeepSeek Harness', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'plugin', processes: 3, lastActivityMs: now - 2000, version: '0.2.0-rc.2', evidence: ['/Applications/DeepSeek Harness.app'] },
-    { id: 'claude-code', name: 'Claude Code', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'log', processes: 1, lastActivityMs: now - 9000, version: '2.1.278', evidence: ['~/.claude'] },
+    { id: 'claude-code', name: 'Claude Code', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'log', processes: 1, lastActivityMs: now - 9000, version: '2.1.278', variants: { cli: 13, desktop: 33, ide: 4 }, evidence: ['~/.claude'] },
     { id: 'codex', name: 'Codex', status: 'open-unconnected', installed: true, running: true, connected: false, connectionKind: null, processes: 1, lastActivityMs: now - 400000, version: '0.160.1', evidence: ['~/.codex'] },
     { id: 'kimi-code', name: 'Kimi Code', status: 'closed', installed: true, running: false, connected: false, connectionKind: null, processes: 0, lastActivityMs: now - 7200000, version: '1.0.4', sessionCount: 9, evidence: ['/Applications/Kimi Code.app'] },
     { id: 'agentos', name: 'AgentOS M1', status: 'closed', installed: true, running: false, connected: false, processes: 0, evidence: [] },
@@ -76,8 +76,8 @@ const snap = {
     ],
     history: [
       { sessionId: 'hist-1', title: '创建一个HTML', state: 'done', source: 'dsh', agentName: 'DSH', model: 'deepseek-v4-pro', updatedAt: now - 86400000, kind: 'main', projectKey: 'ws-1' },
-      { sessionId: 'hist-cc', title: '修复 replay fixture', state: 'done', source: 'claude-code', agentName: 'Claude Code', model: 'glm-5.3', updatedAt: now - 5400000, kind: 'main', projectKey: 'ws-1' },
-      { sessionId: 'hist-cx', title: 'SVG鹈鹕动画', state: 'done', source: 'codex', agentName: 'Codex', model: 'gpt-6-sol', updatedAt: now - 6600000, kind: 'main', projectKey: 'ws-2' },
+      { sessionId: 'hist-cc', title: '修复 replay fixture', state: 'done', source: 'claude-code', agentName: 'Claude Code', model: 'glm-5.3', updatedAt: now - 5400000, kind: 'main', projectKey: 'ws-1', variant: 'cli' },
+      { sessionId: 'hist-cx', title: 'SVG鹈鹕动画', state: 'done', source: 'codex', agentName: 'Codex', model: 'gpt-6-sol', updatedAt: now - 6600000, kind: 'main', projectKey: 'ws-2', variant: 'desktop' },
       { sessionId: 'hist-km', title: '前端简洁科技感重设计', state: 'idle', source: 'kimi-code', agentName: 'Kimi Code', model: 'k3', updatedAt: now - 9000000, kind: 'main', projectKey: '__none__' },
       { sessionId: 'hist-sub', title: '子代理历史', state: 'idle', agentName: 'DSH', kind: 'subagent', projectKey: 'ws-1', updatedAt: now - 1000 },
     ],
@@ -118,11 +118,13 @@ sandbox.render(snap);
 const checks = [
   ['顶部 agent 切换渲染 5 个 tab（全部/DSH/CLAUDE/CODEX/KIMI）', (tabsHtml.match(/class="tab/g) || []).length === 5 && tabsHtml.includes('全部') && tabsHtml.includes('CODEX')],
   ['默认 4 个实时行（子代理被过滤）', (rows.match(/class="srow"/g) || []).length === 4 && !rows.includes('session-sub')],
-  ['会话行可辨来源与项目（CLAUDE-CODE 来源列 + 项目名进 meta）', rows.includes('>CLAUDE-CODE</span>') && rows.includes('· agent桌宠')],
-  ['历史行来源列（CODEX / KIMI-CODE）', rows.includes('>CODEX</span>') && rows.includes('>KIMI-CODE</span>')],
+  ['会话行可辨来源与项目（来源列 + 项目名进 meta）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('· agent桌宠')],
+  ['来源列区分命令行/桌面版本（CLAUDE·桌面 / CODEX·CLI 实时；CLAUDE·CLI / CODEX·桌面 历史）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('>CODEX·CLI</span>') && rows.includes('>CLAUDE·CLI</span>') && rows.includes('>CODEX·桌面</span>')],
+  ['历史行来源列（CODEX·桌面 / KIMI）', rows.includes('>CODEX·桌面</span>') && rows.includes('>KIMI</span>')],
   ['左侧项目列表（全部项目 + 3 项，含进行中计数）', (projHtml.match(/class="pitem/g) || []).length === 4 && projHtml.includes('3 进行') && projHtml.includes('agent桌宠')],
   ['软件状态面板 6 行四态', (agentsHtml.match(/class="arow"/g) || []).length === 6 && ['已连接', '已打开 · 未连接', '未打开', '未下载'].every(t => agentsHtml.includes(t))],
   ['Kimi 精确会话计数（9 会话，无 ≈）', agentsHtml.includes('9 会话') && !agentsHtml.includes('≈9 会话')],
+  ['软件面板区分 CLI/桌面会话计数（CLI 13 · 桌面 33 会话）', agentsHtml.includes('CLI 13 · 桌面 33 · IDE 4 会话')],
   ['顶部切 CLAUDE → 仅 claude 实时行 + claude 历史', rowsClaude.includes('data-session="session-2"') && rowsClaude.includes('data-session="hist-cc"') && !rowsClaude.includes('data-session="session-1"') && !rowsClaude.includes('data-session="hist-1"')],
   ['顶部切 CLAUDE → 项目侧栏只留含 claude 的项目（仅 ws-1）', (projClaude.match(/class="pitem/g) || []).length === 2 && projClaude.includes('agent桌宠') && !projClaude.includes('原生AI操作系统')],
   ['proj-hint 反映 agent 过滤', hintClaude.includes('CLAUDE-CODE') && hintClaude.includes('claude') === false],

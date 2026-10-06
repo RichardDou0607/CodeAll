@@ -38,6 +38,7 @@ button:hover{border-color:#3d4a60}
   <button id="m-cycle" title="轮换到下一个会话（其余会话隐藏，仅在此轮换）">⟳ 0</button>
   <button id="m-expand" title="展开 App 界面（查看全部会话 / 项目 / 投递）">⤢</button>
   <button id="m-pin" title="置顶迷你条">📌</button>
+  <button id="m-hide" title="隐藏迷你条（附属条；可从 App「◧ 迷你条」或托盘菜单唤回）">✕</button>
 </div>
 <script>
 window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
@@ -48,7 +49,9 @@ const RANK={waiting:0,'transient-error':1,error:2,running:3,working:3,thinking:4
 const $=id=>document.getElementById(id);
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function mmss(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
+const VARIANT_LABEL={cli:'CLI',desktop:'桌面',ide:'IDE'};
 function shortSrc(s){return String(s||'dsh').toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI')}
+function srcTag(s){return shortSrc(s&&s.source)+(s&&s.variant&&VARIANT_LABEL[s.variant]?'·'+VARIANT_LABEL[s.variant]:'')}
 function projNameOf(s,projList){
   const p=projList.find(x=>x.key===s.projectKey);
   return p?p.name:(s.cwd?String(s.cwd).split('/').pop():'');
@@ -126,7 +129,7 @@ function render(snap){
   let state,act,tm,pend=0,col,src='—',title='全部空闲',sub='',tip='';
   if(sel){
     state=STATE_LABEL[sel.state]||sel.state;col=COLOR[sel.state]||'#8b98a9';
-    src=shortSrc(sel.source);
+    src=srcTag(sel);
     title=sel.label||sel.title||sel.id;
     const proj=projNameOf(sel,projList);
     sub='· '+proj+(sel.model?' · '+sel.model:'');
@@ -166,6 +169,13 @@ $('m-cycle').addEventListener('click',ev=>{ev.stopPropagation();
   render(snap);
 });
 $('m-expand').addEventListener('click',ev=>{ev.stopPropagation();showApp()});
+$('m-hide').addEventListener('click',async ev=>{ev.stopPropagation();
+  try{
+    const T=window.__TAURI__;
+    if(T&&T.window&&T.window.getCurrentWindow){await T.window.getCurrentWindow().hide();return}
+  }catch(e){}
+  try{await window.__TAURI_INTERNALS__.invoke('plugin:window|hide',{label:'main'})}catch(e){}
+});
 let es=null;
 function connect(){
   es=new EventSource('/api/stream');
