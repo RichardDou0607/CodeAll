@@ -154,9 +154,15 @@ export function deliverViaCli(source, session, text) {
       detached: true, stdio: ['ignore', out, out],
       env: sanitizedEnv(),
     });
-    child.unref();
     const pid = child.pid;
-    child.on('error', () => { /* spawn 失败已由调用方按返回值兜底；异步错误进日志 */ });
+    if (!pid) {
+      // spawn 的 ENOENT（二进制消失 / cwd 已被移动或删除）是异步错误：pid 为 undefined。
+      // 不能当「已投递」回报——这是把静默失败当成功的洞（烟测 ME3 抓到）。
+      try { child.on('error', () => {}); } catch {}
+      return { ok: false, error: 'spawn', detail: t.bin + ' 启动失败：二进制或会话目录（cwd）不可用' };
+    }
+    child.unref();
+    child.on('error', () => { /* pid 已在：真异步错误进日志文件 */ });
     setTimeout(() => { try { fs.closeSync(out); } catch { /* 已随进程退出 */ } }, 30_000).unref();
     return { ok: true, via: t.bin + ' 无头续会话（异步，pid ' + pid + '）', pid, logFile };
   } catch (e) {

@@ -177,7 +177,7 @@ let cx;
     // ---- --live：控制→观察闭环（每后端挑一个**最小**旧会话，真实无头投递一条「只回复 ok」，等会话文件增长）----
     if (LIVE) {
       const pickSmallest = (cat, capBytes) => (cat.sessions || [])
-        .filter((s) => s.kind !== 'subagent' && (s.bytes ?? 0) > 0 && (s.bytes ?? 0) < capBytes)
+        .filter((s) => s.kind !== 'subagent' && (s.bytes ?? 0) > 0 && (s.bytes ?? 0) < capBytes && (!s.cwd || fs.existsSync(s.cwd)))
         .sort((a, b) => (a.bytes ?? 0) - (b.bytes ?? 0))[0] ?? null;
       const waitForGrowth = async (file, before, timeoutMs) => {
         for (let i = 0; i < Math.ceil(timeoutMs / 2000); i++) {

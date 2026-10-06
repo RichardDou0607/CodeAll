@@ -47,7 +47,7 @@ export const LOCAL_AGENTS = Object.freeze([
     appBundle: '/Applications/DeepSeek Harness.app',
     processRe: /DeepSeek Harness\.app\/|(^|\s)DeepSeek Harness(\s|$)/,
     activity: [{ dir: path.join(HOME, '.dsh', 'sessions'), depth: 3, fileRe: /\.jsonl(\.zstd)?$/ }],
-    note: '连接 = DSH 插件 socket（真连接）或会话日志 45s 内有写入',
+    note: '连接 = 插件 socket / 事件流 / 日志新鲜（DSH 专用的真连接口径）',
   },
   {
     id: 'claude-code', name: 'Claude Code', source: 'claude-code',
@@ -60,7 +60,7 @@ export const LOCAL_AGENTS = Object.freeze([
     ],
     processRe: /(^|\/)claude(\s|$)|@anthropic-ai\/claude-code|anthropic\.claude-code/,  // 大小写敏感：不匹配 Claude.app（聊天 App，E 级排除）
     activity: [{ dir: path.join(HOME, '.claude', 'projects'), depth: 2, fileRe: /\.jsonl$/ }],
-    note: '连接 = 转录 JSONL 45s 内有写入',
+    note: '连接 = 观察通道健康（进程在跑 + 转录目录可读）；静默不算断连',
   },
   {
     id: 'codex', name: 'Codex', source: 'codex',
@@ -71,7 +71,7 @@ export const LOCAL_AGENTS = Object.freeze([
     ],
     processRe: /(^|\/)codex(\s|$)|Codex\+\+/,  // codex-disk-* 不匹配（要求 codex 后是空白/行尾）
     activity: [{ dir: path.join(HOME, '.codex', 'sessions'), depth: 4, fileRe: /^rollout-.*\.jsonl$/ }],
-    note: '含 Codex++ 桌面壳；连接 = rollout 45s 内有写入',
+    note: '含 Codex++ 桌面壳；连接 = 观察通道健康；静默不算断连',
   },
   {
     id: 'kimi-code', name: 'Kimi Code', source: 'kimi-code',
@@ -197,14 +197,23 @@ export async function scanLocalAgents(ctx = {}) {
     }
     const installed = evidence.length > 0 || procs.length > 0;
     if (procs.length) evidence.push('运行中进程 pid=' + procs.join(','));
-    // 连接：只对「已安装且在运行」的软件判定（未运行时保留 lastActivity 仅供展示）
+    // 连接语义（2026-10-06 修正）：「已连接」= 观察通道健康——进程在跑且数据目录可读。
+    // 不再要求 45s 内有写入（agent 开着但没在跑回合 ≠ 断连，此前把静默误判成「未连接」）。
+    // 活跃度单独表达：lastActivityMs 仍在 meta 显示「活动中/静默 Ns 前」；DSH 保持插件 socket = 真连接优先。
     let lastActivityMs = null;
-    for (const act of a.activity) { const m = newestMtime(act.dir, act.depth, act.fileRe); if (m && (!lastActivityMs || m > lastActivityMs)) lastActivityMs = m; }
+    let dataReadable = false;
+    for (const act of a.activity) {
+      const m = newestMtime(act.dir, act.depth, act.fileRe);
+      if (m && (!lastActivityMs || m > lastActivityMs)) lastActivityMs = m;
+      try { if (fs.existsSync(act.dir)) dataReadable = true; } catch { /* ignore */ }
+    }
     let connected = false, connectionKind = null;
     if (installed && procs.length > 0) {
       if (a.id === 'dsh' && ctx.dsh?.plugin) { connected = true; connectionKind = 'plugin'; }
-      else if (lastActivityMs && now - lastActivityMs < windowMs) { connected = true; connectionKind = 'log'; }
       else if (a.id === 'dsh' && Number.isFinite(ctx.dsh?.lastEventAt) && now - ctx.dsh.lastEventAt < windowMs) { connected = true; connectionKind = 'event'; }
+      else if (a.id === 'dsh' && lastActivityMs && now - lastActivityMs < windowMs) { connected = true; connectionKind = 'log'; }
+      else if (a.id !== 'dsh' && dataReadable) { connected = true; connectionKind = 'observe'; }
+      else if (lastActivityMs && now - lastActivityMs < windowMs) { connected = true; connectionKind = 'log'; }
     }
     const status = !installed ? 'not-installed' : procs.length === 0 ? 'closed' : connected ? 'connected' : 'open-unconnected';
     agents.push({

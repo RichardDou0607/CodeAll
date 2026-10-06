@@ -22,6 +22,25 @@ header .logo small{color:var(--dim);font-weight:400;font-size:10px;margin-left:4
 .chips{display:flex;gap:4px;flex:0 0 auto}
 .chip{font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 6px;white-space:nowrap}
 .hbtn{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:8px;font-size:11px;padding:4px 9px;cursor:pointer;flex:0 0 auto}
+#view-nav{display:flex;gap:4px;flex:0 0 auto;background:#0d1117;border:1px solid var(--line);border-radius:9px;padding:3px}
+#view-nav button{background:none;border:none;color:var(--dim);font-size:11px;padding:3px 10px;border-radius:6px;cursor:pointer}
+#view-nav button.on{color:#fff;background:#1d2531}
+/* ---- 软件状态独立页 ---- */
+#status-page{flex:1;min-height:0;overflow:auto;padding:16px 18px;display:none}
+#status-page.on{display:block}
+.sp-title{font-size:15px;font-weight:700;margin:0 0 2px}
+.sp-sub{font-size:11px;color:var(--dim);margin-bottom:14px}
+#status-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+.scard{background:#12161f;border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.scard .sc-head{display:flex;align-items:center;gap:8px}
+.scard .sc-dot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 8px currentColor;flex:0 0 auto}
+.scard .sc-name{font-size:13px;font-weight:700;flex:1}
+.scard .sc-badge{font-size:11px;font-weight:600;flex:0 0 auto}
+.scard .sc-row{font-size:11.5px;color:#c3ceda;display:flex;gap:6px}
+.scard .sc-row b{color:var(--txt);font-weight:600}
+.scard .sc-row .k{color:var(--dim);flex:0 0 auto}
+.scard .sc-note{font-size:10.5px;color:var(--dim)}
+.scard .sc-ev{font-size:10px;color:#5c6a7e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* ---- 主体：左项目 / 右会话 ---- */
 #main{flex:1;display:flex;min-height:0}
 aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid var(--line);min-height:0}
@@ -50,11 +69,13 @@ aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid v
 .srow:hover{background:rgba(255,255,255,.03)}
 .srow.sel{background:rgba(31,111,235,.14);box-shadow:inset 2px 0 0 var(--acc)}
 .srow .src{width:64px;font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}
-.srow .mid{flex:1;min-width:0}
+.srow .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .srow .lbl{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .srow .meta{font-size:10.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .srow .st{font-size:11px;flex:0 0 auto}
 .srow .pend{font-size:10px;color:var(--wait);flex:0 0 auto}
+.srow .hx{flex:0 0 auto;font-size:10px;color:#5c6a7e;cursor:pointer;border:1px solid transparent;border-radius:5px;padding:0 3px}
+.srow .hx:hover{color:var(--txt);border-color:var(--line)}
 .srow .tm{width:44px;text-align:right;color:var(--dim);font-size:10px;flex:0 0 auto}
 .srow.hist .lbl{color:#c3ceda}
 .empty{padding:18px 12px;color:var(--dim);font-size:12px;text-align:center}
@@ -82,6 +103,10 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
 <div id="app">
   <header>
     <span class="logo">AgentPet<small>总控</small></span>
+    <nav id="view-nav">
+      <button id="view-sessions" class="on" title="会话总览（实时 / 历史 / 投递）">会话</button>
+      <button id="view-status" title="软件状态独立页（四态 / 通道 / CLI与桌面 / 证据）">软件</button>
+    </nav>
     <nav id="agent-tabs"></nav>
     <span class="aggchip"><span class="dot" id="agg-dot"></span><span id="agg-text">连接中…</span></span>
     <span class="chips" id="chips"></span>
@@ -89,14 +114,14 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
   </header>
   <div id="main">
     <aside>
-      <div class="side-h">项目（左侧切换）</div>
+      <div class="side-h">项目</div>
       <div id="projects"><div class="empty">读取中…</div></div>
-      <div class="side-h">软件状态</div>
-      <div id="agents"><div class="empty" style="padding:6px 12px">探测中…</div></div>
     </aside>
     <section id="content">
       <div id="toolbar">
         <button class="btn" id="toggle-history">历史会话</button>
+        <button class="btn" id="hide-done" title="手动隐藏所有已完成/空闲的实时会话（会话再次活动时自动复现）">隐藏已完成</button>
+        <button class="btn" id="restore-hidden" style="display:none" title="恢复显示所有被手动隐藏的会话">恢复已隐藏</button>
         <button class="btn" id="new-session" disabled>＋ 新建会话</button>
         <span class="sp"></span>
         <span id="proj-hint" style="font-size:10px;color:var(--dim)"></span>
@@ -104,6 +129,11 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
       <div id="sessions"><div class="empty">正在读取会话状态…</div></div>
     </section>
   </div>
+  <section id="status-page">
+    <div class="sp-title">软件状态</div>
+    <div class="sp-sub">本机 agent 软件 · 四态（已连接 / 已打开 / 未打开 / 未下载）· 观察通道 · 命令行版与桌面版</div>
+    <div id="status-cards"></div>
+  </section>
   <footer>
     <div class="trow" id="target" title="点击恢复自动选择">投递目标：自动 · 最近活跃主会话（点击会话行可指定）</div>
     <div class="composer">
@@ -160,30 +190,42 @@ function render(snap){
     +projList.map(p=>'<div class="pitem'+(p.key===pid?' on':'')+'" data-proj="'+esc(p.key)+'" title="'+esc(p.cwd||'')+'"><span class="pname">'+esc(p.name)+'</span><span class="pcnt">'+(p.liveCount?'<span class="plive">'+p.liveCount+' 进行</span> · ':'')+p.sessionCount+'</span></div>').join('');
   const projEl=$('projects');
   if(projEl.__petLastHtml!==projHtml){projEl.innerHTML=projHtml;projEl.__petLastHtml=projHtml}
-  // ---- 左侧：软件四态 ----
-  const agentsEl=$('agents');
+  // ---- 软件状态独立页（视图=view-status 时展示，不与会话页重叠） ----
+  const view=window.__VIEW__||'sessions';
+  $('main').style.display=view==='sessions'?'flex':'none';
+  $('status-page').className=view==='status'?'on':'';
+  const sessPane=$('toolbar');
+  if(sessPane)sessPane.style.visibility=view==='sessions'?'visible':'hidden';
   const agentsList=(snap.agents||[]);
-  let ahtml='';
-  if(!agentsList.length)ahtml='<div class="empty" style="padding:6px 12px">正在探测本机 agent 软件…</div>';
-  else ahtml=agentsList.map(a=>{
-    const st=a.status||'closed',col=AGENT_STATUS_COLOR[st]||'#8b98a9';
-    const meta=[];
-    if(a.version)meta.push('v'+a.version);
-    if(st==='connected')meta.push(a.connectionKind==='plugin'?'插件通道':a.connectionKind==='event'?'事件流':'日志通道');
-    if(a.running&&a.processes>1)meta.push(a.processes+' 进程');
-    if(a.id==='kimi-code'&&a.sessionCount!=null)meta.push((a.sessionCountApproximate?'≈':'')+a.sessionCount+' 会话');
-    if(st==='closed'&&a.lastActivityMs)meta.push('上次活动 '+relTime(a.lastActivityMs,now));
-    if(st==='open-unconnected'&&a.note)meta.push(a.note);
-    if(st==='not-installed')meta.push('未检测到安装痕迹');
-    if(a.variants){const parts=[];if(a.variants.cli)parts.push('CLI '+a.variants.cli);if(a.variants.desktop)parts.push('桌面 '+a.variants.desktop);if(a.variants.ide)parts.push('IDE '+a.variants.ide);if(parts.length)meta.push(parts.join(' · ')+' 会话')}
-    return '<div class="arow" data-agent="'+esc(a.id)+'" title="'+esc((a.evidence||[]).join('\n')+(a.note?'\n'+a.note:''))+'">'
-      +'<span class="adot" style="background:'+col+';color:'+col+'"></span>'
-      +'<span class="aname">'+esc(a.name)+'</span><span class="ameta">'+esc(meta.join(' · '))+'</span>'
-      +'<span class="astate '+st+'" style="color:'+col+'">'+(AGENT_STATUS_LABEL[st]||st)+'</span></div>';
-  }).join('');
-  if(agentsEl.__petLastHtml!==ahtml){agentsEl.innerHTML=ahtml;agentsEl.__petLastHtml=ahtml}
+  const CH_LABEL={plugin:'插件通道',event:'事件流',log:'日志通道',observe:'观察通道（只读健康）'};
+  const cardsHtml=!agentsList.length
+    ?'<div class="empty">正在探测本机 agent 软件…</div>'
+    :agentsList.map(a=>{
+      const st=a.status||'closed',col=AGENT_STATUS_COLOR[st]||'#8b98a9';
+      const rows=[];
+      rows.push('<div class="sc-row"><span class="k">版本</span><b>'+(a.version?'v'+esc(a.version):'—')+'</b><span class="k">· 通道</span><b>'+(st==='connected'&&a.connectionKind?(CH_LABEL[a.connectionKind]||a.connectionKind):'—')+'</b>'+(a.running&&a.processes?'<span class="k">· 进程</span><b>'+a.processes+'</b>':'')+'</div>');
+      if(a.lastActivityMs){
+        const active=now-a.lastActivityMs<45000;
+        rows.push('<div class="sc-row"><span class="k">'+(active?'活动中':'静默')+'</span><b>'+relTime(a.lastActivityMs,now)+'</b></div>');
+      }
+      if(a.variants){const parts=[];if(a.variants.cli)parts.push('CLI '+a.variants.cli);if(a.variants.desktop)parts.push('桌面 '+a.variants.desktop);if(a.variants.ide)parts.push('IDE '+a.variants.ide);if(parts.length)rows.push('<div class="sc-row"><span class="k">会话形态</span><b>'+parts.join(' · ')+' 会话</b></div>')}
+      if(a.id==='kimi-code'&&a.sessionCount!=null)rows.push('<div class="sc-row"><span class="k">会话总数</span><b>'+(a.sessionCountApproximate?'≈':'')+a.sessionCount+'</b></div>');
+      if(a.note)rows.push('<div class="sc-note">'+esc(a.note)+'</div>');
+      if((a.evidence||[]).length)rows.push('<div class="sc-ev" title="'+esc(a.evidence.join('\n'))+'">'+esc(a.evidence.slice(0,3).join(' · '))+'</div>');
+      return '<div class="scard" data-agent="'+esc(a.id)+'">'
+        +'<div class="sc-head"><span class="sc-dot" style="background:'+col+';color:'+col+'"></span><span class="sc-name">'+esc(a.name)+'</span><span class="sc-badge" style="color:'+col+'">'+(AGENT_STATUS_LABEL[st]||st)+'</span></div>'
+        +rows.join('')+'</div>';
+    }).join('');
+  const cardsEl=$('status-cards');
+  if(cardsEl.__petLastHtml!==cardsHtml){cardsEl.innerHTML=cardsHtml;cardsEl.__petLastHtml=cardsHtml}
+  const vSel=$('view-sessions'),vSta=$('view-status');
+  vSel.className=view==='sessions'?'on':'';vSta.className=view==='status'?'on':'';
   // ---- 会话列表（实时 + 历史）----
-  const rows=(snap.sessions||[]).filter(s=>(!agentSel||s.source===agentSel)&&s.kind!=='subagent'&&inProj(s));
+  // 手动隐藏：只对 done/idle 生效；被隐藏的会话一旦再次活动（thinking/running/waiting/…）自动复现
+  if(!window.__HIDDEN__)window.__HIDDEN__=[];
+  const hidden=window.__HIDDEN__;
+  const isRetired=(s)=>['done','idle'].includes(s.state)&&(s.id!==undefined?hidden.includes(s.id):hidden.includes(s.sessionId));
+  const rows=(snap.sessions||[]).filter(s=>(!agentSel||s.source===agentSel)&&s.kind!=='subagent'&&inProj(s)&&!isRetired(s));
   const showHist=window.__SHOW_HISTORY__===true;
   const histAll=((snap.catalog&&snap.catalog.history)||[])
     .filter(s=>(!agentSel||s.source===agentSel)&&s.kind!=='subagent'&&inProj(s));
@@ -203,6 +245,7 @@ function render(snap){
         +'<span class="mid"><span class="lbl">'+esc(s.label||s.title||s.id)+'</span><span class="meta">'+esc(metaLine(s))+proj+'</span></span>'
         +'<span class="st" style="color:'+col+'">'+(STATE_LABEL[st]||st)+'</span>'
         +(s.pending?'<span class="pend">待办 '+s.pending+'</span>':'')
+        +(st==='done'||st==='idle'?'<span class="hx" data-hide="'+esc(s.id)+'" title="隐藏该已完成会话（再次活动时自动复现）">✕</span>':'')
         +'<span class="tm">'+(st==='idle'?'--':st==='done'?'完成':mmss(s.elapsedMs||0))+'</span></div>';
     }).join('');
   }else{
@@ -218,6 +261,12 @@ function render(snap){
         +'<span class="st" style="color:'+col+'">'+(STATE_LABEL[s.state]||s.state)+'</span><span class="tm">打开</span></div>';
     }).join(''):'<div class="empty">没有历史会话</div>';
   }
+  const doneRows=(snap.sessions||[]).filter(s=>(!agentSel||s.source===agentSel)&&s.kind!=='subagent'&&inProj(s)&&['done','idle'].includes(s.state)&&!isRetired(s));
+  $('hide-done').textContent=doneRows.length?('隐藏已完成 '+doneRows.length):'隐藏已完成';
+  $('hide-done').disabled=!doneRows.length;
+  const rBtn=$('restore-hidden');
+  rBtn.style.display=(window.__HIDDEN__||[]).length?'':'none';
+  rBtn.textContent='恢复已隐藏 '+(window.__HIDDEN__||[]).length;
   const sessEl=$('sessions');
   if(sessEl.__petLastHtml!==html){sessEl.innerHTML=html;sessEl.__petLastHtml=html}
   $('proj-hint').textContent=(agentSel?('仅 '+agentSel.toUpperCase()+' · '):'')+(curProj?curProj.name:'全部项目')+' · 实时 '+rows.length+' / 历史 '+hist.length;
@@ -276,9 +325,29 @@ async function openSession(id){
 }
 $('send').onclick=send;
 $('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+$('view-sessions').onclick=function(){window.__VIEW__='sessions';if(window.__SNAP__)render(window.__SNAP__)};
+$('view-status').onclick=function(){window.__VIEW__='status';if(window.__SNAP__)render(window.__SNAP__)};
 $('agent-tabs').addEventListener('click',e=>{const t=e.target.closest('[data-agent]');if(!t)return;window.__AGENT__=t.getAttribute('data-agent');if(window.__SNAP__)render(window.__SNAP__)});
 $('projects').addEventListener('click',e=>{const t=e.target.closest('[data-proj]');if(!t)return;window.__PROJECT__=t.getAttribute('data-proj')||'';if(window.__SNAP__)render(window.__SNAP__)});
 $('toggle-history').onclick=function(){window.__SHOW_HISTORY__=!window.__SHOW_HISTORY__;if(window.__SNAP__)render(window.__SNAP__)};
+function persistHidden(){try{localStorage.setItem('agent-pet-hidden',JSON.stringify(window.__HIDDEN__||[]))}catch(e){}}
+function loadHidden(){try{window.__HIDDEN__=window.__HIDDEN__||JSON.parse(localStorage.getItem('agent-pet-hidden')||'[]')}catch(e){}}
+loadHidden();
+$('hide-done').onclick=function(){
+  loadHidden();
+  const snap=window.__SNAP__||{};
+  const done=(snap.sessions||[]).filter(s=>['done','idle'].includes(s.state));
+  for(const s of done)if(!window.__HIDDEN__.includes(s.id))window.__HIDDEN__.push(s.id);
+  persistHidden();
+  $('note').textContent='已手动隐藏 '+done.length+' 个已完成/空闲会话（再次活动时自动复现）';
+  render(snap);
+};
+$('restore-hidden').onclick=function(){
+  const n=(window.__HIDDEN__||[]).length;
+  window.__HIDDEN__=[];persistHidden();
+  $('note').textContent='已恢复显示 '+n+' 个被隐藏的会话';
+  if(window.__SNAP__)render(window.__SNAP__);
+};
 // 新建会话：agent tab 指定了后端就用它；否则按项目来源挑（DSH 插件优先，其次 CLI）
 $('new-session').onclick=async function(){
   const snap=window.__SNAP__||{};
@@ -295,6 +364,8 @@ $('new-session').onclick=async function(){
 };
 // 会话行点击 = 选为投递目标（再点一次取消）；历史行同时打开
 $('sessions').addEventListener('click',e=>{
+  const h=e.target.closest('[data-hide]');
+  if(h){e.stopPropagation();loadHidden();const id=h.getAttribute('data-hide');if(!window.__HIDDEN__.includes(id))window.__HIDDEN__.push(id);persistHidden();if(window.__SNAP__)render(window.__SNAP__);$('note').textContent='已隐藏该会话（再次活动时自动复现）';return}
   const t=e.target.closest('[data-session]');
   if(!t)return;
   const id=t.getAttribute('data-session');

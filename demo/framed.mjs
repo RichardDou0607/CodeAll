@@ -320,6 +320,7 @@ function snapshot() {
     if (cwd) { const w = ws.byPath.get(cwd); if (w) return w; }
     return cwd ? 'path:' + cwd : '__none__';
   };
+  // 实时区保留全部会话（含已完成）——隐藏由 UI 手动触发（用户反馈：要手动隐藏，不要自动退场）
   const live = state.order.map(id => state.sessions.get(id)).filter(Boolean).filter(s => !isSubagent(s.id, s)).map(s => {
     const meta = metaById.get(s.id) || {};
     return {

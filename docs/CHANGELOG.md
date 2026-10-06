@@ -178,3 +178,16 @@
   - 适配器新增 `variant` 字段：Claude ← `entrypoint`（本机实测 cli×13 / sdk-cli / claude-desktop-3p×243 / claude-vscode → CLI/桌面/IDE）；Codex ← `session_meta.originator`（Codex Desktop → 桌面，CLI 发起 → CLI）；Kimi ← `turn.prompt.origin.clientMetadata` 含 kimi_code_composer → 桌面，否则 CLI（本机 CLI 3 / 桌面 6）。
   - UI：来源徽标带形态（`CLAUDE·桌面` / `CODEX·桌面` / `KIMI·CLI`），迷你条同款；软件四态面板每行显示「CLI n · 桌面 m 会话」计数（实测 Claude Code：CLI 13 · 桌面 33 · IDE 4）。
 - 验证：34 项验收（新增 MA8/MB7/MK10 形态断言）+ App 24 项 + 迷你条 11 项全绿；浏览器实测 App/迷你条徽标与面板计数。
+
+### 实时会话退场 + 连接语义修正 + 软件状态独立页（2026-10-06 夜）
+
+- **实时区自动隐藏已完成会话**：done/idle 状态超过 12s 的会话退出实时列表（此前每条跑完的会话都永久留在实时区）；历史区仍可查。
+- **连接语义修正**（"没发消息就显示未连接"的误判根因）：「已连接」改为 = 观察通道健康——进程在跑 + 数据目录可读；不再要求 45s 内有写入。静默≠断连；活跃度单独表达（状态页显示「活动中 Ns 前 / 静默 Ns 前」）。DSH 维持插件 socket/事件流的真连接口径。实测三家开着即已连接（observe 通道）。
+- **软件状态独立页**（不再挤在侧栏）：App 头部新增视图导航「会话 / 软件」——软件页为整页卡片视图（6 张卡：四态徽标、版本、观察通道、进程、活跃度、CLI/桌面会话形态计数、Kimi 计数、证据路径），与会话视图互斥不重叠；侧栏恢复纯项目列表。
+- 验证：test-window 新增状态页场景断言（视图互斥/卡片/通道/活跃度/形态计数）全绿；实测 done 会话 12s 退场、三家 connected/observe、状态页 6 卡（4 已连接 + 2 未打开）。
+
+### 已完成会话改手动隐藏 + 最终烟测回归（2026-10-06 深夜 II）
+
+- **手动隐藏**（替换上一轮的 12s 自动退场）：已完成/空闲会话常驻实时区；工具栏「隐藏已完成 N」批量隐藏 + 行内 ✕ 单条隐藏；「恢复已隐藏 N」一键复原；被隐藏会话再次活动自动复现；偏好存 localStorage。修一处补丁失配导致的 loadHidden ReferenceError（浏览器烟测抓到）。
+- **烟测新 bug（已修）**：投递目标会话的 cwd 被删除时 spawn 异步 ENOENT（pid undefined）被误报已投递——deliverViaCli 现判 pid 缺失为失败；验收脚本跳过 cwd 失效会话（ME3 复绿）。
+- **最终烟测+回归**：9 套件通过（App 34 / 迷你 11 / 静态 31 / live 34 / 目录 15 / schema / replay / cli-control / html），正式版双窗+端点+四态+形态计数+手动隐藏闭环全部实测；报告见 qa/final-smoke-2026-10-06.md。
