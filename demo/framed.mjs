@@ -24,6 +24,7 @@ import { scanCatalog, readWorkspaceIndex } from '../adapters/session-catalog.mjs
 import { scanLocalAgents } from '../adapters/local-agents.mjs';
 import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
+import { scanKimiCatalog, followKimiLogs, SOURCE as KM_SOURCE } from '../adapters/kimi-code-adapter.mjs';
 import net from 'node:net';
 import crypto from 'node:crypto';
 
@@ -208,16 +209,18 @@ function workspaceIndex(force) {
   }
   return wsCache.data;
 }
-// 多源目录缓存：DSH + Claude Code + Codex 三路扫描合并（各 ~20ms，5s 复用）
+// 多源目录缓存：DSH + Claude Code + Codex + Kimi Code 四路扫描合并（各 ~20ms，5s 复用）
 let multiCache = { at: 0, data: null };
 function multiCatalog(force) {
   if (force || !multiCache.data || Date.now() - multiCache.at > 5000) {
     const dsh = catalog(force);
     let cc = { projects: [], sessions: [], elapsedMs: 0 };
     let cx = { projects: [], sessions: [], elapsedMs: 0 };
+    let km = { projects: [], sessions: [], elapsedMs: 0 };
     try { cc = scanClaudeCatalog(); } catch (e) { cc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
     try { cx = scanCodexCatalog(); } catch (e) { cx = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
-    multiCache = { at: Date.now(), data: { dsh, cc, cx, elapsedMs: (dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) } };
+    try { km = scanKimiCatalog(); } catch (e) { km = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+    multiCache = { at: Date.now(), data: { dsh, cc, cx, km, elapsedMs: (dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0) } };
   }
   return multiCache.data;
 }
@@ -290,11 +293,12 @@ function snapshot() {
   const multi = multiCatalog(false);
   const cat = multi.dsh;
   const ws = workspaceIndex(false);
-  // 跨源元信息表：sessionId → 目录记录（claude/codex 记录自带 source / agentName / model）
+  // 跨源元信息表：sessionId → 目录记录（claude/codex/kimi 记录自带 source / agentName / model）
   const metaById = new Map();
   for (const p of cat.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   for (const p of multi.cc.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   for (const p of multi.cx.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
+  for (const p of multi.km.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   // 子代理判定：插件 session.start 的 origin 立即可判（零延迟）；目录 kind 兜底（≤5s 滞后）
   const isSubagent = (id, s) => s?.origin === 'subagent' || (metaById.get(id)?.kind || 'main') === 'subagent';
   // projectKey：DSH 注册表优先；claude/codex 按 cwd 归并进同目录 workspace；都不中 → 'path:<cwd>'（M-C）
@@ -338,6 +342,7 @@ function snapshot() {
   };
   for (const s of multi.cc.sessions || []) collectExtra(s);
   for (const s of multi.cx.sessions || []) collectExtra(s);
+  for (const s of multi.km.sessions || []) collectExtra(s);
 
   const sidebarProjects = [];
   const listed = new Set();
@@ -363,7 +368,7 @@ function snapshot() {
       sessions: all,
     });
   }
-  // 未挂靠任何 workspace 的 claude/codex 项目组（cwd 自立；claude 与 codex 同 cwd 进同一组）
+  // 未挂靠任何 workspace 的 claude/codex/kimi 项目组（cwd 自立；同 cwd 的多源会话进同一组）
   for (const [key, g] of orphanByCwd) {
     const rows = g.rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     for (const r of rows) listed.add(r.sessionId);
@@ -414,7 +419,7 @@ function snapshot() {
       })),
       history,
       elapsedMs: multi.elapsedMs, scannedAt: cat.scannedAt,
-      source: 'multi:workspace-registry+disk(claude-code,codex)',
+      source: 'multi:workspace-registry+disk(claude-code,codex,kimi-code)',
     },
     capabilities: {
       canCatalog: true,
@@ -580,7 +585,7 @@ const server = http.createServer(async (req, res) => {
     // M-C：三源合并（DSH / Claude Code / Codex），projects[].sources 标注每个项目的来源构成。
     const multi = multiCatalog(url.searchParams.get('refresh') === '1');
     const projects = [];
-    for (const cat of [multi.dsh, multi.cc, multi.cx]) {
+    for (const cat of [multi.dsh, multi.cc, multi.cx, multi.km]) {
       for (const p of cat.projects || []) {
         const mains = (p.sessions || []).filter(s => s.kind !== 'subagent');
         projects.push(Object.assign({}, p, {
@@ -596,7 +601,7 @@ const server = http.createServer(async (req, res) => {
     const visible = projects.filter(p => p.sessionCount > 0);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(Object.assign({}, multi.dsh, {
-      source: 'multi:workspace-registry+disk(claude-code,codex)',
+      source: 'multi:workspace-registry+disk(claude-code,codex,kimi-code)',
       projects: visible,
       mainSessions: visible.reduce((a, p) => a + p.sessionCount, 0),
       subagentSessions: visible.reduce((a, p) => a + p.subagentCount, 0),
@@ -604,6 +609,7 @@ const server = http.createServer(async (req, res) => {
         dsh: { projects: (multi.dsh.projects || []).length, sessions: (multi.dsh.sessions || []).filter(s => s.kind !== 'subagent').length },
         'claude-code': { projects: (multi.cc.projects || []).length, sessions: (multi.cc.sessions || []).length },
         codex: { projects: (multi.cx.projects || []).length, sessions: (multi.cx.sessions || []).filter(s => s.kind !== 'subagent').length },
+        'kimi-code': { projects: (multi.km.projects || []).length, sessions: (multi.km.sessions || []).length },
       },
     })));
     return;
@@ -753,10 +759,11 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('  输入通道： ' + (INPUT_CMD ? 'PET_INPUT_CMD（自动投递）' : '手动队列（未配置 PET_INPUT_CMD）'));
   startFollower();
   connectPlugin();   // 若 DSH 插件已挂载：进程内事件 + 直接投递
-  // M-A/M-B：Claude Code 与 Codex 的多文件观察跟随（增量 tail → 同一个状态机；Kimi Code 按 M-H 降级为四态面板，无事件）
+  // M-A/M-B/M-H：Claude Code / Codex / Kimi Code 的多文件观察跟随（增量 tail → 同一个状态机）
   const ccFollow = followClaudeLogs({ onEvent: applyEvent });
   const cxFollow = followCodexLogs({ onEvent: applyEvent });
-  console.log('  观察通道： DSH=日志tail/插件 · Claude Code=' + (ccFollow ? '转录tail' : 'off') + ' · Codex=' + (cxFollow ? 'rollout tail' : 'off') + ' · Kimi Code=四态面板（降级）');
+  const kmFollow = followKimiLogs({ onEvent: applyEvent });
+  console.log('  观察通道： DSH=日志tail/插件 · Claude Code=转录tail · Codex=rollout tail · Kimi Code=wire.jsonl tail（M-H A 路径）');
   refreshAgentStatus();
   setInterval(refreshAgentStatus, 3000);   // 软件四态（ps + mtime 探测，实测 ~40ms）
 });

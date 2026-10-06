@@ -126,3 +126,15 @@
 - **实测**：本会话自身被 Claude 跟随器实时观察（running · 运行命令 · glm-5.3）；`鹈鹕测试变体策划[dsh+claude-code+codex]` 同 cwd 三源归并同窗；对 claude 会话投递被 404 + 明确原因拒绝。
 - **文档**：docs/21（M-A/M-B/M-C/M-H 标 ✅ + 落地形态 + §5 现状快照更新）、docs/40（Kimi Code 补行：§0 表 #12 + §3.11 [A] 证据）、README（多源演示命令）。
 - **已知既有问题（与本次无关）**：`scripts/check-fixtures.mjs` 对 `fixtures/session-replay.pet.jsonl` 的乱序窗口断言在改动前的基线上即失败（乱序窗口 ts 跨度 5797ms > 2000ms，非连续 seq），留待 fixture 重新录制修复。
+
+### Kimi Code 升级 A 路径 + Codex CLI 恢复（2026-10-06 下午，代码）
+
+- **勘误（M-H spike 误判根因）**：上午结论「Kimi 会话仅在 Electron LevelDB → 降级」有误——探测命令 `ls -d ~/.kimi* ~/kimi*` 因 `~/kimi*` 无匹配被 zsh 整体中止，`~/.kimi-code/` 从未被列出。Kimi Code 实为 CLI-first 架构，agent 核心写文件级数据；LevelDB 只是前端层缓存。
+- **`adapters/kimi-code-adapter.mjs` 重写（A 路径）**：`scanKimiCatalog()`（state.json 整读 + wire 头/尾窗口，本机 4 项目 / 9 会话 ~4.4ms；标题/titleKind/cwd/模型(modelAlias)/思考档/归档过滤）+ `followKimiLogs()`（`agents/main/wire.jsonl` 多文件增量 tail；非 main agent 流 = 子代理整文件跳过）+ `mapKimiLine()`（turn.prompt→turn.start、loop tool.call/result→tool.call/result、turn.ended(completed/cancelled)→ok/aborted、**interaction.request/resolved 原生审批对（同 id 配对）**、agent.message.appended→message.assistant(280)、turn.step.retrying→error.raised 瞬态）+ `scanKimiLegacyCount()`（LevelDB 计数降为第三层兜底）。state.json 的 lastPrompt（用户原文）不读取。hooks 通道（app.asar 实测 20 事件、command 型、config.toml [hooks]）留作授权升级项。
+- **Codex CLI 恢复（M-E 前置解除）**：`/usr/local` 无写权限 → `npm i -g --prefix ~/.local @openai/codex` → `~/.local/bin/codex` v0.160.1，`codex login status` 确认复用既有 auth.json（API key）已登录。本机 CLI 三件套齐：claude（~/.local/bin）/ kimi（~/.kimi-code/bin/kimi）/ codex。
+- **`adapters/local-agents.mjs`**：kimi-code 安装证据 + `~/.kimi-code` 与 CLI 路径、processRe 匹配 kimi CLI、activity 加 sessions 目录（core）并保留 LevelDB（兜底）；会话计数改为目录精确（LevelDB 兜底才标 ≈）；codex 版本探测（npm package.json，实测 v0.160.1）。
+- **`demo/framed.mjs`**：multiCatalog 四源（+kimi）；`followKimiLogs` 接入同一状态机；/api/catalog perSource 加 kimi-code；快照 source 标注四源。
+- **`demo/window.html`**：Kimi 会话计数精确/近似条件显示；底注与帮助文案更新为四源。
+- **测试**：`scripts/multi-source-check.mjs` 19 → 26 项全绿（新增 MK1–9：A 路径目录/元信息/性能/wire 映射含审批对/非降级 observes/LevelDB 兜底仍在；MC1 升级为要求四源历史行）；`demo/test-window.mjs` 38 项全绿。
+- **实测**：`agent综合管理平台[dsh+claude-code+kimi-code]` 三源同项目；浏览器实测 23 项目 / 92 会话同窗、7 条 KIMI 历史行（真实标题/模型/思考档/状态）、四态面板 kimi-code 精确计数 9、控制台零报错。
+- **文档**：docs/21（M-H 勘误+A 路径落地、M-E 前置解除、§5 快照与 CLI 三件套）、docs/40（§0 表 #12 与 §3.11 重写，含勘误记录）、README。

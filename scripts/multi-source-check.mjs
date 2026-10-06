@@ -19,7 +19,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { scanClaudeCatalog, mapClaudeLine } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, mapCodexLine } from '../adapters/codex-adapter.mjs';
-import { countKimiSessions, OBSERVES as KIMI_OBSERVES } from '../adapters/kimi-code-adapter.mjs';
+import { scanKimiCatalog, mapKimiLine, scanKimiStatus, scanKimiLegacyCount } from '../adapters/kimi-code-adapter.mjs';
 
 const AS_JSON = process.argv.includes('--json');
 const results = [];
@@ -91,11 +91,36 @@ let cx;
     e4[0]?.type === 'turn.end' && e4[0]?.data?.status === 'aborted' && e5[0]?.type === 'session.start' && e5[0]?.data?.workspace === '/tmp/x' && e5[0]?.data?.agentVersion === '0.155.0', {});
 }
 
-// ================================================================ M-H Kimi（降级）
+// ================================================================ M-H Kimi（A 路径：state.json 目录 + wire.jsonl 事件）
 {
-  const k = countKimiSessions();
-  check('MH1', 'Kimi 降级通道：LevelDB 近似计数可用（≥1）且标注 approximate', k.available && k.count >= 1 && k.approximate === true, { count: k.count, files: k.files });
-  check('MH2', 'observes 白名单只含 session.heartbeat（不承诺任何事件族）', KIMI_OBSERVES.length === 1 && KIMI_OBSERVES[0] === 'session.heartbeat', { observes: KIMI_OBSERVES });
+  const t0 = process.hrtime.bigint();
+  const km = scanKimiCatalog();
+  const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  check('MK1', 'Kimi A 路径目录可扫描（≥1 会话 / ≥1 项目）', km.stats.sessions >= 1 && km.stats.projects >= 1, { sessions: km.stats.sessions, projects: km.stats.projects, archived: km.stats.archived });
+  check('MK2', '会话记录完整（cwd / title / 有限 updatedAt；archived 不进列表）',
+    km.sessions.every((s) => s.cwd && s.title && Number.isFinite(s.updatedAt)) && km.sessions.every((s) => !s.archived), {});
+  check('MK3', '模型/思考档来自 wire 头窗口（majority 可得）', km.sessions.filter((s) => s.model).length >= Math.ceil(km.stats.sessions * 0.6), { withModel: km.sessions.filter((s) => s.model).length });
+  const STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'waiting', 'unknown']);
+  check('MK4', '粗状态在已知集合内', km.sessions.every((s) => STATE_SET.has(s.state)), { states: [...new Set(km.sessions.map((s) => s.state))] });
+  check('MK5', '扫描性能 < 300ms', tookMs < 300, { tookMs: Number(tookMs.toFixed(1)) });
+  const ctx = { sessionId: 'session_x', seq: 0 };
+  const e1 = mapKimiLine({ type: 'turn.prompt', turnId: 3, time: 1 }, ctx);
+  const e2 = mapKimiLine({ type: 'context.append_loop_event', event: { type: 'tool.call', uuid: 'u1', name: 'Bash' }, time: 2 }, ctx);
+  const e3 = mapKimiLine({ type: 'turn.ended', turnId: 3, reason: 'completed', durationMs: 100 }, ctx);
+  const e4 = mapKimiLine({ type: 'turn.ended', turnId: 4, reason: 'cancelled' }, ctx);
+  const e5 = mapKimiLine({ type: 'interaction.request', kind: 'approval', id: 'approval_abc', request: { toolName: 'Bash' } }, ctx);
+  const e6 = mapKimiLine({ type: 'interaction.resolved', id: 'approval_abc', response: { decision: 'allow' } }, ctx);
+  const e7 = mapKimiLine({ type: 'agent.message.appended', message: { message: { role: 'assistant', content: ['你好'] } } }, ctx);
+  check('MK6', 'wire 映射：turn.prompt→turn.start；loop tool.call→tool.call(exec)；turn.ended completed→ok / cancelled→aborted',
+    e1[0]?.type === 'turn.start' && e2[0]?.type === 'tool.call' && e2[0]?.data?.category === 'exec' && e3[0]?.data?.status === 'ok' && e4[0]?.data?.status === 'aborted',
+    {});
+  check('MK7', 'wire 映射：审批对（interaction.request/resolved 同 id 配对）+ assistant 文本截断',
+    e5[0]?.type === 'approval.request' && e5[0]?.data?.requestId === 'approval_abc' && e6[0]?.type === 'approval.resolved' && e6[0]?.data?.requestId === 'approval_abc' && e6[0]?.data?.decision === 'allow' && e7[0]?.type === 'message.assistant',
+    {});
+  const st = scanKimiStatus();
+  check('MK8', '状态快照走 A 路径（非降级，observes 含审批族）', st.degraded === false && st.sessionCount === km.stats.sessions && st.observes.includes('approval.request'), { degraded: st.degraded, count: st.sessionCount });
+  const legacy = scanKimiLegacyCount();
+  check('MK9', 'LevelDB 兜底通道仍在（近似计数可用）', legacy.count >= 1 && legacy.approximate === true, { legacy: legacy.count });
 }
 
 // ================================================================ M-C 多源合并（真实服务实例）
@@ -119,7 +144,7 @@ let cx;
     const srcs = new Set();
     for (const h of snap.catalog.history || []) srcs.add(h.source);
     const multiProjects = (snap.catalog.projects || []).filter((p) => (p.sources || []).length >= 2);
-    check('MC1', '快照历史行含多源（dsh + claude-code 至少）', srcs.has('dsh') && srcs.has('claude-code'), { sources: [...srcs] });
+    check('MC1', '快照历史行含四源（dsh + claude-code + kimi-code）', srcs.has('dsh') && srcs.has('claude-code') && srcs.has('kimi-code'), { sources: [...srcs] });
     check('MC2', '同 cwd 多源项目归并（≥1 个项目 sources ≥ 2）', multiProjects.length >= 1, { multiProjects: multiProjects.map((p) => p.name + '[' + p.sources.join('+') + ']').slice(0, 4) });
     check('MC3', '快照目录 source = multi 标注', snap.catalog.source.startsWith('multi:'), { source: snap.catalog.source });
     // 非 DSH 投递被拒

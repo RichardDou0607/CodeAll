@@ -22,7 +22,7 @@
 | 9 | **Windsurf** | hook（官方文档本次不可达，第三方镜像） | 未验证（估计 6～8 类） | **P2** | 8～10 人日 |
 | 10 | **Aider** | 无 hook；JSON 输出/历史文件/进程观测 | 3～4 类（进程级为主） | **P2** | 3～4 人日 |
 | 11 | **进程/日志兜底层** | ps / lsof / 文件监听 | 2 类（session.start/end 级别） | **P1（兜底）** | 2～3 人日 |
-| 12 | **Kimi Code**（桌面 App，1.0.4） | Chromium Local Storage（LevelDB）——无 JSONL/SQLite/日志 | 0 类事件（降级：存活 + 近似会话计数） | **首批降级**（docs/21 M-H ✅） | 1 人日（已落地） |
+| 12 | **Kimi Code**（桌面 App + CLI，1.0.4） | `~/.kimi-code/` 文件级数据（state.json + agents/main/wire.jsonl 事件流）+ 内置 hooks（20 事件，未用） | wire 实测可映射 8 类（含**原生审批对**） | **首批（A 路径 ✅）** | 已落地（hooks 升级项另计） |
 
 **三条结论**：
 1. **Phase 2 的关键不是「能不能拿到事件」，而是「拿到事件要不要用户改配置」**：Claude Code / Codex / Cursor / Copilot / Gemini 的 hook 都要写进用户或项目配置文件，属于「需用户同意安装」的接入方式；**离线日志兜底（只读、零侵入）应当作为每个后端的默认降级路径**。本机实测证明两条路都可行（见 §3.1/§3.2 的实测证据段）。
@@ -468,13 +468,18 @@ $ node -e 'fs.watch(dir, ...)'    # 文件级变化（会话日志增长 = 有�
 
 ---
 
-### 3.11 Kimi Code（首批·降级，docs/21 M-H）【2026-10-06 补行】
+### 3.11 Kimi Code（首批，A 路径 ✅）【2026-10-06 补行，同日下午勘误重写】
 
-**接入点（spike 实测 [A]）**：无 hook、无本地 API、无 JSONL/SQLite/日志目录；会话数据只存在于 Chromium **Local Storage（LevelDB）**——`~/Library/Application Support/kimi-code-app/Local Storage/leveldb/{*.log,*.ldb}`，键名含 `session_<uuid>`（本机去重 9 个）、`draft(-snapshot)`、`wd_workspace_<hash>`、`workspace-order`（strings 级键名扫描，未解码 value）。
+**接入点（本机实测 [A]）**：Kimi Code 是 CLI-first 架构（app.asar 内含 node-sdk + agent-core-v2），agent 核心写 `~/.kimi-code/`：
+- `sessions/wd_<hash>/session_<uuid>/state.json`——会话状态（id/cwd/createdAt/updatedAt/title/titleKind/archived/lastTurnReason；lastPrompt 为用户原文，适配器不读）。
+- `agents/main/wire.jsonl`——**事件流**（protocol 1.5；本机 5557 行 / 最大单行 2.5MB）：`turn.prompt` / `turn.ended(reason,durationMs)` / `context.append_loop_event{tool.call|tool.result}` / `interaction.request|resolved(kind=approval，同 id 天然配对)` / `agent.message.appended` / `profile.bind(modelAlias,thinkingEffort)` 等。
+- 另内置 **external hooks 系统**（20 事件，command 型 handler，`config.toml` `[hooks]` 节）——留作授权后升级项。
 
-**处置（按 §4/风险分级「只有 LevelDB → 不做 tail」）**：降级为 §3.10 同款兜底——**不产生任何事件/会话行**，只提供进程存活（ps）+ **近似会话计数**（`session_<uuid>` 键名去重，压缩块可能漏计 → 显式 approximate）+ LevelDB mtime 连接判定（45s 窗口）。落地于 `adapters/kimi-code-adapter.mjs`（`observes=['session.heartbeat']`）与 `adapters/local-agents.mjs`（四态面板「≈N 个会话」）。
+**映射（已落地于 `adapters/kimi-code-adapter.mjs`）**：turn.prompt→turn.start；loop tool.call/result→tool.call/tool.result（category 复用 categoryOf）；turn.ended(completed→ok / cancelled→aborted)；interaction.request(approval)→approval.request、interaction.resolved→approval.resolved（**requestId 同 id 配对，契约 §3.3 零成本满足**）；agent.message.appended→message.assistant(截断 280)；turn.step.retrying→error.raised(瞬态)。非 main agent 的 wire 流 = 子代理，整文件跳过。
 
-**证据等级**：[A] 本机实测（2026-10-06 全目录排查 + 键名扫描，只读）。**若未来版本出现结构化导出/日志，重新评估升级为事件级适配。**
+**勘误记录**：首版 spike 曾误判「会话仅在 Electron LevelDB → 降级为进程级兜底」——根因是探测命令 `ls -d ~/.kimi* ~/kimi*` 中 `~/kimi*` 无匹配导致 zsh 整体中止，`~/.kimi-code/` 未被列出。LevelDB 实为前端层缓存，现降为第三层兜底（`scanKimiLegacyCount`，近似计数）。
+
+**证据等级**：[A] 本机实测（2026-10-06 两轮：上午 LevelDB spike + 下午 wire/state 全量分析，均只读）。
 
 ---
 

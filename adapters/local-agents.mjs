@@ -23,7 +23,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { KIMI_LEVELDB, countKimiSessions } from './kimi-code-adapter.mjs';
+import { KIMI_LEVELDB, scanKimiCatalog, scanKimiLegacyCount } from './kimi-code-adapter.mjs';
 
 const execFileP = promisify(execFile);
 const HOME = os.homedir();
@@ -75,13 +75,15 @@ export const LOCAL_AGENTS = Object.freeze([
   },
   {
     id: 'kimi-code', name: 'Kimi Code', source: 'kimi-code',
-    installPaths: ['/Applications/Kimi Code.app', path.join(HOME, 'Library/Application Support/kimi-code-app')],
+    installPaths: ['/Applications/Kimi Code.app', path.join(HOME, '.kimi-code'), path.join(HOME, '.kimi-code', 'bin', 'kimi'), path.join(HOME, 'Library/Application Support/kimi-code-app')],
     appBundle: '/Applications/Kimi Code.app',
-    processRe: /Kimi Code\.app\//,
-    // M-H Step 1 spike 结论：会话数据仅在 Chromium LevelDB → 连接=LevelDB 45s 内有写入；
-    // 只做存活与近似计数，不解析会话内容（docs/21 M-H 降级路径）
-    activity: [{ dir: KIMI_LEVELDB, depth: 1, fileRe: /\.(log|ldb)$/ }],
-    note: '降级通道：会话数据仅在 LevelDB（无稳定性承诺），只做存活 + 近似会话计数',
+    processRe: /Kimi Code\.app\/|(^|\/|\/bin\/)kimi(\s|$)/,   // 桌面 App 或 ~/.kimi-code/bin/kimi CLI
+    // M-H A 路径：CLI 核心写 ~/.kimi-code（state.json + wire.jsonl）；LevelDB 是前端层缓存（兜底信号）
+    activity: [
+      { dir: path.join(HOME, '.kimi-code', 'sessions'), depth: 4, fileRe: /(wire\.jsonl|state\.json)$/ },
+      { dir: KIMI_LEVELDB, depth: 1, fileRe: /\.(log|ldb)$/ },
+    ],
+    note: 'A 路径：state.json 目录 + wire.jsonl 事件 tail（LevelDB 仅前端层兜底）',
   },
   {
     id: 'agentos', name: 'AgentOS M1', source: 'agentos',
@@ -153,13 +155,20 @@ function pkgVersion(candidates) {
   return null;
 }
 
-/** Kimi 近似会话计数（LevelDB 键名去重，~25ms）：30s 缓存，避免 3s 轮询反复扫。 */
-let kimiCountCache = { at: 0, count: null };
+/** Kimi 会话计数（30s 缓存）：优先 ~/.kimi-code 目录（精确）；无则退回 LevelDB 键名去重（近似）。 */
+let kimiCountCache = { at: 0, count: null, approximate: false };
 function kimiSessionCount() {
   if (kimiCountCache.count === null || Date.now() - kimiCountCache.at > 30_000) {
-    try { kimiCountCache = { at: Date.now(), count: countKimiSessions().count }; } catch { kimiCountCache = { at: Date.now(), count: null }; }
+    try {
+      const cat = scanKimiCatalog();
+      if (cat.sessionCount > 0 || fs.existsSync(path.join(HOME, '.kimi-code', 'sessions'))) {
+        kimiCountCache = { at: Date.now(), count: cat.sessionCount, approximate: false };
+      } else {
+        kimiCountCache = { at: Date.now(), count: scanKimiLegacyCount().count, approximate: true };
+      }
+    } catch { kimiCountCache = { at: Date.now(), count: null, approximate: true }; }
   }
-  return kimiCountCache.count;
+  return kimiCountCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,9 +212,11 @@ export async function scanLocalAgents(ctx = {}) {
       installed, running: procs.length > 0, connected, connectionKind,
       processes: procs.length, pids: procs,
       lastActivityMs, lastActivityWithinWindow: !!(lastActivityMs && now - lastActivityMs < windowMs),
-      sessionCount: a.id === 'kimi-code' ? kimiSessionCount() : undefined,
-      sessionCountApproximate: a.id === 'kimi-code' || undefined,
-      version: (await macAppVersion(a.appBundle)) ?? (a.id === 'claude-code' ? pkgVersion(['/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json', path.join(HOME, '.local/lib/node_modules/@anthropic-ai/claude-code/package.json')]) : null),
+      sessionCount: a.id === 'kimi-code' ? kimiSessionCount().count : undefined,
+      sessionCountApproximate: a.id === 'kimi-code' ? kimiSessionCount().approximate || undefined : undefined,
+      version: (await macAppVersion(a.appBundle))
+        ?? (a.id === 'claude-code' ? pkgVersion(['/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json', path.join(HOME, '.local/lib/node_modules/@anthropic-ai/claude-code/package.json')]) : null)
+        ?? (a.id === 'codex' ? pkgVersion([path.join(HOME, '.local/lib/node_modules/@openai/codex/package.json'), '/usr/local/lib/node_modules/@openai/codex/package.json']) : null),
       evidence, note: a.note ?? null,
     });
   }
@@ -229,7 +240,7 @@ async function main(argv) {
   const rel = (ms) => (!ms ? '—' : Math.round((r.scannedAt - ms) / 1000) + 's 前');
   console.log('本机 agent 软件状态（' + r.counts.connected + ' 已连接 / ' + r.counts.openUnconnected + ' 打开未连接 / ' + r.counts.closed + ' 未打开 / ' + r.counts.notInstalled + ' 未下载）  扫描 ' + r.tookMs + ' ms\n');
   for (const a of r.agents) {
-    console.log('  ' + STATUS_LABEL[a.status].padEnd(12) + ' ' + a.name.padEnd(16) + (a.version ? 'v' + a.version + '  ' : ''.padEnd(0)) + '  进程 ' + a.processes + '  上次活动 ' + rel(a.lastActivityMs) + (a.sessionCount != null ? '  ≈' + a.sessionCount + ' 会话' : '') + (a.connectionKind ? '  通道=' + a.connectionKind : '') + (a.note ? '  · ' + a.note : ''));
+    console.log('  ' + STATUS_LABEL[a.status].padEnd(12) + ' ' + a.name.padEnd(16) + (a.version ? 'v' + a.version + '  ' : ''.padEnd(0)) + '  进程 ' + a.processes + '  上次活动 ' + rel(a.lastActivityMs) + (a.sessionCount != null ? '  ' + (a.sessionCountApproximate ? '≈' : '') + a.sessionCount + ' 会话' : '') + (a.connectionKind ? '  通道=' + a.connectionKind : '') + (a.note ? '  · ' + a.note : ''));
     for (const e of a.evidence.slice(0, 4)) console.log('      · ' + e);
   }
 }

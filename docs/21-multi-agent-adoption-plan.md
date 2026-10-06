@@ -96,7 +96,7 @@
 ### M-E · Codex 控制（P1，估 3～5 人日）
 
 - `codex exec resume <id>` / `codex exec <cwd>`（官方 CLI；同 M-D 的终端通道复用）。
-- **前置条件（阻塞项）**：`codex` CLI 当前不在 PATH（盘点 §1.1 #3）。落地前先 `npm i -g @openai/codex` 恢复，或定位 Codex++ 内置二进制路径；观察通道（M-B）不受影响（tail 的是磁盘文件）。
+- **前置条件（已解除，2026-10-06）**：`codex` CLI 已恢复——`npm i -g --prefix ~/.local @openai/codex` → `~/.local/bin/codex` v0.160.1，`codex login status` 显示已用既有 auth.json 的 API key 登录。M-E 可直接开工。
 
 ### M-F · ACP 统一通道（P1 杠杆，估 8～12 人日）
 
@@ -107,14 +107,17 @@
 - **启动方式（已落地）**：`apps/shell/run.sh --install` 一次性装进 /Applications → 日常 Spotlight「AgentPet」一键启动（盘点确认 AgentPet.app 0.1.0 已装且在运行）；可选在 系统设置→登录项 加 AgentPet 开机自启。
 - 剩余工作：把 framed.mjs 的能力（目录/输入/插件探测）收进外壳进程内或守护进程（路线图 M1 的 Hub 常驻形态）；多后端探测的启动耗时预算（当前 DSH 单源 19ms，加三源预计 <80ms）。
 
-### M-H · Kimi Code 观察适配（**首批**，估 4～6 人日，v3 提入首批）✅ **Step 1 spike 完成 + Step 2 降级落地（2026-10-06，`adapters/kimi-code-adapter.mjs`）**
+### M-H · Kimi Code 观察适配（**首批**）✅ **A 路径已落地（2026-10-06 下午，`adapters/kimi-code-adapter.mjs` 重写）**
 
-- **Step 1 · 数据定位 spike（完成）**：排查 `~/Library/Application Support/kimi-code-app` 全目录 + `~/Library/Logs` + 家目录：
-  - **无 JSONL / SQLite / 日志目录**；会话数据只存在于 Chromium **Local Storage（LevelDB）**：`Local Storage/leveldb/{*.log,*.ldb}`，键名可见 `session_<uuid>`（本机 9 个去重）/ `draft` / `draft-snapshot` / `wd_workspace_<hash>` / `workspace-order`（键名来自 strings 级扫描，**未解码任何 value**）。
-  - `Partitions/kimi-browser` 是内嵌浏览器分区；`ui-state.json`/`browser-tabs.json` 只有 UI/浏览器标签状态；`~/Library/Logs/kimi-code-app` 不存在；家目录无 `~/.kimi*`。
-- **Step 2 · 降级（按 §4 风险分级执行）**：LevelDB 无稳定性承诺 → **不做 tail**。落地 `scanKimiStatus()`：进程存活（经 local-agents ps 注入）+ **近似会话计数**（`session_<uuid>` 键名去重，只读字节流、压缩块可能漏计 → 显式 approximate）+ LevelDB mtime 连接判定（45s 窗口）。`observes = ['session.heartbeat']`——**不产生任何会话行/事件**（契约红线：降级不得伪造）。
-- **验收**：`scripts/multi-source-check.mjs` MH1–MH2 全绿；四态面板实测「已打开 · 未连接 ≈9 个会话」（Kimi 运行但 45s 无写入时）与「已连接（日志通道）」（有写入时）两种形态均可复现。
-- **备注（已回填）**：docs/40 适配矩阵已补 Kimi Code 行（§0 表 #12 + §3.11，证据等级 [A]）。
+> **勘误（重要）**：上午的 Step 1 spike 结论「会话仅在 Electron LevelDB、无文件级数据」**有误**——探测命令 `ls -d ~/.kimi* ~/kimi*` 因 `~/kimi*` 无匹配被 zsh 整体中止，`~/.kimi-code/` 从未被列出。实际 Kimi Code 是 CLI-first 架构（app.asar 内即 node-sdk + agent-core-v2），agent 核心写规范的文件级数据；LevelDB 只是 Electron 前端层缓存。上午的降级版适配器据此误判，已废弃。
+
+- **数据源（A 路径，全部只读实测）**：
+  - `~/.kimi-code/sessions/wd_<hash>/session_<uuid>/state.json` —— 会话状态：id/cwd/createdAt/updatedAt/title/titleKind/archived/lastTurnReason（**lastPrompt 是用户原文，适配器不读取**）。
+  - `agents/main/wire.jsonl` —— **事件流**（protocol 1.5，本机 5557 行）：`turn.prompt/turn.ended(reason,durationMs)` 回合边界、`context.append_loop_event{event.type=tool.call/tool.result}` 工具对、`interaction.request/resolved(kind=approval, 同 id 配对)` 原生审批对、`agent.message.appended` 回复、`profile.bind` 模型/思考档、usage/token/file_history 等。
+  - `workspaces.json` —— 工作区注册表（wd_<hash> → 路径/标题，项目名增强）；`session_index.jsonl` 会话索引。
+- **落地形态**：`scanKimiCatalog()`（state.json 整读 + wire 头/尾窗口取模型与粗状态，本机 4 项目 / 9 会话，中位 ~4.4ms）+ `followKimiLogs()`（wire.jsonl 多文件字节偏移 tail；**非 main agent 的流 = 子代理，整文件跳过**）+ `mapKimiLine()` 纯函数（含审批对映射——比 Claude Code 转录路径还全）+ `scanKimiLegacyCount()`（LevelDB 计数降为第三层兜底）。
+- **观察能力**：与 Claude/Codex 同级（会话列表 + 标题 + 模型 + 思考档 + 实时事件 + **原生审批提醒**）；hooks 通道（app.asar 实测 20 种事件、command 型 handler、config.toml `[hooks]` 节）留作后续授权升级项，当前零配置零授权。
+- **验收**：`scripts/multi-source-check.mjs` MK1–MK9 全绿（含审批对纯函数断言、LevelDB 兜底仍在）；实测 `agent综合管理平台[dsh+claude-code+kimi-code]` 三源同项目归并。
 
 ### M-I · OpenCode 接入（P2，估 2～4 人日）
 
@@ -178,9 +181,10 @@
 
 - DSH：观察+目录+输入+新建+打开 全链路可用；AgentPet.app 0.1.0 已装 /Applications 且在运行（外壳自动拉起服务）。
 - **Claude Code：观察通道已上线（M-A ✅）**——转录目录 + 实时 tail（本机 11 项目 / 48 会话；CC Switch 供应商切换后的模型名即时可见）；控制（M-D）未开始。
-- **Codex：观察通道已上线（M-B ✅）**——rollout 目录 + 实时 tail（13 主 + 19 子代理；**Codex++ 会话确认落同一 `~/.codex/sessions`**，originator=Codex Desktop）；控制（M-E）未开始，codex CLI 仍不在 PATH。
-- **Kimi Code：降级通道已上线（M-H ✅）**——LevelDB 近似计数 + 四态面板（≈9 会话）；无会话行（按红线不伪造）。KimiCU 维持 C 观望。
-- **多源同窗（M-C ✅）**：framed.mjs 三源合并目录 + 双跟随器接入同一状态机；同 cwd 项目归并（实测 `鹈鹕测试变体策划[dsh+claude-code+codex]`）；投递目标守卫（非 DSH 明确拒绝）。
+- **Codex：观察通道已上线（M-B ✅）**——rollout 目录 + 实时 tail（13 主 + 19 子代理；**Codex++ 会话确认落同一 `~/.codex/sessions`**，originator=Codex Desktop）；**codex CLI 已恢复（2026-10-06：`npm i -g --prefix ~/.local @openai/codex` → v0.160.1，复用既有 auth.json 已登录）——M-E 前置阻塞解除**。
+- **Kimi Code：A 路径观察通道已上线（M-H ✅ 重写）**——state.json 目录 + wire.jsonl 事件 tail（含原生审批对），与 Claude/Codex 同级；LevelDB 计数降为第三层兜底；hooks 通道（20 事件）留作授权升级项。KimiCU 维持 C 观望。
+- **多源同窗（M-C ✅）**：framed.mjs 四源合并目录 + 三跟随器接入同一状态机；同 cwd 项目归并（实测 `agent综合管理平台[dsh+claude-code+kimi-code]`、`鹈鹕测试变体策划[dsh+claude-code+codex]`）；投递目标守卫（非 DSH 明确拒绝）。
+- **本机 CLI 三件套就位**：`claude`（~/.local/bin，2.1.278+）/ `kimi`（~/.kimi-code/bin/kimi）/ `codex`（~/.local/bin，v0.160.1，已登录）——控制通道（M-D/M-E）的全部前置条件已解除。
 - OpenCode：桌面版数据 + `~/.config/opencode/opencode.json` 在，CLI 不在 PATH，活跃度待确认（P2）。
 - AgentOS M1：`~/.local/bin/agent`（shell，484 行）+ `~/agentos` 文档齐全（含 INSTALL-AMD64.md，已有 Linux 安装路径），状态文件可直接读——**远端执行体候选，见 §6**（M-J1 排 W4）。
 - 排除项：Claude.app / ChatGPT.app（聊天，无本机通道）、影刀 RPA（范式不符）——理由见 §1.3。

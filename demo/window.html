@@ -92,7 +92,7 @@ select{flex:1;background:#0d1117;color:var(--txt);border:1px solid var(--line);b
       <div class="crow"><span class="hint" id="hint">未连接</span><span class="chip" title="窗口失焦时按 ⌥⌘I 直接聚焦输入框">⌥⌘I 聚焦</span><button class="send" id="send">发送</button></div>
       <div class="queue" id="queue"></div>
     </div>
-    <div class="note" id="note">数据只读自本机会话日志（DSH / Claude Code / Codex；Kimi Code 仅存活与近似计数）；输入先进入本地队列。</div>
+    <div class="note" id="note">数据只读自本机会话日志（DSH / Claude Code / Codex / Kimi Code）；输入先进入本地队列。</div>
   </div>
   <div class="help">
     <h4>这一版新增了什么</h4>
@@ -102,12 +102,12 @@ select{flex:1;background:#0d1117;color:var(--txt);border:1px solid var(--line);b
     ④ <b>打开已存在会话</b>：历史会话行点击即选中为目标并定位（切换实时跟随需插件授权）<br>
     ⑤ <b>新建会话</b>：插件连通后按钮可用（在 DSH 进程内创建）；未连通时禁用并说明原因，<b>不使用 DSH 凭证绕过权限</b><br>
     ⑥ <b>软件状态面板</b>：本机每个 agent 软件的四态（<b>已连接</b> / <b>已打开 · 未连接</b> / <b>未打开</b> / <b>未下载</b>）；安装=App 包/CLI/配置目录存在性（cc-switch 同款），运行=进程探测，连接=观察通道 45s 内有数据<br>
-    ⑦ <b>多后端同窗</b>（M-A/M-B/M-C/M-H）：Claude Code 转录与 Codex rollout 只读接入，与 DSH 会话并列显示（来源列区分）；同目录项目自动归并；Kimi Code 按 LevelDB 降级（仅存活 + 近似会话计数，不解析内容）。投递当前仅支持 DSH，选其他后端为目标会显式提示
+    ⑦ <b>多后端同窗</b>（M-A/M-B/M-C/M-H）：Claude Code 转录、Codex rollout、Kimi Code wire 事件流只读接入，与 DSH 会话并列显示（来源列区分）；同目录项目自动归并。投递当前仅支持 DSH，选其他后端为目标会显式提示
     <h4 style="margin-top:14px">输入如何送达</h4>
     当前进本地队列，点击队列里的「复制」把文本粘到 DSH 输入框即可；授权挂载插件后可直接送达。<br>
     <h4 style="margin-top:14px">为什么打开/新建要授权</h4>
     运行中的会话日志有排他锁（直写会损坏会话）；DSH 的 GUI 接口需要浏览器会话密钥，让悬浮窗持有它属于越权。插件方式是在 DSH 自身进程内调用官方 API，权限最小。<br>
-    <span style="color:#6b7a90">数据只读自 <code>~/.dsh/sessions/**</code>、<code>~/.claude/projects/**</code>、<code>~/.codex/sessions/**</code>；不接触任何凭证。</span>
+    <span style="color:#6b7a90">数据只读自 <code>~/.dsh/sessions/**</code>、<code>~/.claude/projects/**</code>、<code>~/.codex/sessions/**</code>、<code>~/.kimi-code/sessions/**</code>；不接触任何凭证。</span>
   </div>
 </div>
 <script>
@@ -150,7 +150,7 @@ function render(snap){
       if(a.version)meta.push('v'+a.version);
       if(st==='connected')meta.push(a.connectionKind==='plugin'?'插件通道':a.connectionKind==='event'?'事件流':'日志通道');
       if(a.running&&a.processes>1)meta.push(a.processes+' 进程');
-      if(a.id==='kimi-code'&&a.sessionCount!=null)meta.push('≈'+a.sessionCount+' 个会话');   // M-H 降级：LevelDB 键名去重的近似计数
+      if(a.id==='kimi-code'&&a.sessionCount!=null)meta.push((a.sessionCountApproximate?'≈':'')+a.sessionCount+' 个会话');   // M-H：A 路径精确计数；LevelDB 兜底时标 ≈
       if(st==='closed'&&a.lastActivityMs)meta.push('上次活动 '+relTime(a.lastActivityMs,snap.ts||Date.now()));
       if(st==='open-unconnected'&&a.note)meta.push(a.note);
       if(st==='not-installed')meta.push('未检测到安装痕迹');

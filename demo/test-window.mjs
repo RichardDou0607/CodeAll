@@ -153,7 +153,7 @@ const checks = [
   ['未打开显示上次活动相对时间', agentsHtml.includes('上次活动') && agentsHtml.includes('小时前')],
   ['未下载显示「未检测到安装痕迹」', agentsHtml.includes('未检测到安装痕迹')],
   ['版本号进 meta（v0.2.0-rc.2 / v1.0.4）', agentsHtml.includes('v0.2.0-rc.2') && agentsHtml.includes('v1.0.4')],
-  ['Kimi 显示近似会话计数（≈9 个会话，M-H 降级）', agentsHtml.includes('≈9 个会话')],
+  ['Kimi 显示会话计数（A 路径精确计数；LevelDB 兜底时带 ≈）', agentsHtml.includes('9 个会话')],
   ['折叠后软件面板隐藏（hidden 类 + 空内容）', agentsHiddenCls.includes('hidden') && agentsHiddenHtml === ''],
   ['无 agents 字段时显示探测占位且不报错', agentsMissing.includes('正在探测本机 agent 软件')],
   ['软件状态切换按钮存在且可交互', typeof getEl('toggle-agents').onclick === 'function'],

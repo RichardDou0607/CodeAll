@@ -34,9 +34,9 @@ node demo/test-window.mjs           # 悬浮窗渲染自检（38 项断言）
 node adapters/session-catalog.mjs   # DSH 会话目录（~20ms）
 node adapters/claude-code-adapter.mjs    # Claude Code 会话目录（本机 11 项目 / 48 会话，~18ms）
 node adapters/codex-adapter.mjs          # Codex 会话目录（13 主会话 / 19 子代理自动排除，~19ms）
-node adapters/kimi-code-adapter.mjs      # Kimi Code 降级通道（LevelDB 近似计数）
+node adapters/kimi-code-adapter.mjs      # Kimi Code 会话目录（A 路径：state.json + wire 事件流，~4ms；--status 看四态数据）
 node adapters/local-agents.mjs      # 软件四态探测：已连接 / 已打开·未连接 / 未打开 / 未下载（~40ms）
-node scripts/multi-source-check.mjs # 多源适配验收（M-A/M-B/M-C/M-H，19 项断言，含真实服务实例）
+node scripts/multi-source-check.mjs # 多源适配验收（M-A/M-B/M-C/M-H，26 项断言，含真实服务实例）
 
 # 其它演示
 node demo/frame.mjs                 # 终端实时工作框：跟随你正在跑的 DSH 会话（约 400ms 刷新）
