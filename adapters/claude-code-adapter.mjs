@@ -158,7 +158,17 @@ export function parseClaudeSession(file, opts = {}) {
     else if (l.type === 'agent-name' && typeof l.agentName === 'string') agentNameTitle = l.agentName;
     if (l.type === 'assistant' && typeof l.message?.model === 'string') { model = l.message.model; metaSources.model = 'assistant.message.model'; }
   }
-  const coarse = coarseStateFromLines(tail.length ? tail : lines);
+  let coarse = coarseStateFromLines(tail.length ? tail : lines);
+  // 时效修正：thinking/running 是中间态——尾部最后事件超 5 分钟仍停在该状态 = 会话被中断/废弃，
+  // 死会话不该永远显示思考中（终态 done 不受影响）
+  {
+    const win = tail.length ? tail : lines;
+    let lastTs = null;
+    for (let i = win.length - 1; i >= 0; i--) { const t = Date.parse(win[i]?.timestamp); if (Number.isFinite(t)) { lastTs = t; break } }
+    if ((coarse.state === 'thinking' || coarse.state === 'running') && lastTs !== null && ((Number.isFinite(o.now) ? o.now : Date.now()) - lastTs) > 300_000) {
+      coarse = { state: 'idle', stateSource: coarse.stateSource + ':stale>5min→idle' };
+    }
+  }
   const now = Number.isFinite(o.now) ? o.now : Date.now();
   const title = customTitle ?? aiTitle ?? agentNameTitle ?? null;
   const updatedAt = Math.round(Math.max(st.mtimeMs, lastTs ?? 0));

@@ -170,7 +170,16 @@ export function parseKimiSession(sessionDir, opts = {}) {
       }
       // 尾窗口可能也带 config.update（思考档被中途调高）
       for (const l of tail) if (l.type === 'config.update' && typeof l.thinkingEffort === 'string') effort = l.thinkingEffort;
-      const coarse = coarseStateFromWireLines(tail.length ? tail : head);
+      let coarse = coarseStateFromWireLines(tail.length ? tail : head);
+      // 时效修正：turn.prompt 后中断的会话超 5 分钟降级 idle
+      {
+        const win = tail.length ? tail : head;
+        let lastTs = null;
+        for (let i = win.length - 1; i >= 0; i--) { if (Number.isFinite(win[i]?.time)) { lastTs = win[i].time; break } }
+        if ((coarse.state === 'thinking' || coarse.state === 'running') && lastTs !== null && now - lastTs > 300_000) {
+          coarse = { state: 'idle', stateSource: coarse.stateSource + ':stale>5min→idle' };
+        }
+      }
       rec.model = model; rec.provider = provider; rec.reasoningEffort = effort;
       rec.state = coarse.state; rec.stateSource = coarse.stateSource;
       rec.updatedAt = Math.round(Math.max(st.updatedAt ?? 0, wireSt.mtimeMs));

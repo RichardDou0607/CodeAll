@@ -80,9 +80,6 @@ aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid v
 .srow .meta{font-size:10.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .srow .st{font-size:11px;flex:0 0 auto}
 .srow .pend{font-size:10px;color:var(--wait);flex:0 0 auto}
-.sec-h{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--dim);letter-spacing:.06em;padding:8px 12px 4px;border-bottom:1px dashed rgba(36,44,58,.6)}
-.sec-h.on{color:#3fb950}
-.sec-h.off{color:#5c6a7e}
 .srow .hx{flex:0 0 auto;font-size:10px;color:#5c6a7e;cursor:pointer;border:1px solid transparent;border-radius:5px;padding:0 3px}
 .srow .hx:hover{color:var(--txt);border-color:var(--line)}
 .srow .tm{width:44px;text-align:right;color:var(--dim);font-size:10px;flex:0 0 auto}
@@ -129,11 +126,11 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
     <section id="content">
       <div id="toolbar">
         <nav id="sess-filter" title="会话区视图切换">
-          <button class="btn fbtn on" data-filter="all">所有对话</button>
+          <button class="btn fbtn on" data-filter="all">活跃会话</button>
           <button class="btn fbtn" data-filter="done">完成会话</button>
           <button class="btn fbtn" data-filter="hidden">隐藏会话</button>
         </nav>
-        <button class="btn" id="toggle-history" title="仅在「所有对话」视图生效">历史会话</button>
+        <button class="btn" id="toggle-history" title="仅在「活跃会话」视图生效">历史会话</button>
         <button class="btn" id="new-session" disabled>＋ 新建会话</button>
         <span class="sp"></span>
         <span id="proj-hint" style="font-size:10px;color:var(--dim)"></span>
@@ -221,7 +218,7 @@ function render(snap){
         rows.push('<div class="sc-row"><span class="k">'+(active?'活动中':'静默')+'</span><b>'+relTime(a.lastActivityMs,now)+'</b></div>');
       }
       if(a.variants){const parts=[];if(a.variants.cli)parts.push('CLI '+a.variants.cli);if(a.variants.desktop)parts.push('桌面 '+a.variants.desktop);if(a.variants.ide)parts.push('IDE '+a.variants.ide);if(parts.length)rows.push('<div class="sc-row"><span class="k">会话形态</span><b>'+parts.join(' · ')+' 会话</b></div>')}
-      if(a.id==='kimi-code'&&a.sessionCount!=null)rows.push('<div class="sc-row"><span class="k">会话总数</span><b>'+(a.sessionCountApproximate?'≈':'')+a.sessionCount+'</b></div>');
+      if(a.sessionCount!=null)rows.push('<div class="sc-row"><span class="k">会话总数</span><b>'+(a.sessionCountApproximate?'≈':'')+a.sessionCount+'</b></div>');
       if(a.note)rows.push('<div class="sc-note">'+esc(a.note)+'</div>');
       if((a.evidence||[]).length)rows.push('<div class="sc-ev" title="'+esc(a.evidence.join('\n'))+'">'+esc(a.evidence.slice(0,3).join(' · '))+'</div>');
       return '<div class="scard" data-agent="'+esc(a.id)+'">'
@@ -232,27 +229,42 @@ function render(snap){
   if(cardsEl.__petLastHtml!==cardsHtml){cardsEl.innerHTML=cardsHtml;cardsEl.__petLastHtml=cardsHtml}
   const vSel=$('view-sessions'),vSta=$('view-status');
   vSel.className=view==='sessions'?'on':'';vSta.className=view==='status'?'on':'';
-  // ---- 会话列表（活跃分区 + 三态视图）----
-  // 活跃窗口：1 小时内有消息活动 = 活跃；更久无活动 = 不活跃（自动判定，进入「隐藏会话」视图）。
-  // 进行中的状态（思考/运行/等你确认/瞬态错误）即使超过窗口也保持活跃——等审批的会话不该被藏掉。
-  const ACTIVE_MS = 3600_000;
-  const ACTIVE_STATES = ['thinking', 'running', 'waiting', 'transient-error'];
-  const activeOf = (s) => ACTIVE_STATES.includes(s.state) || (now - (s.lastActiveMs ?? s.updatedAt ?? s.since ?? 0)) < ACTIVE_MS;
+  // ---- 会话三档分类（互斥、完备；每个会话恰好归入 活跃/完成/隐藏 之一）----
+  // ① 进行中状态（思考/运行/等你确认/瞬态错误）→ 活跃（与时间无关；等审批的会话不会被藏掉）
+  // ② 完成且结束 ≤ 10 分钟 → 活跃（缓冲期：看得见 ✓ 即时反馈）
+  // ③ 持久错误/空闲/未知 且 1 小时内有消息活动 → 活跃
+  // ④ 完成且结束 > 10 分钟 → 完成
+  // ⑤ 其余（空闲/持久错误 超 1 小时无消息）→ 隐藏（未活跃）
+  const ACTIVE_MS = 3600_000;    // 1 小时活跃窗口
+  const DONE_GRACE_MS = 600_000; // 完成缓冲期 10 分钟
+  const PROGRESS_STATES = ['thinking', 'running', 'waiting', 'transient-error'];
+  // 返回 'all'（=活跃档，对应 all 视图键）/ 'done' / 'hidden' —— 与 filter 键同名，计数与过滤共用
+  const classify = (s) => {
+    const st = s.state;
+    if (PROGRESS_STATES.includes(st)) return 'all';
+    const fresh = now - (s.lastActiveMs ?? s.updatedAt ?? s.since ?? 0) < ACTIVE_MS;
+    if (st === 'done') return (now - (s.since ?? s.updatedAt ?? 0) <= DONE_GRACE_MS) ? 'all' : 'done';
+    return fresh ? 'all' : 'hidden';   // idle / error / unknown
+  };
+  const SORT_RANK = { waiting: 0, 'transient-error': 1, running: 2, thinking: 3, done: 4, error: 5, idle: 6, unknown: 7 };
   const filter = window.__FILTER__ || 'all';
   const showHist = window.__SHOW_HISTORY__ === true;
   const liveAll = (snap.sessions || []).filter(s => (!agentSel || s.source === agentSel) && s.kind !== 'subagent' && inProj(s));
   const histAll = ((snap.catalog && snap.catalog.history) || [])
     .filter(s => (!agentSel || s.source === agentSel) && s.kind !== 'subagent' && inProj(s));
   const liveIds = new Set(liveAll.map(s => s.id));
-  const histPool = histAll.filter(s => !liveIds.has(s.sessionId) && !s.live).slice(0, 60);
-  let showLive = liveAll, showHistRows = (filter !== 'all' || showHist || curProj) ? histPool : [];
+  const histPool = histAll.filter(s => !liveIds.has(s.sessionId) && !s.live);   // 不截断：展示全部会话
+  let showLive = liveAll.filter(s => classify(s) === 'all');
+  let showHistRows = (filter !== 'all' || showHist || curProj) ? histPool.filter(s => classify(s) === 'all') : [];
   if (filter === 'done') {
-    showLive = liveAll.filter(s => s.state === 'done');
-    showHistRows = histPool.filter(s => s.state === 'done');
+    showLive = liveAll.filter(s => classify(s) === 'done');
+    showHistRows = histPool.filter(s => classify(s) === 'done');
   } else if (filter === 'hidden') {
-    showLive = liveAll.filter(s => !activeOf(s));
-    showHistRows = histPool.filter(s => !activeOf(s));
+    showLive = liveAll.filter(s => classify(s) === 'hidden');
+    showHistRows = histPool.filter(s => classify(s) === 'hidden');
   }
+  // 活跃视图按优先级排序（等你确认最前，空闲殿后）
+  showLive = [...showLive].sort((a, b) => (SORT_RANK[a.state] ?? 9) - (SORT_RANK[b.state] ?? 9) || (b.lastActiveMs ?? b.since ?? 0) - (a.lastActiveMs ?? a.since ?? 0));
   const rows = showLive, hist = showHistRows;
   const tgt = window.__TARGET__ || '';
   let tgtHit = null;
@@ -277,26 +289,23 @@ function render(snap){
       + '<span class="st" style="color:' + col + '">' + (STATE_LABEL[s.state] || s.state) + '</span><span class="tm">打开</span></div>';
   };
   let html = '';
-  if (filter === 'all') {
-    // 「所有对话」：活跃 / 不活跃 两个分区（历史行并入对应分区）
-    const liveAct = rows.filter(activeOf), liveInact = rows.filter(s => !activeOf(s));
-    const histAct = hist.filter(activeOf), histInact = hist.filter(s => !activeOf(s));
-    const nAct = liveAct.length + histAct.length, nInact = liveInact.length + histInact.length;
-    if (!nAct && !nInact) html += '<div class="empty">暂无会话（等待后端活动：DSH / Claude Code / Codex / Kimi Code…）</div>';
-    if (nAct) html += '<div class="sec-h on">● 正在活跃 ' + nAct + '</div>' + liveAct.map(mkLiveRow).join('') + histAct.map(mkHistRow).join('');
-    if (nInact) html += '<div class="sec-h off">○ 不活跃（1 小时无消息）' + nInact + '</div>' + liveInact.map(mkLiveRow).join('') + histInact.map(mkHistRow).join('');
-  } else {
-    const labelText = filter === 'done' ? '没有已完成的会话' : '无不活跃会话（1 小时内都有消息活动）';
-    html += rows.length ? rows.map(mkLiveRow).join('') : '<div class="empty">' + labelText + '</div>';
-    if (filter !== 'all' || showHist || curProj) html += hist.length ? hist.map(mkHistRow).join('') : '<div class="empty">没有历史会话</div>';
-  }
-  const FILT_LABELS = [['all', '所有对话'], ['done', '完成会话'], ['hidden', '隐藏会话']];
+  const EMPTY_TEXT = { all: '暂无活跃会话（进行中 / 10 分钟内完成 / 1 小时内有过活动）', done: '没有已完成的会话（结束超 10 分钟的 ✓ 会话）', hidden: '没有隐藏会话（空闲/出错 超 1 小时无消息才会进入这里）' };
+  html += rows.length ? rows.map(mkLiveRow).join('') : '<div class="empty">' + EMPTY_TEXT[filter] + '</div>';
+  if (filter !== 'all' || showHist || curProj) html += hist.length ? hist.map(mkHistRow).join('') : '';
+  const FILT_LABELS = [
+    ['all', '活跃会话', '进行中（思考/运行/等你确认/瞬态错误，不限时间）＋ 完成且结束 ≤10 分钟 ＋ 空闲/出错但 1 小时内有消息'],
+    ['done', '完成会话', '状态 = 完成，且结束已超过 10 分钟缓冲期'],
+    ['hidden', '隐藏会话', '空闲或持久出错，且 1 小时内无任何消息活动（未活跃，自动判定）'],
+  ];
+  const counts = { all: 0, done: 0, hidden: 0 };
+  for (const s of liveAll) counts[classify(s)]++;
+  for (const s of histPool) counts[classify(s)]++;
   const filtEl = $('sess-filter');
-  const filtHtml = FILT_LABELS.map(([v, l]) => '<button class="btn fbtn' + (filter === v ? ' on' : '') + '" data-filter="' + v + '"' + (v === 'hidden' ? ' title="1 小时内无消息活动的会话（自动判定）"' : '') + '>' + l + '</button>').join('');
+  const filtHtml = FILT_LABELS.map(([v, l, tip]) => '<button class="btn fbtn' + (filter === v ? ' on' : '') + '" data-filter="' + v + '" title="' + esc(tip) + '">' + l + ' ' + counts[v] + '</button>').join('');
   if (filtEl.__petLastHtml !== filtHtml) { filtEl.innerHTML = filtHtml; filtEl.__petLastHtml = filtHtml }
   const sessEl = $('sessions');
   if (sessEl.__petLastHtml !== html) { sessEl.innerHTML = html; sessEl.__petLastHtml = html }
-  $('proj-hint').textContent = (agentSel ? ('仅 ' + agentSel.toUpperCase() + ' · ') : '') + (curProj ? curProj.name : '全部项目') + ' · 活跃 ' + rows.filter(activeOf).length + ' / 不活跃 ' + rows.filter(s => !activeOf(s)).length;
+  $('proj-hint').textContent = (agentSel ? ('仅 ' + agentSel.toUpperCase() + ' · ') : '') + (curProj ? curProj.name : '全部项目') + ' · 活跃 ' + counts.all + ' · 完成 ' + counts.done + ' · 隐藏 ' + counts.hidden;
   // ---- 投递目标行 ----
   const tgtEl=$('target');
   if(window.__TARGET__){

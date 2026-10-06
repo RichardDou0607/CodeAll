@@ -50,40 +50,55 @@ export const LOCAL_AGENTS = Object.freeze([
     note: '连接 = 插件 socket / 事件流 / 日志新鲜（DSH 专用的真连接口径）',
   },
   {
-    id: 'claude-code', name: 'Claude Code', source: 'claude-code',
+    id: 'claude-code-cli', name: 'Claude Code CLI', source: 'claude-code', base: 'claude-code', variantTag: 'cli',
     installPaths: [
-      path.join(HOME, '.claude'),
-      '/usr/local/bin/claude', '/opt/homebrew/bin/claude', path.join(HOME, '.local/bin/claude'),
-      ...fs.existsSync(path.join(HOME, '.vscode/extensions'))
-        ? fs.readdirSync(path.join(HOME, '.vscode/extensions')).filter((d) => /^anthropic\.claude-code/.test(d)).map((d) => path.join(HOME, '.vscode/extensions', d))
-        : [],
+      path.join(HOME, '.local/bin/claude'), '/usr/local/bin/claude', '/opt/homebrew/bin/claude',
+      '/usr/local/lib/node_modules/@anthropic-ai/claude-code',
     ],
-    processRe: /(^|\/)claude(\s|$)|@anthropic-ai\/claude-code|anthropic\.claude-code/,  // 大小写敏感：不匹配 Claude.app（聊天 App，E 级排除）
+    processRe: /(^|\/)claude(\s|$)|@anthropic-ai\/claude-code/,
+    processExclude: /\.app\/|Claude-3p/,                 // 排除桌面 App 的内置 CLI
     activity: [{ dir: path.join(HOME, '.claude', 'projects'), depth: 2, fileRe: /\.jsonl$/ }],
-    note: '连接 = 观察通道健康（进程在跑 + 转录目录可读）；静默不算断连',
+    note: '命令行版：~/.local/bin/claude（npm）',
   },
   {
-    id: 'codex', name: 'Codex', source: 'codex',
-    installPaths: [
-      path.join(HOME, '.codex'),
-      '/usr/local/bin/codex', '/opt/homebrew/bin/codex', path.join(HOME, '.local/bin/codex'),
-      '/Applications/Codex++.app', '/Applications/Codex++ 2.app',
-    ],
-    processRe: /(^|\/)codex(\s|$)|Codex\+\+/,  // codex-disk-* 不匹配（要求 codex 后是空白/行尾）
+    id: 'claude-code-desktop', name: 'Claude Code 桌面端', source: 'claude-code', base: 'claude-code', variantTag: 'desktop',
+    installPaths: ['/Applications/Claude.app', path.join(HOME, 'Library/Application Support/Claude')],
+    appBundle: '/Applications/Claude.app',
+    processRe: /(^|\/)claude(\s|$)|Claude-3p/,
+    processInclude: /\.app\/|Claude-3p/,                 // 只数桌面 App 进程（Claude.app 的 Code 能力）
+    activity: [{ dir: path.join(HOME, '.claude', 'projects'), depth: 2, fileRe: /\.jsonl$/ }],
+    note: '桌面版：Claude.app 内置 Code（转录 entrypoint=claude-desktop-3p）',
+  },
+  {
+    id: 'codex-cli', name: 'Codex CLI', source: 'codex', base: 'codex', variantTag: 'cli',
+    installPaths: [path.join(HOME, '.local/bin/codex'), '/usr/local/bin/codex', '/opt/homebrew/bin/codex', path.join(HOME, '.codex')],
+    processRe: /(^|\/)codex(\s|$)/,
+    processExclude: /Codex\+\+|\.app\//,
     activity: [{ dir: path.join(HOME, '.codex', 'sessions'), depth: 4, fileRe: /^rollout-.*\.jsonl$/ }],
-    note: '含 Codex++ 桌面壳；连接 = 观察通道健康；静默不算断连',
+    note: '命令行版：~/.local/bin/codex（npm）',
   },
   {
-    id: 'kimi-code', name: 'Kimi Code', source: 'kimi-code',
-    installPaths: ['/Applications/Kimi Code.app', path.join(HOME, '.kimi-code'), path.join(HOME, '.kimi-code', 'bin', 'kimi'), path.join(HOME, 'Library/Application Support/kimi-code-app')],
+    id: 'codex-desktop', name: 'Codex 桌面端', source: 'codex', base: 'codex', variantTag: 'desktop',
+    installPaths: ['/Applications/Codex++.app', '/Applications/Codex++ 2.app'],
+    appBundle: '/Applications/Codex++.app',
+    processRe: /Codex\+\+/,
+    activity: [{ dir: path.join(HOME, '.codex', 'sessions'), depth: 4, fileRe: /^rollout-.*\.jsonl$/ }],
+    note: '桌面版：Codex++ 壳（rollout originator=Codex Desktop）',
+  },
+  {
+    id: 'kimi-cli', name: 'Kimi CLI', source: 'kimi-code', base: 'kimi-code', variantTag: 'cli',
+    installPaths: [path.join(HOME, '.kimi-code', 'bin', 'kimi'), path.join(HOME, '.kimi-code')],
+    processRe: /(^|\/)kimi(\s|$)|\.kimi-code\/bin\/kimi/,
+    activity: [{ dir: path.join(HOME, '.kimi-code', 'sessions'), depth: 4, fileRe: /(wire\.jsonl|state\.json)$/ }],
+    note: '命令行版：~/.kimi-code/bin/kimi（与桌面共用数据目录）',
+  },
+  {
+    id: 'kimi-desktop', name: 'Kimi Code 桌面端', source: 'kimi-code', base: 'kimi-code', variantTag: 'desktop',
+    installPaths: ['/Applications/Kimi Code.app', path.join(HOME, 'Library/Application Support/kimi-code-app')],
     appBundle: '/Applications/Kimi Code.app',
-    processRe: /Kimi Code\.app\/|(^|\/|\/bin\/)kimi(\s|$)/,   // 桌面 App 或 ~/.kimi-code/bin/kimi CLI
-    // M-H A 路径：CLI 核心写 ~/.kimi-code（state.json + wire.jsonl）；LevelDB 是前端层缓存（兜底信号）
-    activity: [
-      { dir: path.join(HOME, '.kimi-code', 'sessions'), depth: 4, fileRe: /(wire\.jsonl|state\.json)$/ },
-      { dir: KIMI_LEVELDB, depth: 1, fileRe: /\.(log|ldb)$/ },
-    ],
-    note: 'A 路径：state.json 目录 + wire.jsonl 事件 tail（LevelDB 仅前端层兜底）',
+    processRe: /Kimi Code\.app\//,
+    activity: [{ dir: KIMI_LEVELDB, depth: 1, fileRe: /\.(log|ldb)$/ }],
+    note: '桌面版：Kimi Code.app（Electron）',
   },
   {
     id: 'agentos', name: 'AgentOS M1', source: 'agentos',
@@ -193,7 +208,10 @@ export async function scanLocalAgents(ctx = {}) {
     const procs = [];
     for (const line of lines) {
       if (procs.length >= 5) break;                       // 计数封顶 5，够显示即可
-      if (a.processRe.test(line)) { const pid = Number((line.trim().match(/^(\d+)/) || [])[1]); if (Number.isFinite(pid)) procs.push(pid); }
+      // CLI 与桌面端按进程路径特征区分（cc-switch 思路：安装位置/路径归属）：
+      //   桌面端进程路径含 .app/Contents 或专属目录（Claude-3p / Codex++ / Kimi Code.app）；
+      //   CLI 是裸二进制路径（~/.local/bin、~/.kimi-code/bin、node_modules）
+      if (a.processRe.test(line) && (!a.processInclude || a.processInclude.test(line)) && !(a.processExclude && a.processExclude.test(line))) { const pid = Number((line.trim().match(/^(\d+)/) || [])[1]); if (Number.isFinite(pid)) procs.push(pid); }
     }
     const installed = evidence.length > 0 || procs.length > 0;
     if (procs.length) evidence.push('运行中进程 pid=' + procs.join(','));
@@ -217,15 +235,15 @@ export async function scanLocalAgents(ctx = {}) {
     }
     const status = !installed ? 'not-installed' : procs.length === 0 ? 'closed' : connected ? 'connected' : 'open-unconnected';
     agents.push({
-      id: a.id, name: a.name, source: a.source || a.id, status,
+      id: a.id, name: a.name, source: a.source || a.id, base: a.base || undefined, variantTag: a.variantTag || undefined, status,
       installed, running: procs.length > 0, connected, connectionKind,
       processes: procs.length, pids: procs,
       lastActivityMs, lastActivityWithinWindow: !!(lastActivityMs && now - lastActivityMs < windowMs),
-      sessionCount: a.id === 'kimi-code' ? kimiSessionCount().count : undefined,
-      sessionCountApproximate: a.id === 'kimi-code' ? kimiSessionCount().approximate || undefined : undefined,
+      sessionCount: a.id === 'kimi-desktop' ? kimiSessionCount().count : undefined,
+      sessionCountApproximate: a.id === 'kimi-desktop' ? kimiSessionCount().approximate || undefined : undefined,
       version: (await macAppVersion(a.appBundle))
-        ?? (a.id === 'claude-code' ? pkgVersion(['/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json', path.join(HOME, '.local/lib/node_modules/@anthropic-ai/claude-code/package.json')]) : null)
-        ?? (a.id === 'codex' ? pkgVersion([path.join(HOME, '.local/lib/node_modules/@openai/codex/package.json'), '/usr/local/lib/node_modules/@openai/codex/package.json']) : null),
+        ?? (a.id === 'claude-code-cli' ? pkgVersion(['/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json', path.join(HOME, '.local/lib/node_modules/@anthropic-ai/claude-code/package.json')]) : null)
+        ?? (a.id === 'codex-cli' ? pkgVersion([path.join(HOME, '.local/lib/node_modules/@openai/codex/package.json'), '/usr/local/lib/node_modules/@openai/codex/package.json']) : null),
       evidence, note: a.note ?? null,
     });
   }

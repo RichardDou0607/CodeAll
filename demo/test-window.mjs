@@ -47,17 +47,22 @@ const snap = {
     { id: 'session-2', lastActiveMs: now - 30000, source: 'claude-code', label: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, agentName: 'Claude Code', model: 'glm-5.3', reasoningEffort: 'high', kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
     { id: 'session-3', lastActiveMs: now - 30000, source: 'codex', label: 'docs', state: 'waiting', activity: '等待你批准', elapsedMs: 4000, pending: 2, agentName: 'Codex', model: 'gpt-6-sol', kind: 'main', projectKey: 'ws-1', variant: 'cli' },
     { id: 'session-4', lastActiveMs: now - 30000, source: 'dsh', label: 'web-ui', state: 'error', activity: '连接错误', elapsedMs: 2000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-2' },
-    { id: 'session-5', source: 'dsh', label: '旧任务', state: 'done', activity: '已完成', elapsedMs: 3000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-1', lastActiveMs: now - 7200000 },
+    { id: 'session-5', source: 'dsh', label: '旧任务', state: 'done', activity: '已完成', elapsedMs: 7200000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-1', since: now - 7200000, lastActiveMs: now - 7200000 },
+    { id: 'session-6', source: 'dsh', label: '刚完成', state: 'done', activity: '已完成', elapsedMs: 300000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-1', since: now - 300000, lastActiveMs: now - 300000 },
+    { id: 'session-7', source: 'dsh', label: '闲置会话', state: 'idle', activity: '空闲', elapsedMs: 7200000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-2', since: now - 7200000, lastActiveMs: now - 7200000 },
     { id: 'session-sub', source: 'dsh', label: '子代理内部', state: 'running', kind: 'subagent', projectKey: 'ws-1' },
   ],
   counters: { thinking: 1, running: 1, errors: 1, done: 1 },
   agents: [
-    { id: 'dsh', name: 'DeepSeek Harness', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'plugin', processes: 3, lastActivityMs: now - 2000, version: '0.2.0-rc.2', evidence: ['/Applications/DeepSeek Harness.app'] },
-    { id: 'claude-code', name: 'Claude Code', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 1, lastActivityMs: now - 9000, version: '2.1.278', variants: { cli: 13, desktop: 33, ide: 4 }, evidence: ['~/.claude'] },
-    { id: 'codex', name: 'Codex', status: 'open-unconnected', installed: true, running: true, connected: false, connectionKind: null, processes: 1, lastActivityMs: now - 400000, version: '0.160.1', evidence: ['~/.codex'] },
-    { id: 'kimi-code', name: 'Kimi Code', status: 'closed', installed: true, running: false, connected: false, connectionKind: null, processes: 0, lastActivityMs: now - 7200000, version: '1.0.4', sessionCount: 9, evidence: ['/Applications/Kimi Code.app'] },
-    { id: 'agentos', name: 'AgentOS M1', status: 'closed', installed: true, running: false, connected: false, processes: 0, evidence: [] },
-    { id: 'opencode', name: 'OpenCode', status: 'not-installed', installed: false, running: false, processes: 0, evidence: [] },
+    { id: 'dsh', name: 'DeepSeek Harness', source: 'dsh', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'plugin', processes: 3, lastActivityMs: now - 2000, version: '0.2.0-rc.2', evidence: ['/Applications/DeepSeek Harness.app'] },
+    { id: 'claude-code-cli', name: 'Claude Code CLI', source: 'claude-code', base: 'claude-code', variantTag: 'cli', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 2, lastActivityMs: now - 9000, version: '2.1.278', variants: { cli: 13 }, evidence: ['~/.local/bin/claude'] },
+    { id: 'claude-code-desktop', name: 'Claude Code 桌面端', source: 'claude-code', base: 'claude-code', variantTag: 'desktop', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 5, lastActivityMs: now - 9000, version: '2.19675.0', variants: { desktop: 33, ide: 4 }, evidence: ['/Applications/Claude.app'] },
+    { id: 'codex-cli', name: 'Codex CLI', source: 'codex', base: 'codex', variantTag: 'cli', status: 'open-unconnected', installed: true, running: true, connected: false, connectionKind: null, processes: 1, lastActivityMs: now - 400000, version: '0.160.1', variants: { cli: 2 }, evidence: ['~/.local/bin/codex'] },
+    { id: 'codex-desktop', name: 'Codex 桌面端', source: 'codex', base: 'codex', variantTag: 'desktop', status: 'open-unconnected', installed: true, running: true, connected: false, connectionKind: null, processes: 3, lastActivityMs: now - 400000, version: '1.5.0', variants: { desktop: 32 }, evidence: ['/Applications/Codex++.app'] },
+    { id: 'kimi-cli', name: 'Kimi CLI', source: 'kimi-code', base: 'kimi-code', variantTag: 'cli', status: 'closed', installed: true, running: false, connected: false, processes: 0, evidence: ['~/.kimi-code/bin/kimi'] },
+    { id: 'kimi-desktop', name: 'Kimi Code 桌面端', source: 'kimi-code', base: 'kimi-code', variantTag: 'desktop', status: 'closed', installed: true, running: false, connected: false, processes: 0, lastActivityMs: now - 7200000, version: '1.0.4', sessionCount: 9, evidence: ['/Applications/Kimi Code.app'] },
+    { id: 'agentos', name: 'AgentOS M1', source: 'agentos', status: 'closed', installed: true, running: false, connected: false, processes: 0, evidence: [] },
+    { id: 'opencode', name: 'OpenCode', source: 'opencode', status: 'not-installed', installed: false, running: false, processes: 0, evidence: [] },
   ],
   // 队列：一条已送达（不得显示）、一条待投递、一条失败（都要显示）
   inputs: [
@@ -115,18 +120,16 @@ const statusCls = getEl('status-page').className;
 const sessToolbarVisible = getEl('toolbar').style.visibility;
 sandbox.window.__VIEW__ = 'sessions';
 sandbox.render(snap);
-// 场景 3.6：所有对话 = 活跃/不活跃分区（1 小时自动判定；进行中状态无视窗口保持活跃）
+// 场景 3.6：三档互斥分类 —— 活跃（进行中/10min 内完成/1h 内有活动）、完成（done>10min）、隐藏（空闲/出错>1h 无消息）
 const rowsAll = getEl('sessions').innerHTML;
-const actIdx = rowsAll.indexOf('正在活跃'), inactIdx = rowsAll.indexOf('不活跃（1 小时无消息）');
-const actBlock = rowsAll.slice(actIdx, inactIdx > 0 ? inactIdx : undefined);
-// 场景 3.7：三态视图（完成 / 隐藏=自动不活跃）
+// 场景 3.7：三视图切换
 sandbox.window.__FILTER__ = 'done';
 sandbox.render(snap);
 const rowsDone = getEl('sessions').innerHTML;
 sandbox.window.__FILTER__ = 'hidden';
 sandbox.render(snap);
 const rowsHiddenView = getEl('sessions').innerHTML;
-// 进行中状态即使 2 小时无消息也算活跃（等审批不该被藏掉）
+// waiting 即使 2 小时无消息仍属活跃（规则①：与时间无关）
 const snapStale = JSON.parse(JSON.stringify(snap));
 Object.assign(snapStale.sessions.find(x => x.id === 'session-5'), { state: 'waiting', lastActiveMs: now - 7200000 });
 sandbox.window.__FILTER__ = 'all';
@@ -147,37 +150,38 @@ sandbox.render(snap);
 
 const checks = [
   ['顶部 agent 切换渲染 5 个 tab（全部/DSH/CLAUDE/CODEX/KIMI）', (tabsHtml.match(/class="tab/g) || []).length === 5 && tabsHtml.includes('全部') && tabsHtml.includes('CODEX')],
-  ['默认 5 个实时行（已完成保留显示，子代理被过滤）', (rows.match(/class="srow"/g) || []).length === 5 && !rows.includes('session-sub')],
+  ['默认实时行=活跃档 5 行（1-4 进行中/出错 + session-6 刚完成缓冲；session-5 完成/session-7 隐藏已分档；子代理过滤）', (rows.match(/class="srow"/g) || []).length === 5 && rows.includes('data-session="session-6"') && !rows.includes('data-session="session-5"') && !rows.includes('data-session="session-7"') && !rows.includes('session-sub')],
   ['会话行可辨来源与项目（来源列 + 项目名进 meta）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('· agent桌宠')],
-  ['来源列区分命令行/桌面版本（CLAUDE·桌面 / CODEX·CLI 实时；CLAUDE·CLI / CODEX·桌面 历史）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('>CODEX·CLI</span>') && rows.includes('>CLAUDE·CLI</span>') && rows.includes('>CODEX·桌面</span>')],
-  ['历史行来源列（CODEX·桌面 / KIMI）', rows.includes('>CODEX·桌面</span>') && rows.includes('>KIMI</span>')],
+  ['实时行来源形态徽标（CLAUDE·桌面 / CODEX·CLI）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('>CODEX·CLI</span>')],
+  ['完成/隐藏视图的历史行徽标（CODEX·桌面 在完成；KIMI 在隐藏）', rowsDone.includes('>CODEX·桌面</span>') && rowsHiddenView.includes('>KIMI</span>')],
   ['左侧项目列表（全部项目 + 3 项，含进行中计数）', (projHtml.match(/class="pitem/g) || []).length === 4 && projHtml.includes('3 进行') && projHtml.includes('agent桌宠')],
-  ['软件状态独立页：6 张卡片 + 四态徽标', (statusCards.match(/class="scard"/g) || []).length === 6 && ['已连接', '已打开 · 未连接', '未打开', '未下载'].every(t => statusCards.includes(t))],
+  ['软件状态独立页：9 张卡片（CLI 与桌面端拆行）+ 四态徽标', (statusCards.match(/class="scard"/g) || []).length === 9 && ['已连接', '已打开 · 未连接', '未打开', '未下载'].every(t => statusCards.includes(t))],
+  ['CLI 与桌面端各自独立行（Claude Code CLI / Claude Code 桌面端 / Codex CLI / Codex 桌面端 / Kimi CLI / Kimi Code 桌面端）', ['Claude Code CLI','Claude Code 桌面端','Codex CLI','Codex 桌面端','Kimi CLI','Kimi Code 桌面端'].every(n=>statusCards.includes(n))],
   ['独立页不与会话页重叠（main 隐藏 / status on / 会话工具栏隐藏）', mainDisplay === 'none' && statusCls === 'on' && sessToolbarVisible === 'hidden'],
   ['独立页显示观察通道与活跃度', statusCards.includes('观察通道') && statusCards.includes('活动中') && statusCards.includes('静默')],
-  ['独立页区分 CLI/桌面会话计数', statusCards.includes('CLI 13 · 桌面 33 · IDE 4 会话')],
+  ['独立页按行带各自形态计数（CLI 行=CLI 13；桌面行=桌面 33 · IDE 4）', statusCards.includes('CLI 13') && statusCards.includes('桌面 33 · IDE 4')],
   ['独立页 Kimi 精确计数（9 会话，无 ≈）', statusCards.includes('>9</b>') && !statusCards.includes('≈9')],
   ['回到会话视图：main 恢复显示', getEl('main').style.display === 'flex' && getEl('status-page').className === ''],
-  ['顶部切 CLAUDE → 仅 claude 实时行 + claude 历史', rowsClaude.includes('data-session="session-2"') && rowsClaude.includes('data-session="hist-cc"') && !rowsClaude.includes('data-session="session-1"') && !rowsClaude.includes('data-session="hist-1"')],
+  ['顶部切 CLAUDE → 仅 claude 的活跃实时行（活跃档历史为空不掺行）', rowsClaude.includes('data-session="session-2"') && !rowsClaude.includes('data-session="session-1"') && !rowsClaude.includes('data-session="hist-1"')],
   ['顶部切 CLAUDE → 项目侧栏只留含 claude 的项目（仅 ws-1）', (projClaude.match(/class="pitem/g) || []).length === 2 && projClaude.includes('agent桌宠') && !projClaude.includes('原生AI操作系统')],
   ['proj-hint 反映 agent 过滤', hintClaude.includes('CLAUDE-CODE') && hintClaude.includes('claude') === false],
-  ['左侧选项目 ws-1 → 只留该项目的实时行（3 行 + ws-1 历史）', rowsProj.includes('data-session="session-3"') && !rowsProj.includes('data-session="session-4"') && rowsProj.includes('data-session="hist-cc"') && !rowsProj.includes('data-session="hist-cx"')],
-  ['选项目后历史自动出现（无需开历史开关）', rowsProj.includes('data-session="hist-1"')],
+  ['左侧选项目 ws-1 → 只留该项目活跃行（session-1/2/3/6；ws-2 的 session-4/7 不在）', ['session-1','session-2','session-3','session-6'].every(id=>rowsProj.includes('data-session="'+id+'"')) && !rowsProj.includes('data-session="session-4"') && !rowsProj.includes('data-session="session-7"')],
+  ['选项目后历史区出现该项目的活跃档（ws-1 无活跃历史则无历史行）', !rowsProj.includes('data-session="hist-cx"')],
   ['非 DSH 目标标注 CLI 投递通道', targetCli.includes('api-fix') && targetCli.includes('经 CLAUDE-CODE CLI 投递')],
   ['DSH 目标为常规目标行', targetDsh.includes('agent桌宠') && targetDsh.includes('点击恢复自动') && !targetDsh.includes('CLI 投递')],
-  ['所有视图分「正在活跃 / 不活跃（1 小时无消息）」两区', actIdx > 0 && inactIdx > actIdx],
-  ['活跃分区含进行中会话与 30 分钟前的完成会话（hist-act）', actBlock.includes('data-session="session-1"') && actBlock.includes('data-session="session-3"') && actBlock.includes('data-session="hist-act"') && !actBlock.includes('data-session="session-5"')],
-  ['不活跃分区含 2 小时无活动的完成会话（session-5）', rowsAll.slice(inactIdx).includes('data-session="session-5"')],
-  ['三态分段控件渲染（所有对话/完成会话/隐藏会话）', (getEl('sess-filter').innerHTML.match(/class="btn fbtn/g) || []).length === 3 && getEl('sess-filter').innerHTML.includes('隐藏会话')],
-  ['「完成会话」视图：仅 done（session-5 + done 历史，含 30 分钟前的 hist-act）', rowsDone.includes('data-session="session-5"') && rowsDone.includes('data-session="hist-1"') && rowsDone.includes('data-session="hist-act"') && !rowsDone.includes('data-session="session-1"') && !rowsDone.includes('data-session="session-3"')],
-  ['「隐藏会话」视图=自动不活跃：2 小时无活动的在，活跃的不在', rowsHiddenView.includes('data-session="session-5"') && rowsHiddenView.includes('data-session="hist-1"') && !rowsHiddenView.includes('data-session="session-1"') && !rowsHiddenView.includes('data-session="hist-act"')],
-  ['进行中状态（waiting）即使超窗仍算活跃，不进隐藏', rowsStale.indexOf('正在活跃') < rowsStale.indexOf('data-session="session-5"') && rowsStale.includes('data-session="session-5"')],
+  ['活跃视图=三档之「活跃」：进行中 + 10 分钟内完成(session-6) + 1h 内有活动；不含 2h 前完成与 2h 闲置', rowsAll.includes('data-session="session-6"') && rowsAll.includes('data-session="session-1"') && !rowsAll.includes('data-session="session-5"') && !rowsAll.includes('data-session="session-7"')],
+  ['活跃视图排序：waiting(session-3) 在 running(session-1) 前', rowsAll.indexOf('data-session="session-3"') < rowsAll.indexOf('data-session="session-1"')],
+  ['三态分段控件带规则提示与计数', (getEl('sess-filter').innerHTML.match(/class="btn fbtn/g) || []).length === 3 && getEl('sess-filter').innerHTML.includes('隐藏会话') && /data-filter="hidden"[^>]*title="[^"]*1 小时内无任何消息活动/.test(getEl('sess-filter').innerHTML)],
+  ['「完成会话」视图：done>10min（session-5 + done 历史），不含缓冲期内的 session-6', rowsDone.includes('data-session="session-5"') && rowsDone.includes('data-session="hist-1"') && !rowsDone.includes('data-session="session-6"') && !rowsDone.includes('data-session="session-1"')],
+  ['「隐藏会话」视图：仅空闲/出错超 1h（session-7 + 老 idle 历史），不含完成档与活跃档', rowsHiddenView.includes('data-session="session-7"') && rowsHiddenView.includes('data-session="hist-km"') && !rowsHiddenView.includes('data-session="session-5"') && !rowsHiddenView.includes('data-session="session-1"')],
+  ['三档互斥：proj-hint 计数齐全', getEl('proj-hint').textContent.includes('活跃') && getEl('proj-hint').textContent.includes('完成') && getEl('proj-hint').textContent.includes('隐藏')],
+  ['waiting 即使 2 小时无消息仍属活跃（规则①不限时间）', rowsStale.includes('data-session="session-5"')],
   ['队列只显示未完成：delivered 不出现，queued/failed 在', !queueHtml.includes('这条已送达') && queueHtml.includes('把进度总结成三行') && queueHtml.includes('失败') && queueHtml.includes('data-resend')],
   ['队列项有复制/删除入口', queueHtml.includes('data-copy') && queueHtml.includes('data-del')],
   ['聚合状态=等待你', getEl('agg-text').textContent === '等待你'],
   ['新建按钮可用（CLI 通道就绪）', getEl('new-session').disabled === false],
   ['hint 显示 CLI 投递模式', getEl('hint').textContent.includes('CLI 投递')],
-  ['渲染统计返回（rows/hist/projects）', out.rows === 5 && typeof out.hist === 'number' && out.projects === 3],
+  ['渲染统计返回（rows=活跃档 5 / projects）', out.rows === 5 && typeof out.hist === 'number' && out.projects === 3],
   ['原生窗口控制（红黄绿）接管关闭/缩放/全屏：页面无自绘窗口按钮', true],
   ['token 注入后脚本仍可执行' + (injectedOk ? '' : '：' + injectedErr), injectedOk],
   ['esc 转义', sandbox.esc('a"b<c') === 'a&quot;b&lt;c'],

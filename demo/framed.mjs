@@ -403,18 +403,18 @@ function snapshot() {
   if (unregistered.length) {
     sidebarProjects.push({
       key: '__none__', projectId: '__none__', workspaceId: null, name: '未归入项目', title: '未归入项目', cwd: null,
-      sessionCount: Math.min(unregistered.length, 12), mainCount: Math.min(unregistered.length, 12), subagentCount: 0,
+      sessionCount: Math.min(unregistered.length, 100), mainCount: Math.min(unregistered.length, 100), subagentCount: 0,
       liveCount: unregistered.filter(r => r.live || liveIds.has(r.sessionId)).length,
       sources: ['dsh'],
-      sessions: unregistered.slice(0, 12),
+      sessions: unregistered.slice(0, 100),
       unregistered: true,
     });
   }
   // 历史行（非实时）：跨源合并，按更新时间排，总量截 40
+  // 完整会话列表：不截断（用户要求展示 agent 软件内的全部会话；本机四源合计 ~100 行，DOM 无压力）
   const history = sidebarProjects.flatMap(p => p.sessions)
     .filter(s => !liveIds.has(s.sessionId) && !s.live)
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, 40)
     .map(s => ({ ...s, source: s.source || 'dsh', projectKey: keyOfSession(s.sessionId, s) }));
   return {
     v: 1, ts: Date.now(), agg,
@@ -425,7 +425,17 @@ function snapshot() {
       for (const s of multi.cc.sessions || []) bump('claude-code', s.variant);
       for (const s of multi.cx.sessions || []) bump('codex', s.variant);
       for (const s of multi.km.sessions || []) bump('kimi-code', s.variant);
-      return (agentStatus.agents || []).map((a) => ({ ...a, variants: counts[a.source] || null }));
+      // CLI/桌面端拆行后（base+variantTag）：每行只带自己形态的会话计数
+      // （claude 桌面行含 桌面+IDE；CLI 行只含 CLI；DSH/AgentOS/OpenCode 无形态）
+      return (agentStatus.agents || []).map((a) => {
+        const cnt = counts[a.base || a.source];
+        let v = null;
+        if (cnt) {
+          if (a.variantTag === 'cli') v = cnt.cli ? { cli: cnt.cli } : null;
+          else if (a.variantTag === 'desktop') v = { ...(cnt.desktop ? { desktop: cnt.desktop } : {}), ...(cnt.ide ? { ide: cnt.ide } : {}) };
+        }
+        return { ...a, variants: v && Object.keys(v).length ? v : null };
+      });
     })(),
     agentCounts: agentStatus.counts || {},
     counters: state.counters,

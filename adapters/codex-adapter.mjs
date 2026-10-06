@@ -143,7 +143,16 @@ export function parseCodexSession(file, opts = {}) {
       if (typeof m === 'string') { model = m; metaSources.model = 'thread_settings_applied.model'; }
     }
   }
-  const coarse = coarseStateFromLines(tail.length ? tail : lines);
+  let coarse = coarseStateFromLines(tail.length ? tail : lines);
+  // 时效修正：task_started 后中断的会话不该永远 thinking/running（超 5 分钟降级 idle）
+  {
+    const win = tail.length ? tail : lines;
+    let lastTs = null;
+    for (let i = win.length - 1; i >= 0; i--) { const t = Date.parse(win[i]?.timestamp); if (Number.isFinite(t)) { lastTs = t; break } }
+    if ((coarse.state === 'thinking' || coarse.state === 'running') && lastTs !== null && ((Number.isFinite(o.now) ? o.now : Date.now()) - lastTs) > 300_000) {
+      coarse = { state: 'idle', stateSource: coarse.stateSource + ':stale>5min→idle' };
+    }
+  }
   const now = Number.isFinite(o.now) ? o.now : Date.now();
   const isSub = parent != null && parent !== '';
   // 会话形态：originator 本机实测 "Codex Desktop"（Codex++ 壳）；CLI 发起的会话为 codex/codex-cli 等

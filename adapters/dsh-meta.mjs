@@ -228,7 +228,14 @@ export function coarseState(events = []) {
       default: break;
     }
   });
-  if (lastTurnStart > lastTurnEnd) return { state: 'running', stateSource: 'tail:turn/start 无配对 turn/end' };
+  if (lastTurnStart > lastTurnEnd) {
+    // 时效修正：turn/start 无配对 turn/end 且尾部最后事件已超 5 分钟 = 会话被中断/进程被杀，
+    // 死会话不该永远显示运行中（与 claude/codex/kimi 适配器同一规则）
+    let lastTs = null;
+    for (let i = events.length - 1; i >= 0; i--) { if (Number.isFinite(events[i]?.time)) { lastTs = events[i].time; break } }
+    if (lastTs !== null && Date.now() - lastTs > 300_000) return { state: 'idle', stateSource: 'tail:turn/start 无配对 turn/end（stale>5min→idle）' };
+    return { state: 'running', stateSource: 'tail:turn/start 无配对 turn/end' };
+  }
   if (lastError > lastTurnEnd && lastError > lastReply) return { state: 'error', stateSource: 'tail:llm/retry 晚于最后一次 turn/end' };
   if (String(endReason ?? '').match(/error|fail/i)) return { state: 'error', stateSource: 'tail:turn/end(reason=' + endReason + ')' };
   if (lastEndSeen >= 0) return { state: 'ended', stateSource: 'tail:session/end-seed' };
