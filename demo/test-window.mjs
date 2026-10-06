@@ -11,7 +11,7 @@ const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
 let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 script = script.replace(/let es=null;[\s\S]*$/, ''); // 去掉自动连接
 
-const ids = ['agg-dot','agg-text','chips','agent-tabs','toggle-pet','projects','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note','view-sessions','view-status','status-page','status-cards','main','toolbar','hide-done','restore-hidden'];
+const ids = ['agg-dot','agg-text','chips','agent-tabs','toggle-pet','projects','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note','view-sessions','view-status','status-page','status-cards','main','toolbar','sess-filter'];
 const store = new Map();
 const mkEl = (id) => ({
   id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false, title: '',
@@ -43,11 +43,11 @@ const now = Date.now();
 const snap = {
   v: 1, ts: now, agg: 'waiting',
   sessions: [
-    { id: 'session-1', source: 'dsh', label: 'agent桌宠', state: 'running', activity: '运行命令', elapsedMs: 74000, pending: 0, agentName: 'DSH', model: 'deepseek-flash', reasoningEffort: 'max', kind: 'main', projectKey: 'ws-1' },
-    { id: 'session-2', source: 'claude-code', label: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, agentName: 'Claude Code', model: 'glm-5.3', reasoningEffort: 'high', kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
-    { id: 'session-3', source: 'codex', label: 'docs', state: 'waiting', activity: '等待你批准', elapsedMs: 4000, pending: 2, agentName: 'Codex', model: 'gpt-6-sol', kind: 'main', projectKey: 'ws-1', variant: 'cli' },
-    { id: 'session-4', source: 'dsh', label: 'web-ui', state: 'error', activity: '连接错误', elapsedMs: 2000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-2' },
-    { id: 'session-5', source: 'dsh', label: '旧任务', state: 'done', activity: '已完成', elapsedMs: 3000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-1' },
+    { id: 'session-1', lastActiveMs: now - 30000, source: 'dsh', label: 'agent桌宠', state: 'running', activity: '运行命令', elapsedMs: 74000, pending: 0, agentName: 'DSH', model: 'deepseek-flash', reasoningEffort: 'max', kind: 'main', projectKey: 'ws-1' },
+    { id: 'session-2', lastActiveMs: now - 30000, source: 'claude-code', label: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, agentName: 'Claude Code', model: 'glm-5.3', reasoningEffort: 'high', kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
+    { id: 'session-3', lastActiveMs: now - 30000, source: 'codex', label: 'docs', state: 'waiting', activity: '等待你批准', elapsedMs: 4000, pending: 2, agentName: 'Codex', model: 'gpt-6-sol', kind: 'main', projectKey: 'ws-1', variant: 'cli' },
+    { id: 'session-4', lastActiveMs: now - 30000, source: 'dsh', label: 'web-ui', state: 'error', activity: '连接错误', elapsedMs: 2000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-2' },
+    { id: 'session-5', source: 'dsh', label: '旧任务', state: 'done', activity: '已完成', elapsedMs: 3000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-1', lastActiveMs: now - 7200000 },
     { id: 'session-sub', source: 'dsh', label: '子代理内部', state: 'running', kind: 'subagent', projectKey: 'ws-1' },
   ],
   counters: { thinking: 1, running: 1, errors: 1, done: 1 },
@@ -80,6 +80,7 @@ const snap = {
       { sessionId: 'hist-cc', title: '修复 replay fixture', state: 'done', source: 'claude-code', agentName: 'Claude Code', model: 'glm-5.3', updatedAt: now - 5400000, kind: 'main', projectKey: 'ws-1', variant: 'cli' },
       { sessionId: 'hist-cx', title: 'SVG鹈鹕动画', state: 'done', source: 'codex', agentName: 'Codex', model: 'gpt-6-sol', updatedAt: now - 6600000, kind: 'main', projectKey: 'ws-2', variant: 'desktop' },
       { sessionId: 'hist-km', title: '前端简洁科技感重设计', state: 'idle', source: 'kimi-code', agentName: 'Kimi Code', model: 'k3', updatedAt: now - 9000000, kind: 'main', projectKey: '__none__' },
+      { sessionId: 'hist-act', title: '半小时前完成的会话', state: 'done', source: 'dsh', agentName: 'DSH', model: 'deepseek-flash', updatedAt: now - 1800000, kind: 'main', projectKey: 'ws-1' },
       { sessionId: 'hist-sub', title: '子代理历史', state: 'idle', agentName: 'DSH', kind: 'subagent', projectKey: 'ws-1', updatedAt: now - 1000 },
     ],
   },
@@ -114,18 +115,25 @@ const statusCls = getEl('status-page').className;
 const sessToolbarVisible = getEl('toolbar').style.visibility;
 sandbox.window.__VIEW__ = 'sessions';
 sandbox.render(snap);
-// 场景 3.6：手动隐藏已完成的会话（✕ / 隐藏已完成；再次活动自动复现）
-sandbox.window.__HIDDEN__ = ['session-5'];
+// 场景 3.6：所有对话 = 活跃/不活跃分区（1 小时自动判定；进行中状态无视窗口保持活跃）
+const rowsAll = getEl('sessions').innerHTML;
+const actIdx = rowsAll.indexOf('正在活跃'), inactIdx = rowsAll.indexOf('不活跃（1 小时无消息）');
+const actBlock = rowsAll.slice(actIdx, inactIdx > 0 ? inactIdx : undefined);
+// 场景 3.7：三态视图（完成 / 隐藏=自动不活跃）
+sandbox.window.__FILTER__ = 'done';
 sandbox.render(snap);
-const rowsHidden = getEl('sessions').innerHTML;
-const hideBtnText = getEl('hide-done').textContent;
-const restoreVisible = getEl('restore-hidden').style.display !== 'none';
-const restoreText = getEl('restore-hidden').textContent;
-// 已隐藏会话再次活动 → 自动复现
-const snapActive = JSON.parse(JSON.stringify(snap));
-snapActive.sessions.find(x => x.id === 'session-5').state = 'running';
-sandbox.render(snapActive);
-const rowsActive = getEl('sessions').innerHTML;
+const rowsDone = getEl('sessions').innerHTML;
+sandbox.window.__FILTER__ = 'hidden';
+sandbox.render(snap);
+const rowsHiddenView = getEl('sessions').innerHTML;
+// 进行中状态即使 2 小时无消息也算活跃（等审批不该被藏掉）
+const snapStale = JSON.parse(JSON.stringify(snap));
+Object.assign(snapStale.sessions.find(x => x.id === 'session-5'), { state: 'waiting', lastActiveMs: now - 7200000 });
+sandbox.window.__FILTER__ = 'all';
+sandbox.render(snapStale);
+const rowsStale = getEl('sessions').innerHTML;
+sandbox.render(snap);
+sandbox.window.__FILTER__ = 'all';
 sandbox.render(snap);
 // 场景四：投递目标 = claude 会话 → CLI 通道标注
 sandbox.window.__TARGET__ = 'session-2';
@@ -157,10 +165,13 @@ const checks = [
   ['选项目后历史自动出现（无需开历史开关）', rowsProj.includes('data-session="hist-1"')],
   ['非 DSH 目标标注 CLI 投递通道', targetCli.includes('api-fix') && targetCli.includes('经 CLAUDE-CODE CLI 投递')],
   ['DSH 目标为常规目标行', targetDsh.includes('agent桌宠') && targetDsh.includes('点击恢复自动') && !targetDsh.includes('CLI 投递')],
-  ['已完成行带 ✕ 手动隐藏入口', rows.includes('data-hide="session-5"')],
-  ['手动隐藏：已完成会话从实时区消失', !rowsHidden.includes('data-session="session-5"') && (rowsHidden.match(/class="srow"/g) || []).length === 4],
-  ['隐藏后「隐藏已完成」无可隐藏项，「恢复已隐藏 1」入口在', hideBtnText === '隐藏已完成' && restoreVisible && restoreText.includes('1')],
-  ['被隐藏会话再次活动 → 自动复现', rowsActive.includes('data-session="session-5"')],
+  ['所有视图分「正在活跃 / 不活跃（1 小时无消息）」两区', actIdx > 0 && inactIdx > actIdx],
+  ['活跃分区含进行中会话与 30 分钟前的完成会话（hist-act）', actBlock.includes('data-session="session-1"') && actBlock.includes('data-session="session-3"') && actBlock.includes('data-session="hist-act"') && !actBlock.includes('data-session="session-5"')],
+  ['不活跃分区含 2 小时无活动的完成会话（session-5）', rowsAll.slice(inactIdx).includes('data-session="session-5"')],
+  ['三态分段控件渲染（所有对话/完成会话/隐藏会话）', (getEl('sess-filter').innerHTML.match(/class="btn fbtn/g) || []).length === 3 && getEl('sess-filter').innerHTML.includes('隐藏会话')],
+  ['「完成会话」视图：仅 done（session-5 + done 历史，含 30 分钟前的 hist-act）', rowsDone.includes('data-session="session-5"') && rowsDone.includes('data-session="hist-1"') && rowsDone.includes('data-session="hist-act"') && !rowsDone.includes('data-session="session-1"') && !rowsDone.includes('data-session="session-3"')],
+  ['「隐藏会话」视图=自动不活跃：2 小时无活动的在，活跃的不在', rowsHiddenView.includes('data-session="session-5"') && rowsHiddenView.includes('data-session="hist-1"') && !rowsHiddenView.includes('data-session="session-1"') && !rowsHiddenView.includes('data-session="hist-act"')],
+  ['进行中状态（waiting）即使超窗仍算活跃，不进隐藏', rowsStale.indexOf('正在活跃') < rowsStale.indexOf('data-session="session-5"') && rowsStale.includes('data-session="session-5"')],
   ['队列只显示未完成：delivered 不出现，queued/failed 在', !queueHtml.includes('这条已送达') && queueHtml.includes('把进度总结成三行') && queueHtml.includes('失败') && queueHtml.includes('data-resend')],
   ['队列项有复制/删除入口', queueHtml.includes('data-copy') && queueHtml.includes('data-del')],
   ['聚合状态=等待你', getEl('agg-text').textContent === '等待你'],

@@ -255,6 +255,7 @@ function touchSession(sessionId, ev) {
     state.sessions.set(id, s); state.order.push(id);
   }
   s.events++;
+  s.lastAt = Date.now();          // 最后一次收到该会话事件的时间（活跃窗口判定用）
   s.since = s.since ?? ev.ts;
   if (ev.data?.workspace) { s.label = String(ev.data.workspace).split('/').pop(); s.cwd = ev.data.workspace; }
   if (ev.data?.origin) s.origin = ev.data.origin;   // 插件 session.start 带上 origin：子代理零延迟识别（不等 5s 目录刷新）
@@ -328,6 +329,7 @@ function snapshot() {
       cwd: meta.cwd || s.cwd || null, projectKey: keyOfSession(s.id, s),
       since: s.since, pending: s.pending, activity: s.activity,
       elapsedMs: Date.now() - s.since,
+      lastActiveMs: s.lastAt ?? s.since,
       agentName: meta.agentName || SOURCE_LABEL[s.source] || 'DSH', model: meta.model || null, reasoningEffort: meta.reasoningEffort || null,
       variant: meta.variant || null,
       agentPreset: meta.agentPreset || null, title: meta.title || null, kind: 'main', live: true,
