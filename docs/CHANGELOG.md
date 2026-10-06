@@ -138,3 +138,13 @@
 - **测试**：`scripts/multi-source-check.mjs` 19 → 26 项全绿（新增 MK1–9：A 路径目录/元信息/性能/wire 映射含审批对/非降级 observes/LevelDB 兜底仍在；MC1 升级为要求四源历史行）；`demo/test-window.mjs` 38 项全绿。
 - **实测**：`agent综合管理平台[dsh+claude-code+kimi-code]` 三源同项目；浏览器实测 23 项目 / 92 会话同窗、7 条 KIMI 历史行（真实标题/模型/思考档/状态）、四态面板 kimi-code 精确计数 9、控制台零报错。
 - **文档**：docs/21（M-H 勘误+A 路径落地、M-E 前置解除、§5 快照与 CLI 三件套）、docs/40（§0 表 #12 与 §3.11 重写，含勘误记录）、README。
+
+### 控制层落地：Claude Code / Codex / Kimi Code 投递·新建·打开全通（2026-10-06，代码，docs/21 M-D/M-E/M-H 控制 ✅）
+
+- **新增 `adapters/cli-control.mjs`**：三后端统一控制通道——投递（tmux 服务在跑则 `send-keys -l` 到「该 cwd 里跑着对应 CLI」的 pane；否则无头续会话 detached spawn：`claude --resume <id> -p` / `codex exec resume <id>` / `kimi -S <id> -p`，输出落 `~/.agent-pet/cli-control/*.log` 0600）；新建/打开（tmux window / Terminal.app osascript 新窗口，参数全 shell-quote）。安全边界：只走官方 CLI 能力，不注入不绕权（各 CLI 权限模式照常生效）。
+- **两个实测坑与修复**：① 宿主进程带 `ANTHROPIC_*/CLAUDE*` 环境变量时无头 claude 报 "Not logged in"（内部 BASE_URL 抢了 settings.json 优先级）→ spawn 前净化环境（剥 `ANTHROPIC_/CLAUDECODE/CLAUDE_CODE_` 前缀），CC Switch 供应商配置正常生效；② `codex exec` 在非 git 目录被 "Not inside a trusted directory" 挡 → 非 git cwd 附加 `--skip-git-repo-check`（仅跳过 git 检查，沙箱/审批不动）。
+- **`demo/framed.mjs`**：resolveTarget 返回 source 并放行三后端目标；deliverInput 按来源路由（DSH=插件/队列，CLI 后端=deliverControl）；`/api/new` 接受 `source` 走 `newCliSession`（Terminal/tmux 新窗口）；`/api/open` 对 CLI 会话真实打开（Terminal resume）；capabilities 增加 `cliChannels`，canInput/canCreate/canOpen 随 CLI 通道点亮；`resolveSessionAny` 补上 kimi 源（曾致 404）。
+- **`demo/window.html`**：目标行由「暂不支持投递」警示改为「经 CLAUDE-CODE CLI 投递」通道标注（默认色）；新建按钮按项目 sources 自动挑后端（DSH 插件优先，否则 CLI）；hint 三模式（cmd/cli/manual）；帮助页补控制层与安全边界说明。
+- **测试**：`scripts/multi-source-check.mjs` 26 → 28 静态项（MD1/2 控制通道与语法表；MC4 改为能力位）+ `--live` 真实投递 3 项（MD3/ME3/MH3：各挑**最小**旧会话发一条「只回复 ok」，等待会话文件字节增长验证控制→观察闭环）——**31 项全绿，三家真实闭环全部打通**；`demo/test-window.mjs` 40 项全绿（CLI 通道场景：按钮可用 + hint 模式 + 目标行通道标注）。
+- **实测**：浏览器点击 CLAUDE-CODE 历史行 → 「投递目标：demo · 经 CLAUDE-CODE CLI 投递」；canInput/canCreate/canOpen 全亮，cliChannels 三家齐。
+- **文档**：docs/21（M-D/M-E ✅ 落地 + M-H 控制层 + §5 快照「观察+控制四源全通」）、README。

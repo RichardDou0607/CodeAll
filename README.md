@@ -36,7 +36,8 @@ node adapters/claude-code-adapter.mjs    # Claude Code 会话目录（本机 11 
 node adapters/codex-adapter.mjs          # Codex 会话目录（13 主会话 / 19 子代理自动排除，~19ms）
 node adapters/kimi-code-adapter.mjs      # Kimi Code 会话目录（A 路径：state.json + wire 事件流，~4ms；--status 看四态数据）
 node adapters/local-agents.mjs      # 软件四态探测：已连接 / 已打开·未连接 / 未打开 / 未下载（~40ms）
-node scripts/multi-source-check.mjs # 多源适配验收（M-A/M-B/M-C/M-H，26 项断言，含真实服务实例）
+node adapters/cli-control.mjs --selftest # 控制通道自检：claude/codex/kimi 投递·新建·打开（Terminal 机制验证）
+node scripts/multi-source-check.mjs # 多源适配验收（28 项静态 + --live 3 项真实投递闭环，共 31 项）
 
 # 其它演示
 node demo/frame.mjs                 # 终端实时工作框：跟随你正在跑的 DSH 会话（约 400ms 刷新）

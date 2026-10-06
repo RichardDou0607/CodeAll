@@ -25,6 +25,7 @@ import { scanLocalAgents } from '../adapters/local-agents.mjs';
 import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, followKimiLogs, SOURCE as KM_SOURCE } from '../adapters/kimi-code-adapter.mjs';
+import { CLI_TARGETS, availableCliChannels, deliverControl, newCliSession, openCliSession } from '../adapters/cli-control.mjs';
 import net from 'node:net';
 import crypto from 'node:crypto';
 
@@ -226,6 +227,16 @@ function multiCatalog(force) {
 }
 const sessionStates = new Map(); // sessionId -> 来自目录的粗粒度状态（无实时事件时用）
 
+// CLI 控制通道缓存（PATH 探测 60s 缓存，避免每 2s 快照都查）
+let cliChannelsCacheData = { at: 0, data: null };
+function cliChannelsCache() {
+  if (!cliChannelsCacheData.data || Date.now() - cliChannelsCacheData.at > 60_000) {
+    try { cliChannelsCacheData = { at: Date.now(), data: availableCliChannels() }; }
+    catch { cliChannelsCacheData = { at: Date.now(), data: [] }; }
+  }
+  return cliChannelsCacheData.data;
+}
+
 // ---------- 本地域 agent 软件四态（adapters/local-agents.mjs）：3s 轮询，DSH 连接态由此处注入 ----------
 let agentStatus = { agents: [], counts: {}, scannedAt: 0, tookMs: 0 };
 async function refreshAgentStatus() {
@@ -409,7 +420,12 @@ function snapshot() {
     counters: state.counters,
     inputs: state.inputs.slice(-8).reverse(),
     lastEvent: state.lastEvent,
-    inputChannel: INPUT_CMD ? { mode: 'cmd', detail: INPUT_CMD } : { mode: 'manual', detail: '未配置 DSH 输入通道：输入会进本地队列，点击可复制手动投递命令' },
+    inputChannel: (() => {
+      const cli = cliChannelsCache();
+      if (INPUT_CMD) return { mode: 'cmd', detail: INPUT_CMD };
+      if (cli.length) return { mode: 'cli', detail: 'DSH 经本地队列（挂插件可直投）；Claude Code / Codex / Kimi Code 会话直接经各自 CLI 投递' };
+      return { mode: 'manual', detail: '未配置输入通道：输入会进本地队列，点击可复制手动投递命令' };
+    })(),
     catalog: {
       projects: sidebarProjects.map(p => ({
         key: p.key, projectId: p.projectId, name: p.name, cwd: p.cwd,
@@ -421,15 +437,22 @@ function snapshot() {
       elapsedMs: multi.elapsedMs, scannedAt: cat.scannedAt,
       source: 'multi:workspace-registry+disk(claude-code,codex,kimi-code)',
     },
-    capabilities: {
-      canCatalog: true,
-      canInput: !!(plugin.info && ((plugin.info.capabilities || {}).canInput ?? plugin.info.canInput)) || false,
-      canOpen: !!(plugin.info && plugin.info.canOpen) || false,
-      canCreate: !!(plugin.info && plugin.info.canCreate) || false,
-      source: plugin.available ? 'plugin' : 'log-tail',
-      plugin: { available: plugin.available, socket: plugin.socket, events: plugin.events, info: plugin.info || null },
-      note: plugin.available ? 'DSH 插件已连接：进程内事件 + 输入投递 + 新建/打开可用' : '未挂载 DSH 插件：只读观察 + 本地队列（挂载方式见 docs/54-dsh-plugin.md）',
-    },
+    capabilities: (() => {
+      const cli = cliChannelsCache();
+      const pluginCanInput = !!(plugin.info && ((plugin.info.capabilities || {}).canInput ?? plugin.info.canInput));
+      return {
+        canCatalog: true,
+        canInput: pluginCanInput || cli.length > 0,
+        canOpen: !!(plugin.info && plugin.info.canOpen) || cli.length > 0,
+        canCreate: !!(plugin.info && plugin.info.canCreate) || cli.length > 0,
+        cliChannels: cli.map(c => ({ source: c.source, name: c.name })),
+        source: plugin.available ? 'plugin' : 'log-tail',
+        plugin: { available: plugin.available, socket: plugin.socket, events: plugin.events, info: plugin.info || null },
+        note: plugin.available
+          ? 'DSH 插件已连接：进程内事件 + 输入投递 + 新建/打开可用'
+          : (cli.length ? '控制通道：' + cli.map(c => c.name).join(' / ') + '（CLI 投递/新建/打开）；DSH 仍为只读观察' : '未挂载 DSH 插件且无 CLI 通道：只读观察 + 本地队列（挂载方式见 docs/54-dsh-plugin.md）'),
+      };
+    })(),
   };
 }
 function broadcast() { const payload = 'data: ' + JSON.stringify(snapshot()) + '\n\n'; for (const res of clients) { try { res.write(payload); } catch { clients.delete(res); } } }
@@ -469,10 +492,10 @@ function startFollower() {
 }
 
 // ---------- 输入投递 ----------
-/** 跨源定位会话（支持前缀）：DSH / Claude Code / Codex 目录各查一遍，返回时附带所属项目。 */
+/** 跨源定位会话（支持前缀）：DSH / Claude Code / Codex / Kimi Code 目录各查一遍，返回时附带所属项目。 */
 function resolveSessionAny(sessionId) {
   const multi = multiCatalog(false);
-  for (const cat of [multi.dsh, multi.cc, multi.cx]) {
+  for (const cat of [multi.dsh, multi.cc, multi.cx, multi.km]) {
     for (const p of cat.projects || []) {
       const s = (p.sessions || []).find(x => x.sessionId === sessionId || String(x.sessionId).indexOf(sessionId) === 0);
       if (s) return { ...s, project: { projectId: p.projectId, cwd: p.cwd, name: p.name, title: p.title } };
@@ -481,24 +504,32 @@ function resolveSessionAny(sessionId) {
   return null;
 }
 /** 校验并归一化用户指定的投递目标：必须是已知**主**会话（支持 sessionId 前缀）。
- *  投递通道当前只有 DSH（插件/队列）；claude-code/codex 的控制通道属 M-D/M-E（未落地），
- *  选中即明确报错——绝不静默投错后端。返回 {id,label} 或 {error}。 */
+ *  返回 {id,label,source} 或 {error}——source 供 deliverInput 路由（DSH=插件/队列；CLI 后端=cli-control）。 */
 function resolveTarget(sessionId) {
   if (!sessionId) return { id: null };
   const liveHit = state.order.map(id => state.sessions.get(id)).filter(Boolean).find(s => s.id === sessionId || s.id.startsWith(sessionId));
-  if (liveHit) {
-    if (liveHit.source && liveHit.source !== 'dsh') return { error: '「' + (liveHit.label || String(liveHit.id).slice(0, 12)) + '」是 ' + (SOURCE_LABEL[liveHit.source] || liveHit.source) + ' 会话：控制通道未落地（M-D/M-E），当前投递仅支持 DSH' };
-    return { id: liveHit.id, label: liveHit.label };
-  }
+  if (liveHit) return { id: liveHit.id, label: liveHit.label, source: liveHit.source ?? 'dsh' };
   const found = resolveSessionAny(String(sessionId));
   if (!found) return { error: '未找到会话 ' + String(sessionId).slice(0, 24) };
   if (found.kind === 'subagent') return { error: '「' + (found.title || found.sessionId.slice(0, 12)) + '」是子代理会话，不能作为投递目标' };
-  if (found.source && found.source !== 'dsh') return { error: '「' + (found.title || found.sessionId.slice(0, 12)) + '」是 ' + (SOURCE_LABEL[found.source] || found.source) + ' 会话：控制通道未落地（M-D/M-E），当前投递仅支持 DSH' };
-  return { id: found.sessionId, label: found.title };
+  return { id: found.sessionId, label: found.title, source: found.source || 'dsh' };
 }
-async function deliverInput(text, targetId) {
+async function deliverInput(text, targetId, targetSource) {
   // id 必须唯一：同毫秒两次发送若共用 id，删除/重发会误伤另一条
   const item = { id: 'in-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex'), text, at: Date.now(), status: 'pending', detail: '', sessionId: targetId || null };
+  // ⓪ CLI 后端（M-D/M-E/M-H 控制层）：tmux 优先 → 无头续会话兜底；回合写入会话文件后观察跟随器自动看到
+  if (targetSource && CLI_TARGETS[targetSource]) {
+    const sess = (() => {
+      const live = state.sessions.get(targetId);
+      if (live) return { sessionId: targetId, cwd: live.cwd };
+      const found = resolveSessionAny(String(targetId));
+      return found ? { sessionId: found.sessionId, cwd: found.cwd ?? found.project?.cwd } : { sessionId: targetId };
+    })();
+    const r = await deliverControl(targetSource, sess, text);
+    if (r.ok) { item.status = 'delivered'; item.detail = 'via ' + r.via; }
+    else { item.status = 'failed'; item.detail = 'CLI 投递失败：' + (r.detail || r.error); }
+    state.inputs.push(item); persistInput(item); broadcast(); return item;
+  }
   // ① 首选：DSH 插件（进程内投递；显式指定的目标优先，否则自动挑活跃主会话）
   if (plugin.available) {
     const targetSession = targetId || pluginTargetSession();
@@ -628,13 +659,24 @@ const server = http.createServer(async (req, res) => {
     }
     let body = '';
     req.on('data', c => { body += c; });
-    req.on('end', () => {
+    req.on('end', async () => {
       let sessionId = '';
       try { sessionId = String(JSON.parse(body).sessionId || ''); } catch {}
-      // 跨源定位（M-C）：DSH 会话维持原口径；claude/codex 会话「定位成功但不可切换跟随」并如实说明
+      // 跨源定位（M-C）+ 控制分发：CLI 后端直接在 Terminal 续接（M-D/M-E/M-H）；DSH 维持原口径
       const found = sessionId ? resolveSessionAny(sessionId) : null;
+      if (found && CLI_TARGETS[found.source]) {
+        const r = await openCliSession(found.source, found);
+        res.writeHead(r.ok ? 200 : 502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: r.ok, via: 'terminal',
+          session: { sessionId: found.sessionId, title: found.title, source: found.source, cwd: found.cwd },
+          opened: !!r.opened,
+          reason: r.ok ? undefined : 'Terminal 打开失败',
+          detail: r.detail || r.via,
+        }));
+        return;
+      }
       const reason = !found ? '未找到该会话'
-        : found.source && found.source !== 'dsh' ? '目录中已定位该 ' + (SOURCE_LABEL[found.source] || found.source) + ' 会话；切换实时跟随/打开属 M-D/M-E（控制通道未落地）'
         : '目录中已定位该会话；切换实时跟随需要 DSH 插件授权（canOpen 能力位）';
       res.writeHead(found ? 200 : 404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
@@ -647,32 +689,35 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'POST' && url.pathname === '/api/new') {
-    if (plugin.available) {
-      let body1 = '';
-      req.on('data', c => { body1 += c; });
-      req.on('end', async () => {
-        let payload1 = {}; try { payload1 = JSON.parse(body1); } catch {}
+    let body0 = '';
+    req.on('data', c => { body0 += c; });
+    req.on('end', async () => {
+      let payload0 = {};
+      try { payload0 = JSON.parse(body0); } catch {}
+      const cwd = String(payload0.cwd || '');
+      // ⓪ CLI 后端（M-D/M-E/M-H 控制层）：tmux 在跑开 window，否则 Terminal 新窗口（可见、可交互）
+      if (payload0.source && CLI_TARGETS[payload0.source]) {
+        const r = await newCliSession(payload0.source, cwd);
+        res.writeHead(r.ok ? 200 : 502, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(Object.assign({ ok: r.ok, via: r.ok ? r.via : undefined, error: r.error, detail: r.detail }, r.ok ? { note: '已在终端打开新会话；目录将在几秒内出现' } : {})));
+        return;
+      }
+      // ① DSH：插件进程内创建（需授权挂载）
+      if (plugin.available) {
         // workspaceRegistry.create 对不存在的目录会失败（→ 会话落不进项目）→ 这里先把目录建出来
-        if (payload1.cwd && !fs.existsSync(payload1.cwd)) {
-          try { fs.mkdirSync(payload1.cwd, { recursive: true }); } catch { /* 无权限等：交给插件报错 */ }
+        if (cwd && !fs.existsSync(cwd)) {
+          try { fs.mkdirSync(cwd, { recursive: true }); } catch { /* 无权限等：交给插件报错 */ }
         }
-        const r = await pluginRequest('POST', '/new', { cwd: payload1.cwd, model: payload1.model, reasoningEffort: payload1.reasoningEffort }, 8000).catch(e => ({ status: 0, json: { ok: false, detail: String(e.message || e) } }));
+        const r = await pluginRequest('POST', '/new', { cwd, model: payload0.model, reasoningEffort: payload0.reasoningEffort }, 8000).catch(e => ({ status: 0, json: { ok: false, detail: String(e.message || e) } }));
         res.writeHead(r.status || 502, { 'content-type': 'application/json' });
         res.end(JSON.stringify(Object.assign({ via: 'plugin' }, r.json)));
-      });
-      return;
-    }
-    let body = '';
-    req.on('data', c => { body += c; });
-    req.on('end', () => {
-      let payload = {};
-      try { payload = JSON.parse(body); } catch {}
-      const cwd = String(payload.cwd || '');
+        return;
+      }
       res.writeHead(501, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         ok: false, error: 'not-authorized',
-        reason: '新建会话需要在 DSH 进程内完成（Cordis 插件），当前未授权挂载；不得使用 DSH 凭证绕过',
-        requested: { cwd, agentName: payload.agentName || 'DSH', model: payload.model || null, reasoningEffort: payload.reasoningEffort || null },
+        reason: '新建 DSH 会话需要在 DSH 进程内完成（Cordis 插件），当前未授权挂载；不得使用 DSH 凭证绕过。Claude Code / Codex / Kimi Code 的新建可用（请求带 source 字段即走终端通道）',
+        requested: { cwd, agentName: payload0.agentName || 'DSH', model: payload0.model || null, reasoningEffort: payload0.reasoningEffort || null },
         howto: '见 demo/README.md「打开已存在会话 / 新建会话」与 docs/52-session-catalog.md 的能力矩阵',
       }));
     });
@@ -715,7 +760,7 @@ const server = http.createServer(async (req, res) => {
       if (!text) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: 'empty' })); return; }
       const t = resolveTarget(askedTarget || null);
       if (t.error) { res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'unknown-session', detail: t.error })); return; }
-      const item = await deliverInput(text.slice(0, 2000), t.id);
+      const item = await deliverInput(text.slice(0, 2000), t.id, t.source);
       // ok=真正送达；queued(202)=已入队无通道；failed(502)=投递失败。不再一律 ok:true（qa A-6）
       const code = item.status === 'delivered' ? 200 : item.status === 'queued' ? 202 : 502;
       res.writeHead(code, { 'content-type': 'application/json' });
@@ -764,6 +809,7 @@ server.listen(PORT, '127.0.0.1', () => {
   const cxFollow = followCodexLogs({ onEvent: applyEvent });
   const kmFollow = followKimiLogs({ onEvent: applyEvent });
   console.log('  观察通道： DSH=日志tail/插件 · Claude Code=转录tail · Codex=rollout tail · Kimi Code=wire.jsonl tail（M-H A 路径）');
+  console.log('  控制通道： ' + (cliChannelsCache().map((c) => c.name + '(' + c.bin + ')').join(' · ') || '无（CLI 不在 PATH）') + '；投递=tmux/无头续会话，新建/打开=Terminal 窗口');
   refreshAgentStatus();
   setInterval(refreshAgentStatus, 3000);   // 软件四态（ps + mtime 探测，实测 ~40ms）
 });

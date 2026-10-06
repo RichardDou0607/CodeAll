@@ -117,6 +117,14 @@ sandbox.render(snap);
 sandbox.render(Object.assign({}, snap, { agents: undefined }));
 const agentsMissing = getEl('agents').innerHTML;
 sandbox.render(snap);
+// 场景七：CLI 控制通道就绪（M-D/E/H 控制层）→ 新建按钮可用 + hint 显示 CLI 投递模式
+sandbox.render(Object.assign({}, snap, {
+  capabilities: { canCatalog: true, canOpen: true, canCreate: true, cliChannels: [{ source: 'claude-code', name: 'Claude Code' }, { source: 'codex', name: 'Codex' }, { source: 'kimi-code', name: 'Kimi Code' }], plugin: { available: false } },
+  inputChannel: { mode: 'cli', detail: 'DSH 经本地队列；其余经 CLI' },
+}));
+const btnWithCli = !getEl('new-session').disabled;
+const hintCli = getEl('hint').textContent;
+sandbox.render(snap);
 const checks = [
   ['渲染 5 个实时会话行 + 4 个历史会话行（含多源/未注册组）', (rows.match(/class="srow"/g) || []).length === 5 && (rows.match(/class="srow hist"/g) || []).length === 4],
   ['子代理实时会话被过滤（不渲染 session-sub）', !rows.includes('data-session="session-sub"') && !rows.includes('T13 Tauri')],
@@ -138,9 +146,9 @@ const checks = [
   ['隐藏按钮存在且可交互', typeof getEl('hide-win').onclick === 'function'],
   ['投递目标默认显示「自动」', targetReset.includes('投递目标：自动') || rows.includes('投递目标：自动')],
   ['选中投递目标后行高亮（srow sel）', rowsSel.includes('class="srow sel" data-session="session-2"')],
-  ['非 DSH 目标行显示「暂不支持投递」警示（M-D/M-E 未落地）', targetSel.includes('api-fix') && targetSel.includes('CLAUDE-CODE 暂不支持投递') && targetSel.includes('观察通道')],
-  ['非 DSH 目标行黄色警示色', targetSelColor === 'var(--wait)'],
-  ['DSH 目标行显示会话名与「点击恢复自动」（无警示）', targetDsh.includes('agent桌宠') && targetDsh.includes('点击恢复自动') && !targetDsh.includes('暂不支持投递')],
+  ['非 DSH 目标行标注 CLI 投递通道（M-D/E/H 控制层）', targetSel.includes('api-fix') && targetSel.includes('经 CLAUDE-CODE CLI 投递') && !targetSel.includes('暂不支持')],
+  ['CLI 目标行不再用警示色（默认色）', targetSelColor === ''],
+  ['DSH 目标行显示会话名与「点击恢复自动」', targetDsh.includes('agent桌宠') && targetDsh.includes('点击恢复自动')],
   ['陈旧目标自动回退到自动选择', targetReset.includes('投递目标：自动') && !targetReset.includes('session-gone')],
   ['token 注入后脚本仍可执行（属性名不被误替换）' + (injectedOk ? '' : '：' + injectedErr), injectedOk],
   ['选中项目按 projectKey 过滤实时行（3 实时 + 2 历史，不含 ws-2/子代理）', projLiveIds.length === 5 && projLiveIds.includes('session-1') && projLiveIds.includes('session-2') && projLiveIds.includes('session-3') && projLiveIds.includes('hist-1') && projLiveIds.includes('hist-cc') && !projLiveIds.includes('session-4') && !projLiveIds.includes('hist-cx')],
@@ -157,6 +165,8 @@ const checks = [
   ['折叠后软件面板隐藏（hidden 类 + 空内容）', agentsHiddenCls.includes('hidden') && agentsHiddenHtml === ''],
   ['无 agents 字段时显示探测占位且不报错', agentsMissing.includes('正在探测本机 agent 软件')],
   ['软件状态切换按钮存在且可交互', typeof getEl('toggle-agents').onclick === 'function'],
+  ['CLI 通道就绪时新建会话按钮可用', btnWithCli === true],
+  ['hint 显示 CLI 投递模式（DSH 队列 + 三家 CLI）', hintCli.includes('CLI 投递') && hintCli.includes('Kimi')],
 ];
 let ok = true;
 for (const [name, pass] of checks) { console.log((pass ? '✅ ' : '❌ ') + name); if (!pass) ok = false; }

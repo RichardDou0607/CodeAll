@@ -102,12 +102,12 @@ select{flex:1;background:#0d1117;color:var(--txt);border:1px solid var(--line);b
     ④ <b>打开已存在会话</b>：历史会话行点击即选中为目标并定位（切换实时跟随需插件授权）<br>
     ⑤ <b>新建会话</b>：插件连通后按钮可用（在 DSH 进程内创建）；未连通时禁用并说明原因，<b>不使用 DSH 凭证绕过权限</b><br>
     ⑥ <b>软件状态面板</b>：本机每个 agent 软件的四态（<b>已连接</b> / <b>已打开 · 未连接</b> / <b>未打开</b> / <b>未下载</b>）；安装=App 包/CLI/配置目录存在性（cc-switch 同款），运行=进程探测，连接=观察通道 45s 内有数据<br>
-    ⑦ <b>多后端同窗</b>（M-A/M-B/M-C/M-H）：Claude Code 转录、Codex rollout、Kimi Code wire 事件流只读接入，与 DSH 会话并列显示（来源列区分）；同目录项目自动归并。投递当前仅支持 DSH，选其他后端为目标会显式提示
+    ⑦ <b>多后端同窗 + 总控投递</b>（M-A/B/C/H + M-D/E 控制层）：Claude Code 转录、Codex rollout、Kimi Code wire 事件流只读观察，与 DSH 会话并列（来源列区分、同目录项目自动归并）。投递：DSH=插件/队列；其余三家经各自 CLI（tmux 在跑则 send-keys，否则无头续会话，回合完成后状态自动回流）。新建/打开 = 终端新窗口
     <h4 style="margin-top:14px">输入如何送达</h4>
-    当前进本地队列，点击队列里的「复制」把文本粘到 DSH 输入框即可；授权挂载插件后可直接送达。<br>
-    <h4 style="margin-top:14px">为什么打开/新建要授权</h4>
-    运行中的会话日志有排他锁（直写会损坏会话）；DSH 的 GUI 接口需要浏览器会话密钥，让悬浮窗持有它属于越权。插件方式是在 DSH 自身进程内调用官方 API，权限最小。<br>
-    <span style="color:#6b7a90">数据只读自 <code>~/.dsh/sessions/**</code>、<code>~/.claude/projects/**</code>、<code>~/.codex/sessions/**</code>、<code>~/.kimi-code/sessions/**</code>；不接触任何凭证。</span>
+    DSH：授权挂载插件后直投，否则进本地队列（可复制）。Claude Code / Codex / Kimi Code：选中会话为目标后，发送即经 CLI 无头续会话送达（异步执行，状态由观察通道回流）。<br>
+    <h4 style="margin-top:14px">安全边界</h4>
+    控制通道只走各 CLI 官方能力（--resume / exec resume / -S），不注入不绕权：各 CLI 自身的权限模式照常生效；无头进程输出仅落 <code>~/.agent-pet/cli-control/</code>（0600）。<br>
+    <span style="color:#6b7a90">观察数据只读自 <code>~/.dsh</code>、<code>~/.claude</code>、<code>~/.codex</code>、<code>~/.kimi-code</code>；不接触任何凭证。</span>
   </div>
 </div>
 <script>
@@ -187,9 +187,9 @@ function render(snap){
   let tgtHit=null;
   for(const s of rows.concat(hist)){if(s.id===tgt||s.sessionId===tgt){tgtHit=s;break}}
   if(tgt&&!tgtHit)window.__TARGET__='';
-  // 非 DSH 会话可选中（观察联动），但投递通道未落地（M-D/M-E）——目标行显式警示，不静默失败
+  // 非 DSH 目标：经各自 CLI 投递（M-D/M-E/M-H 控制层已落地）——显示通道，不再是「不支持」警示
   const tgtSource=tgtHit?(tgtHit.source||'dsh'):'dsh';
-  const tgtBlocked=!!tgtHit&&tgtSource!=='dsh';
+  const tgtIsCli=!!tgtHit&&tgtSource!=='dsh';
   const effectiveHist=(showHist||!!pid)?hist:[];
   const proj=(snap.catalog&&snap.catalog.projects)||[];
   let html='';
@@ -225,22 +225,24 @@ function render(snap){
   const mainOf=function(p){return p.mainCount!=null?p.mainCount:p.sessionCount};
   const selHtml='<option value="">全部项目（'+projList.length+'）</option>'+projList.map(function(p){return '<option value="'+esc(p.key||p.projectId)+'"'+((p.key||p.projectId)===cur?' selected':'')+'>'+esc(p.name)+'（'+mainOf(p)+' 会话'+(p.liveCount?' · '+p.liveCount+' 进行中':'')+(p.unregistered?' · 未注册':'')+'）</option>'}).join('');
   if(sel.__petLastHtml!==selHtml){sel.innerHTML=selHtml;sel.__petLastHtml=selHtml}   // 同理：不打断下拉交互
-  // 投递目标行：显示当前目标（自动 = 服务端挑最近活跃主会话）；非 DSH 目标黄色警示（M-D/M-E 未落地）
+  // 投递目标行：显示当前目标（自动 = 服务端挑最近活跃主会话）；非 DSH 目标标注 CLI 投递通道
   const tgtEl=$('target');
   if(window.__TARGET__){
-    tgtEl.innerHTML=tgtBlocked
-      ?('投递目标：<b>'+esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12))+'</b> · ⚠ '+(String(tgtSource).toUpperCase())+' 暂不支持投递（观察通道）')
+    tgtEl.innerHTML=tgtIsCli
+      ?('投递目标：<b>'+esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12))+'</b> · 经 '+esc(String(tgtSource).toUpperCase())+' CLI 投递')
       :('投递目标：<b>'+esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12))+'</b>（点击恢复自动）');
-    tgtEl.style.color=tgtBlocked?'var(--wait)':'';
+    tgtEl.style.color='';
   } else {
     tgtEl.innerHTML='投递目标：自动 · 最近活跃主会话（点击会话行可指定）';
     tgtEl.style.color='';
   }
   const caps=snap.capabilities||{};
   $('new-session').disabled=!caps.canCreate;
-  $('new-session').title=caps.canCreate?'在选中项目新建会话':'新建会话需要在 DSH 进程内完成（插件授权）：'+((snap.catalog&&snap.catalog.projects&&snap.catalog.projects[0]&&snap.catalog.projects[0].cwd)||'');
+  $('new-session').title=caps.canCreate
+    ?('在选中项目新建会话：DSH 需插件（进程内）；Claude Code / Codex / Kimi Code 经终端新窗口')
+    :'新建会话通道不可用（DSH 需插件授权；CLI 后端需 claude/codex/kimi 在 PATH）';
   const ch=snap.inputChannel||{};
-  $('hint').textContent=ch.mode==='cmd'?('输入将自动投递（'+ch.detail+'）'):'输入进本地队列 · 可复制投递';
+  $('hint').textContent=ch.mode==='cmd'?('输入将自动投递（'+ch.detail+'）'):ch.mode==='cli'?('DSH 进本地队列 · Claude/Codex/Kimi 直接 CLI 投递'):'输入进本地队列 · 可复制投递';
   const qs=(snap.inputs||[]);
   $('queue').innerHTML=qs.map(function(i){
     const label={queued:'待投递',pending:'投递中',delivered:'已送达',failed:'失败'}[i.status]||i.status;
@@ -288,7 +290,22 @@ $('input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKe
 $('project').addEventListener('change',function(e){window.__PROJECT__=e.target.value;if(window.__SNAP__)render(window.__SNAP__)});
 $('toggle-history').onclick=function(){window.__SHOW_HISTORY__=!window.__SHOW_HISTORY__;if(window.__SNAP__)render(window.__SNAP__)};
 $('toggle-agents').onclick=function(){window.__SHOW_AGENTS__=window.__SHOW_AGENTS__===false;if(window.__SNAP__)render(window.__SNAP__)};
-$('new-session').onclick=async function(){const proj=(window.__SNAP__&&window.__SNAP__.catalog?window.__SNAP__.catalog.projects:[])||[];const pid=window.__PROJECT__||(proj[0]&&proj[0].projectId);const p=proj.find(function(x){return x.projectId===pid});const j=await api('/api/new',{cwd:p?p.cwd:''});$('note').textContent='新建会话：'+(j.ok?('已创建 '+String(j.sessionId||'').slice(0,14)+'（'+(j.via||'plugin')+'）'):((j.detail&&String(j.detail).slice(0,90))||(j.reason&&String(j.reason).slice(0,90))||j.error||'未知'));try{await api('/api/catalog?refresh=1',undefined,'GET')}catch(err){}};
+// 新建会话：按选中项目挑选后端（DSH=插件；CLI 后端=终端新窗口），source 随请求发给服务端
+$('new-session').onclick=async function(){
+  const proj=(window.__SNAP__&&window.__SNAP__.catalog?window.__SNAP__.catalog.projects:[])||[];
+  const pid=window.__PROJECT__||(proj[0]&&proj[0].key);
+  const p=proj.find(function(x){return (x.key||x.projectId)===pid});
+  const caps=(window.__SNAP__&&window.__SNAP__.capabilities)||{};
+  const cliSrc=(caps.cliChannels||[]).map(function(c){return c.source});
+  const src=p&&p.sources?(
+    (p.sources.indexOf('dsh')>=0&&caps.plugin&&caps.plugin.available)?'dsh'
+    :['claude-code','codex','kimi-code'].filter(function(s){return p.sources.indexOf(s)>=0&&cliSrc.indexOf(s)>=0})[0]
+    ||(cliSrc[0]||'dsh')
+  ):'dsh';
+  const j=await api('/api/new',{cwd:p?p.cwd:'',source:src});
+  $('note').textContent='新建会话（'+String(src).toUpperCase()+'）：'+(j.ok?(j.via||'已创建')+'；目录将在几秒内出现':((j.detail&&String(j.detail).slice(0,90))||(j.reason&&String(j.reason).slice(0,90))||j.error||'未知'));
+  try{await api('/api/catalog?refresh=1',undefined,'GET')}catch(err){}
+};
 // 会话行点击 = 选为投递目标（再点一次取消，回到自动）；历史会话行同时定位（保持原有 open 行为）
 $('sessions').addEventListener('click',function(e){
   const t=e.target.closest('[data-session]');

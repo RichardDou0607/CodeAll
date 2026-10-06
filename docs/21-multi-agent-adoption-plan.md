@@ -84,19 +84,19 @@
 - 投递安全：投递通道仍只有 DSH——选中 claude/codex 会话为目标时，UI 目标行黄色警示「暂不支持投递（观察通道）」，服务端 `resolveTarget` 二次拦截（404 + M-D/M-E 说明），绝不静默投错后端；自动挑目标也只挑 DSH 主会话。
 - **验收**：`scripts/multi-source-check.mjs` MC1–MC4 全绿（真实 framed 实例：多源历史行、`鹈鹕测试变体策划[dsh+claude-code+codex]` 同 cwd 归并、multi 标注、非 DSH 投递被拒）；`demo/test-window.mjs` 38 项断言全绿。**四源同窗演示目标中的三源（DSH/Claude/Codex）+ Kimi 四态面板已达成。**
 
-### M-D · Claude Code 控制（P1，估 5～8 人日，方案待定）
+### M-D · Claude Code 控制（P1）✅ **已落地（2026-10-06，`adapters/cli-control.mjs`）**
 
-候选通道（按侵入性排序，全部需 spike 验证后择一）：
-1. **tmux/终端注入**：若用户在 tmux 里跑 `claude`，`send-keys` 到对应 pane（零官方支持，但零侵入 UI 最像 DSH 插件路径）。
-2. **`claude --resume <id> -p`**：冷启动续会话发一条（官方 CLI 能力；会开新进程，事件经转录回看）。
-3. **Agent SDK**：以 SDK 起托管会话（改动最大，仅当 1/2 不可接受）。
-- **新建会话**：`cd <项目> && claude`（终端/tmux 新窗口）——无进程内 API，这是与 DSH 的本质差异。
-- **验收**：悬浮窗输入 → Claude Code 会话收到并产生回合；新建的会话出现在列表。
+- **投递通道（两条，自动择优）**：① tmux 服务在跑且能定位「该会话目录里跑着 claude」的 pane → `tmux send-keys -l` + Enter（用户看得见、零进程开销）；② 否则无头续会话 `claude --resume <id> -p "<text>"`（官方 CLI 能力，detached spawn，输出落 `~/.agent-pet/cli-control/*.log` 0600）——回合写回转录，观察跟随器自动看到状态回流（**控制→观察闭环，实测通过**）。
+- **新建/打开**：tmux 在跑开 window，否则 Terminal.app 新窗口（osascript do script，参数全部 shell-quote；交互式可续聊）。
+- **关键坑（实测）**：宿主进程若带 `ANTHROPIC_*/CLAUDE*` 环境变量（如从 Claude 桌面 App 子进程环境拉起服务），无头 claude 会 "Not logged in"（内部 BASE_URL 抢了 settings.json 优先级）——spawn 前净化环境（剥 `ANTHROPIC_/CLAUDECODE/CLAUDE_CODE_` 前缀变量），让 CLI 回落到自身配置（CC Switch 的 env 块正常生效）。
+- **验收**：`scripts/multi-source-check.mjs --live` MD3 ✅（真实投递最小旧会话 → 转录字节增长）；UI 实测选中 CLAUDE-CODE 会话 → 目标行「经 CLAUDE-CODE CLI 投递」+ 发送即达。
 
-### M-E · Codex 控制（P1，估 3～5 人日）
+### M-E · Codex 控制（P1）✅ **已落地（2026-10-06，与 M-D 同套通道）**
 
-- `codex exec resume <id>` / `codex exec <cwd>`（官方 CLI；同 M-D 的终端通道复用）。
-- **前置条件（已解除，2026-10-06）**：`codex` CLI 已恢复——`npm i -g --prefix ~/.local @openai/codex` → `~/.local/bin/codex` v0.160.1，`codex login status` 显示已用既有 auth.json 的 API key 登录。M-E 可直接开工。
+- **投递**：tmux pane 优先；否则 `codex exec resume <id> "<text>"`（官方 CLI；非 git 目录需 `--skip-git-repo-check`——只跳过 git 仓库检查，沙箱/审批策略仍由 config.toml 掌管，实测解决 "Not inside a trusted directory"）。
+- **新建/打开**：tmux window / Terminal.app 新窗口（`codex` / `codex resume <id>`）。
+- **前置（已解除）**：codex CLI v0.160.1 于 2026-10-06 恢复（`npm i -g --prefix ~/.local`），复用既有 auth.json 登录。
+- **验收**：`--live` ME3 ✅（真实投递 → rollout 字节增长）。
 
 ### M-F · ACP 统一通道（P1 杠杆，估 8～12 人日）
 
@@ -116,8 +116,9 @@
   - `agents/main/wire.jsonl` —— **事件流**（protocol 1.5，本机 5557 行）：`turn.prompt/turn.ended(reason,durationMs)` 回合边界、`context.append_loop_event{event.type=tool.call/tool.result}` 工具对、`interaction.request/resolved(kind=approval, 同 id 配对)` 原生审批对、`agent.message.appended` 回复、`profile.bind` 模型/思考档、usage/token/file_history 等。
   - `workspaces.json` —— 工作区注册表（wd_<hash> → 路径/标题，项目名增强）；`session_index.jsonl` 会话索引。
 - **落地形态**：`scanKimiCatalog()`（state.json 整读 + wire 头/尾窗口取模型与粗状态，本机 4 项目 / 9 会话，中位 ~4.4ms）+ `followKimiLogs()`（wire.jsonl 多文件字节偏移 tail；**非 main agent 的流 = 子代理，整文件跳过**）+ `mapKimiLine()` 纯函数（含审批对映射——比 Claude Code 转录路径还全）+ `scanKimiLegacyCount()`（LevelDB 计数降为第三层兜底）。
-- **观察能力**：与 Claude/Codex 同级（会话列表 + 标题 + 模型 + 思考档 + 实时事件 + **原生审批提醒**）；hooks 通道（app.asar 实测 20 种事件、command 型 handler、config.toml `[hooks]` 节）留作后续授权升级项，当前零配置零授权。
-- **验收**：`scripts/multi-source-check.mjs` MK1–MK9 全绿（含审批对纯函数断言、LevelDB 兜底仍在）；实测 `agent综合管理平台[dsh+claude-code+kimi-code]` 三源同项目归并。
+- **观察能力**：与 Claude/Codex 同级（会话列表 + 标题 + 模型 + 思考档 + 实时事件 + **原生审批提醒**）。
+- **控制层（已落地，`adapters/cli-control.mjs`）**：投递 `kimi -S <id> -p "<text>"`（实测 -S 与 -p 可组合）；新建/打开 = tmux window / Terminal 新窗口（`kimi` / `kimi -S <id>`）。hooks 通道（20 事件）留作后续增强（回调式、更实时），当前 CLI 通道已满足投递/新建/打开。
+- **验收**：`scripts/multi-source-check.mjs` MK1–MK9 + `--live` MH3 ✅（真实投递 → wire.jsonl 字节增长）；实测 `agent综合管理平台[dsh+claude-code+kimi-code]` 三源同项目归并。
 
 ### M-I · OpenCode 接入（P2，估 2～4 人日）
 
@@ -177,18 +178,18 @@
 | **远端控制的安全边界（命令注入/越权）**【v3】 | 投递只走 `agent` 子命令白名单；输入文本经 AgentOS 既有脱敏（凭证模式截断）；sudo 类仍由远端 AgentOS 拦截交还终端；总控不存凭证（§6.4） |
 | **多主机规模（host 数量增长）**【v3】 | source 命名规范先行（§6.3）；目录 UI 按 host 折叠分组；SSH 连接池与轮询间隔做预算（首版 ≤5 台，超出再做事件推送通道 [U]） |
 
-## 5. 本机现状快照（2026-10-06 更新，多源观察已上线）
+## 5. 本机现状快照（2026-10-06 更新，观察+控制四源全通）
 
 - DSH：观察+目录+输入+新建+打开 全链路可用；AgentPet.app 0.1.0 已装 /Applications 且在运行（外壳自动拉起服务）。
-- **Claude Code：观察通道已上线（M-A ✅）**——转录目录 + 实时 tail（本机 11 项目 / 48 会话；CC Switch 供应商切换后的模型名即时可见）；控制（M-D）未开始。
-- **Codex：观察通道已上线（M-B ✅）**——rollout 目录 + 实时 tail（13 主 + 19 子代理；**Codex++ 会话确认落同一 `~/.codex/sessions`**，originator=Codex Desktop）；**codex CLI 已恢复（2026-10-06：`npm i -g --prefix ~/.local @openai/codex` → v0.160.1，复用既有 auth.json 已登录）——M-E 前置阻塞解除**。
-- **Kimi Code：A 路径观察通道已上线（M-H ✅ 重写）**——state.json 目录 + wire.jsonl 事件 tail（含原生审批对），与 Claude/Codex 同级；LevelDB 计数降为第三层兜底；hooks 通道（20 事件）留作授权升级项。KimiCU 维持 C 观望。
-- **多源同窗（M-C ✅）**：framed.mjs 四源合并目录 + 三跟随器接入同一状态机；同 cwd 项目归并（实测 `agent综合管理平台[dsh+claude-code+kimi-code]`、`鹈鹕测试变体策划[dsh+claude-code+codex]`）；投递目标守卫（非 DSH 明确拒绝）。
-- **本机 CLI 三件套就位**：`claude`（~/.local/bin，2.1.278+）/ `kimi`（~/.kimi-code/bin/kimi）/ `codex`（~/.local/bin，v0.160.1，已登录）——控制通道（M-D/M-E）的全部前置条件已解除。
+- **Claude Code：观察 ✅ + 控制 ✅**——转录 tail；投递（tmux/`--resume -p`）+ 新建/打开（Terminal 窗口）；`--live` MD3 实测闭环。
+- **Codex：观察 ✅ + 控制 ✅**——rollout tail；`codex exec resume`（CLI v0.160.1）；`--live` ME3 实测闭环。
+- **Kimi Code：观察 ✅ + 控制 ✅**——wire 事件 tail（含原生审批对）；`kimi -S -p`；`--live` MH3 实测闭环。hooks 通道留作增强。KimiCU 维持 C 观望。
+- **多源同窗（M-C ✅）**：framed.mjs 四源合并目录 + 三跟随器接入同一状态机；同 cwd 项目归并；投递按目标来源自动路由（DSH=插件/队列，其余=CLI）。
+- **本机 CLI 三件套就位**：`claude`（~/.local/bin）/ `kimi`（~/.kimi-code/bin/kimi）/ `codex`（~/.local/bin，v0.160.1，已登录）。
 - OpenCode：桌面版数据 + `~/.config/opencode/opencode.json` 在，CLI 不在 PATH，活跃度待确认（P2）。
 - AgentOS M1：`~/.local/bin/agent`（shell，484 行）+ `~/agentos` 文档齐全（含 INSTALL-AMD64.md，已有 Linux 安装路径），状态文件可直接读——**远端执行体候选，见 §6**（M-J1 排 W4）。
 - 排除项：Claude.app / ChatGPT.app（聊天，无本机通道）、影刀 RPA（范式不符）——理由见 §1.3。
-- 下一步（按 §3 排期）：W3 M-G（打包常驻）+ M-D spike（tmux 注入 vs --resume）；W4 M-D/E 落地（先恢复 codex CLI）+ M-J1。
+- 下一步：M-J1（AgentOS 本地观察，W4）→ M-G 收尾（常驻 Hub）→ M-F（ACP，覆盖 OpenCode）→ Phase 3 远端舰队（§6）。
 
 ---
 

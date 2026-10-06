@@ -20,8 +20,10 @@ import { fileURLToPath } from 'node:url';
 import { scanClaudeCatalog, mapClaudeLine } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, mapCodexLine } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, mapKimiLine, scanKimiStatus, scanKimiLegacyCount } from '../adapters/kimi-code-adapter.mjs';
+import { CLI_TARGETS, availableCliChannels } from '../adapters/cli-control.mjs';
 
 const AS_JSON = process.argv.includes('--json');
+const LIVE = process.argv.includes('--live');   // --live：对每后端做一次真实无头投递（花费极小的一次回合），验证控制→观察闭环
 const results = [];
 function check(id, name, pass, detail) { results.push({ id, name, pass: !!pass, detail }); return !!pass; }
 const here = (f) => path.join(path.dirname(fileURLToPath(import.meta.url)), f);
@@ -123,6 +125,17 @@ let cx;
   check('MK9', 'LevelDB 兜底通道仍在（近似计数可用）', legacy.count >= 1 && legacy.approximate === true, { legacy: legacy.count });
 }
 
+// ================================================================ M-D/E/H 控制层（CLI 通道）
+{
+  const channels = availableCliChannels();
+  check('MD1', '三个 CLI 控制通道可用（claude / codex / kimi 在 PATH）', ['claude-code', 'codex', 'kimi-code'].every((s) => channels.some((c) => c.source === s)), { channels: channels.map((c) => c.source) });
+  check('MD2', '控制语法表完整（投递/打开/新建 args 均为字符串数组）',
+    Object.keys(CLI_TARGETS).every((s) => {
+      const t = CLI_TARGETS[s];
+      return Array.isArray(t.deliverArgs('sid', 'text')) && Array.isArray(t.openArgs('sid')) && Array.isArray(t.interactiveArgs());
+    }), {});
+}
+
 // ================================================================ M-C 多源合并（真实服务实例）
 {
   const PORT = 7831;
@@ -147,18 +160,45 @@ let cx;
     check('MC1', '快照历史行含四源（dsh + claude-code + kimi-code）', srcs.has('dsh') && srcs.has('claude-code') && srcs.has('kimi-code'), { sources: [...srcs] });
     check('MC2', '同 cwd 多源项目归并（≥1 个项目 sources ≥ 2）', multiProjects.length >= 1, { multiProjects: multiProjects.map((p) => p.name + '[' + p.sources.join('+') + ']').slice(0, 4) });
     check('MC3', '快照目录 source = multi 标注', snap.catalog.source.startsWith('multi:'), { source: snap.catalog.source });
-    // 非 DSH 投递被拒
-    const ccRow = (snap.catalog.history || []).find((h) => h.source === 'claude-code');
-    let guardCode = 0, guardBody = '';
-    if (ccRow) {
-      const res = await fetch('http://127.0.0.1:' + PORT + '/api/input', {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-pet-token': token },
-        body: JSON.stringify({ text: '验收投递拦截', sessionId: String(ccRow.sessionId).slice(0, 8) }),
-      });
-      guardCode = res.status;
-      guardBody = JSON.stringify(await res.json());
+    // 控制层能力位：CLI 通道就绪（真实投递验证在 --live 的 MD3/ME3/MH3）
+    check('MC4', 'CLI 投递通道能力位（canInput/canCreate/canOpen + cliChannels 三家）',
+      snap.capabilities?.canInput === true && snap.capabilities?.canCreate === true && ['claude-code', 'codex', 'kimi-code'].every((s) => (snap.capabilities?.cliChannels || []).some((c) => c.source === s)),
+      { cliChannels: (snap.capabilities?.cliChannels || []).map((c) => c.source) });
+    // ---- --live：控制→观察闭环（每后端挑一个**最小**旧会话，真实无头投递一条「只回复 ok」，等会话文件增长）----
+    if (LIVE) {
+      const pickSmallest = (cat, capBytes) => (cat.sessions || [])
+        .filter((s) => s.kind !== 'subagent' && (s.bytes ?? 0) > 0 && (s.bytes ?? 0) < capBytes)
+        .sort((a, b) => (a.bytes ?? 0) - (b.bytes ?? 0))[0] ?? null;
+      const waitForGrowth = async (file, before, timeoutMs) => {
+        for (let i = 0; i < Math.ceil(timeoutMs / 2000); i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          try { const st = fs.statSync(file); if (st.size > before) return st.size; } catch { /* 文件被轮转等 */ }
+        }
+        return null;
+      };
+      const plan = [
+        ['MD3', 'claude-code', scanClaudeCatalog(), 300 * 1024, 'CLAUDE-CODE'],
+        ['ME3', 'codex', scanCodexCatalog(), 300 * 1024, 'CODEX'],
+        ['MH3', 'kimi-code', scanKimiCatalog(), 300 * 1024, 'KIMI-CODE'],
+      ];
+      for (const [id, source, cat, cap, label] of plan) {
+        const target = pickSmallest(cat, cap);
+        if (!target) { check(id, label + '：无可用的旧会话（<' + cap / 1024 + 'KB）做投递验证', false, {}); continue; }
+        const before = fs.statSync(target.logFile).size;
+        let res = null;
+        try {
+          res = await fetch('http://127.0.0.1:' + PORT + '/api/input', {
+            method: 'POST', headers: { 'content-type': 'application/json', 'x-pet-token': token },
+            body: JSON.stringify({ text: '（AgentPet 总控自检）请只回复：ok', sessionId: String(target.sessionId).slice(0, 12) }),
+          });
+        } catch (e) { check(id, label + '：投递请求失败', false, String(e.message || e)); continue; }
+        const body = await res.json().catch(() => ({}));
+        const accepted = res.status === 200 && body.item?.status === 'delivered';
+        const grew = accepted ? await waitForGrowth(target.logFile, before, 150_000) : null;
+        check(id, label + '：真实无头投递 → 会话文件增长（控制→观察闭环）', !!grew,
+          { code: res.status, status: body.item?.status, detail: (body.item?.detail || body.detail || '').slice(0, 90), bytes: before + '→' + (grew ?? '未增长') });
+      }
     }
-    check('MC4', '非 DSH 投递被明确拒绝（404 + 控制通道未落地说明）', guardCode === 404 && /M-D\/M-E/.test(guardBody), { code: guardCode, body: guardBody.slice(0, 140) });
   } catch (e) {
     check('MC0', 'M-C 实例验收可执行', false, String(e.message || e));
     ok = false;
