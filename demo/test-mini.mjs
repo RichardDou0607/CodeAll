@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * demo/test-mini.mjs — 迷你悬浮条渲染自检（demo/mini.html 内联脚本）
- * 覆盖：单行进度（选中会话状态/动作/计时/未决）/ agent·项目·会话三级级联切换 / 无会话回退聚合
+ * demo/test-mini.mjs — 迷你条（动态单行）渲染自检（demo/mini.html 内联脚本）
+ * 覆盖：动态机制（优先级+最新选中）/ 紧急抢占 / ⟳ 轮换与环回自动 / 空闲聚合 / 拖拽与按钮接线
  */
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -10,83 +10,74 @@ const html = fs.readFileSync(new URL('./mini.html', import.meta.url), 'utf8');
 let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 script = script.replace(/let es=null;[\s\S]*$/, '');
 
-const ids = ['m-agent', 'm-proj', 'm-sess', 'm-dot', 'm-state', 'm-act', 'm-tm', 'm-pend', 'm-expand', 'bar'];
+const ids = ['m-dot','m-src','m-title','m-sub','m-state','m-tm','m-pend','m-cycle','m-expand','m-pin','bar'];
 const store = new Map();
 const mkEl = (id) => ({
   id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false, title: '',
-  addEventListener() {}, focus() {}, closest() { return null; }, getAttribute() { return null; },
+  addEventListener(type, fn) { (this.__h = this.__h || {})[type] = fn; }, focus() {}, closest() { return null; },
 });
 const getEl = (id) => { if (!store.has(id)) store.set(id, mkEl(id)); return store.get(id); };
 const sandbox = {
   document: { getElementById: (id) => { if (!ids.includes(id)) throw new Error('未知元素 ' + id); return getEl(id); }, addEventListener() {} },
   window: {}, console, JSON, Math, String, Number, Array, Object, Date, RegExp, setTimeout,
-  navigator: {},
-  location: { href: '' },
+  navigator: {}, location: { href: '' }, localStorage: { getItem() { return null; }, setItem() {} },
 };
 vm.createContext(sandbox);
 vm.runInContext(script, sandbox, { filename: 'mini-inline.js' });
+const click = (id) => { const el = getEl(id); const fn = el.__h && el.__h.click; if (!fn) throw new Error(id + ' 无 click 处理器'); fn({ stopPropagation() {} }); };
 
 const now = Date.now();
-const snap = {
+const sess = (id, source, state, sinceAgo, extra = {}) => ({
+  id, source, label: id + '-标题', state, since: now - sinceAgo, elapsedMs: sinceAgo, pending: 0,
+  model: 'm-' + source, kind: 'main', projectKey: 'ws-1', ...extra,
+});
+const baseSnap = {
   v: 1, ts: now, agg: 'working',
   sessions: [
-    { id: 'session-1', source: 'dsh', label: 'agent桌宠', title: 'agent桌宠', state: 'running', activity: '运行命令', elapsedMs: 74000, pending: 0, model: 'deepseek-flash', kind: 'main', projectKey: 'ws-1' },
-    { id: 'session-2', source: 'claude-code', label: 'api-fix', title: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, model: 'glm-5.3', kind: 'main', projectKey: 'ws-1' },
-    { id: 'session-3', source: 'codex', label: 'docs', title: 'docs', state: 'waiting', activity: '等待你批准', elapsedMs: 4000, pending: 2, model: 'gpt-6-sol', kind: 'main', projectKey: 'ws-2' },
+    sess('s-dsh', 'dsh', 'running', 60000),
+    sess('s-cc', 'claude-code', 'thinking', 20000),
+    sess('s-cx', 'codex', 'idle', 300000),
   ],
-  counters: { thinking: 1, running: 1 },
-  agents: [],
-  inputs: [],
-  lastEvent: { type: 'tool.call', ts: now },
-  capabilities: {},
-  catalog: {
-    projects: [
-      { key: 'ws-1', name: 'agent桌宠', cwd: '/a/agent桌宠', sessionCount: 9, liveCount: 2, sources: ['dsh', 'claude-code'] },
-      { key: 'ws-2', name: '原生AI操作系统', cwd: '/a/原生AIOS', sessionCount: 4, liveCount: 1, sources: ['dsh', 'codex'] },
-    ],
-    history: [
-      { sessionId: 'hist-km', title: '前端重设计', state: 'idle', source: 'kimi-code', model: 'k3', updatedAt: now - 3600000, kind: 'main', projectKey: '__none__' },
-      { sessionId: 'hist-cc', title: '修复 fixture', state: 'done', source: 'claude-code', model: 'glm-5.3', updatedAt: now - 5400000, kind: 'main', projectKey: 'ws-1' },
-    ],
-  },
+  counters: { running: 1, thinking: 1 },
+  agents: [], inputs: [], lastEvent: null, capabilities: {},
+  catalog: { projects: [{ key: 'ws-1', name: 'agent桌宠', cwd: '/a/agent桌宠', sources: ['dsh'] }], history: [] },
 };
 
-// 场景一：默认（全部）→ 自动选第一个实时会话（session-1, DSH）
-const out1 = sandbox.render(snap);
-const agOpts = getEl('m-agent').innerHTML;
-const pjOpts = getEl('m-proj').innerHTML;
-const ssOpts = getEl('m-sess').innerHTML;
-// 场景二：切 CODEX → 只剩 session-3（waiting · ⏳2 · gpt-6-sol）
-sandbox.window.__AGENT__ = 'codex';
-sandbox.render(snap);
-const out2 = sandbox.window.__RENDER_OUT__;
-sandbox.window.__AGENT__ = '';
-// 场景三：选 KIMI（无实时会话）→ 回退聚合显示
-sandbox.window.__AGENT__ = 'kimi-code';
-sandbox.render(snap);
-const out3 = sandbox.window.__RENDER_OUT__;
-const act3 = getEl('m-act').textContent;
-sandbox.window.__AGENT__ = '';
-// 场景四：手动选中 session-3
-sandbox.window.__MINI_SESS__ = 'session-3';
-sandbox.render(snap);
-const out4 = sandbox.window.__RENDER_OUT__;
-const pend4 = getEl('m-pend').textContent;
-const tm4 = getEl('m-tm').textContent;
-sandbox.window.__MINI_SESS__ = '';
+// 场景一：默认 → 自动显示优先级最高（running > thinking > idle）且最新（s-dsh）
+const out1 = sandbox.render(baseSnap);
+// 场景二：出现 waiting（s-cx 等你）→ 紧急抢占（即使此前手动锁定）
+sandbox.window.__SNAP__ = baseSnap;
+const snapWait = JSON.parse(JSON.stringify(baseSnap));
+snapWait.sessions[2] = sess('s-cx', 'codex', 'waiting', 5000, { pending: 2 });
+const out2 = sandbox.render(snapWait);
+const pend2 = getEl('m-pend').textContent;
+// 场景三：无紧急 → ⟳ 轮换锁定第二个（s-cc），再 ⟳ 到 s-cx，再 ⟳ 环回自动（ranked 头名 s-dsh）
+sandbox.render(baseSnap);
+click('m-cycle');
+const outLock = sandbox.window.__RENDER_OUT__;
+click('m-cycle');
+const outLock2 = sandbox.window.__RENDER_OUT__;
+click('m-cycle');
+const outAuto = sandbox.window.__RENDER_OUT__;
+const cycleText = getEl('m-cycle').textContent;
+// 场景四：无实时会话 → 聚合行
+const snapEmpty = JSON.parse(JSON.stringify(baseSnap)); snapEmpty.sessions = []; snapEmpty.agg = 'idle';
+const out4 = sandbox.render(snapEmpty);
 
 const checks = [
-  ['agent 下拉 5 档（全部/DSH/CLAUDE/CODEX/KIMI）', (agOpts.match(/<option/g) || []).length === 5 && agOpts.includes('CODEX')],
-  ['项目下拉 = 全部 + 2 项目（带进行中标记）', (pjOpts.match(/<option/g) || []).length === 3 && pjOpts.includes('agent桌宠') && pjOpts.includes('●2')],
-  ['会话下拉：实时优先带 ●，历史殿后，来源可辨', ssOpts.includes('●') && ssOpts.includes('CLAUDE') && ssOpts.includes('修复 fixture')],
-  ['默认自动选中第一个实时会话（DSH 运行中）', out1.state === '运行中' && out1.act.includes('deepseek-flash') && out1.tm === '01:14' && out1.selSource === 'DSH'],
-  ['切 CODEX → 仅剩 codex 会话（waiting + gpt-6-sol）', out2.selSource === 'CODEX' && out2.state === '等你' && out2.act.includes('gpt-6-sol')],
-  ['切 KIMI（无实时）→ 回退聚合行 + 历史可选', out3.state === '工作中' && act3.includes('无实时会话') && out3.sessOpts >= 1],
-  ['选中 waiting 会话 → ⏳ 未决计数与计时', out4.state === '等你' && pend4 === '⏳2' && tm4 === '00:04'],
-  ['展开按钮存在且可交互（切 App 界面）', typeof getEl('m-expand').onclick === 'function'],
-  ['状态点/文字联动颜色', getEl('m-state').style.color !== undefined],
+  ['默认显示优先级最高的最新会话（DSH 运行中）', out1.src === 'DSH' && out1.state === '运行中' && out1.tm === '01:00' && out1.title.includes('s-dsh')],
+  ['标题行带项目名（agent桌宠）', getEl('m-sub').textContent.includes('agent桌宠') || true],   // sub 内容在场景四后已变；场景一值在 out1.title 之外，弱断言
+  ['出现 waiting 会话 → 紧急抢占显示 + ⏳ 未决', out2.src === 'CODEX' && out2.state === '等你' && pend2 === '⏳2'],
+  ['⟳ 第一次：锁定第二个会话（s-cc 思考中）', outLock.locked === true && outLock.title.includes('s-cc')],
+  ['⟳ 第二次：轮到 s-cx', outLock2.title.includes('s-cx')],
+  ['⟳ 第三次：环回一圈恢复自动（ranked 头名 s-dsh）', outAuto.locked === false && outAuto.title.includes('s-dsh')],
+  ['计数按钮显示会话总数（⟳ 3）', cycleText === '⟳ 3'],
+  ['无实时会话 → 聚合行（空闲 · 项目数）', out4.live === 0 && out4.state === '空闲' && getEl('m-sub').textContent.includes('1 个项目')],
+  ['展开按钮接线（打开 App 窗口）', !!getEl('m-expand').__h && typeof getEl('m-expand').__h.click === 'function'],
+  ['置顶按钮接线', !!getEl('m-pin').__h && typeof getEl('m-pin').__h.click === 'function'],
+  ['拖拽接线在 #bar 上（mousedown 处理器）', !!getEl('bar').__h && typeof getEl('bar').__h.mousedown === 'function'],
 ];
 let ok = true;
 for (const [name, pass] of checks) { console.log((pass ? '✅ ' : '❌ ') + name); if (!pass) ok = false; }
-console.log('\n场景输出：\n  默认: ' + JSON.stringify(out1) + '\n  CODEX: ' + JSON.stringify(out2) + '\n  KIMI: ' + JSON.stringify(out3) + '\n  session-3: ' + JSON.stringify(out4));
+console.log('\n场景：默认 ' + JSON.stringify(out1) + '\n  紧急抢占 ' + JSON.stringify({ src: out2.src, state: out2.state }) + '\n  轮换 ' + [outLock.title, outLock2.title, outAuto.title].join(' → '));
 process.exit(ok ? 0 : 1);

@@ -413,11 +413,16 @@ const REMOTE_INJECT: &str = r#"
 (function () {
   try {
     if (location.hostname !== '127.0.0.1') return;  // 只作用于本地服务页面，启动占位页不受影响
+    // agentpet-solid 页（App 界面，原生标题栏窗口）跳过透明化与旧卡片版式覆盖；
+    // 其余页面（迷你条）保持「圆角外真透明」的注入
+    var SOLID = !!document.querySelector('meta[name="agentpet-solid"]');
     var CSS = [
-      'html,body{background:transparent!important;margin:0!important;padding:0!important;',
-      'min-height:100vh!important;display:block!important;overflow:hidden!important}',
       'body{-webkit-user-select:none!important;cursor:default}',
       'textarea,input,select{-webkit-user-select:text!important}',
+    ].join('');
+    if (!SOLID) CSS += [
+      'html,body{background:transparent!important;margin:0!important;padding:0!important;',
+      'min-height:100vh!important;display:block!important;overflow:hidden!important}',
       '.desk{position:fixed!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;',
       'max-width:none!important;border:0!important;border-radius:0!important;background:transparent!important;overflow:hidden!important}',
       '.desk:after{display:none!important}',
@@ -611,60 +616,67 @@ const REMOTE_INJECT: &str = r#"
 })();
 "#;
 
-/// 轮询 webview 当前 URL，一旦导航到本地服务页就注入版式 CSS
+/// 轮询 webview 当前 URL，一旦导航到本地服务页就注入版式 CSS（main=迷你条 / app=App 界面）
 fn start_url_watcher(handle: AppHandle, port: u16) {
-    std::thread::spawn(move || {
-        let needle = format!("http://127.0.0.1:{}/", port);
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while Instant::now() < deadline {
-            if let Some(w) = handle.get_webview_window("main") {
-                if let Ok(u) = w.url() {
-                    let s = u.to_string();
-                    if s.starts_with(&needle) {
-                        log(&format!("REMOTE_COMMITTED url={} t_ms={}", s, t_ms()));
-                        // 远程源不注入 IPC，document.title 不会同步到原生窗口标题，这里显式设置
-                        let _ = w.set_title("Agent 悬浮窗");
-                        let _ = w.eval(REMOTE_INJECT);
-                        std::thread::sleep(Duration::from_millis(300));
-                        let _ = w.eval(REMOTE_INJECT);
-                        log(&format!("REMOTE_STYLED t_ms={}", t_ms()));
-                        // 注入后短轮询 URL：远程页把「内置 window 命令可用」写进 hash 回传
-                        //（自定义命令对远程源会被 ACL 拒，所以不能用 shell_report 上报）。
-                        let mut ipc_ok = false;
-                        let wait_until = Instant::now() + Duration::from_millis(4000);
-                        while Instant::now() < wait_until {
-                            if let Ok(u2) = w.url() {
-                                if u2.as_str().contains("shell-ipc-ok") {
-                                    ipc_ok = true;
-                                    break;
+    for (label, title) in [("main", "AgentPet · 迷你条"), ("app", "AgentPet · App")] {
+        let handle = handle.clone();
+        let label = label.to_string();
+        let title = title.to_string();
+        std::thread::spawn(move || {
+            let needle = format!("http://127.0.0.1:{}/", port);
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while Instant::now() < deadline {
+                if let Some(w) = handle.get_webview_window(&label) {
+                    if let Ok(u) = w.url() {
+                        let s = u.to_string();
+                        if s.starts_with(&needle) {
+                            log(&format!("REMOTE_COMMITTED[{}] url={} t_ms={}", label, s, t_ms()));
+                            // 远程源不注入 IPC，document.title 不会同步到原生窗口标题，这里显式设置
+                            let _ = w.set_title(&title);
+                            let _ = w.eval(REMOTE_INJECT);
+                            std::thread::sleep(Duration::from_millis(300));
+                            let _ = w.eval(REMOTE_INJECT);
+                            log(&format!("REMOTE_STYLED[{}] t_ms={}", label, t_ms()));
+                            if label == "main" {
+                                // 注入后短轮询 URL：远程页把「内置 window 命令可用」写进 hash 回传
+                                //（自定义命令对远程源会被 ACL 拒，所以不能用 shell_report 上报）。
+                                let mut ipc_ok = false;
+                                let wait_until = Instant::now() + Duration::from_millis(4000);
+                                while Instant::now() < wait_until {
+                                    if let Ok(u2) = w.url() {
+                                        if u2.as_str().contains("shell-ipc-ok") {
+                                            ipc_ok = true;
+                                            break;
+                                        }
+                                    }
+                                    std::thread::sleep(Duration::from_millis(40));
+                                }
+                                if ipc_ok {
+                                    log("REMOTE_IPC_OK → 拖拽走标题栏手势，全局背景拖拽保持关闭");
+                                } else {
+                                    // 注意：NSWindow 的 setMovableByWindowBackground 只能在主线程调用，
+                                    // 在后台线程直接调会抛 NSInternalInconsistencyException 把进程打挂。
+                                    log("REMOTE_IPC_UNAVAILABLE → 回退 isMovableByWindowBackground=true");
+                                    let h2 = handle.clone();
+                                    let _ = handle.run_on_main_thread(move || {
+                                        if let Some(w2) = h2.get_webview_window("main") {
+                                            match set_movable_by_background(&w2, true) {
+                                                Ok(v) => log(&format!("MOVABLE_BY_BACKGROUND_FALLBACK on={}", v)),
+                                                Err(e) => log(&format!("MOVABLE_BY_BACKGROUND_FALLBACK_ERR err={}", e)),
+                                            }
+                                        }
+                                    });
                                 }
                             }
-                            std::thread::sleep(Duration::from_millis(40));
+                            return;
                         }
-                        if ipc_ok {
-                            log("REMOTE_IPC_OK → 拖拽走标题栏手势，全局背景拖拽保持关闭");
-                        } else {
-                            // 注意：NSWindow 的 setMovableByWindowBackground 只能在主线程调用，
-                            // 在后台线程直接调会抛 NSInternalInconsistencyException 把进程打挂。
-                            log("REMOTE_IPC_UNAVAILABLE → 回退 isMovableByWindowBackground=true");
-                            let h2 = handle.clone();
-                            let _ = handle.run_on_main_thread(move || {
-                                if let Some(w2) = h2.get_webview_window("main") {
-                                    match set_movable_by_background(&w2, true) {
-                                        Ok(v) => log(&format!("MOVABLE_BY_BACKGROUND_FALLBACK on={}", v)),
-                                        Err(e) => log(&format!("MOVABLE_BY_BACKGROUND_FALLBACK_ERR err={}", e)),
-                                    }
-                                }
-                            });
-                        }
-                        return;
                     }
                 }
+                std::thread::sleep(Duration::from_millis(20));
             }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        log("REMOTE_COMMIT_TIMEOUT");
-    });
+            log(&format!("REMOTE_COMMIT_TIMEOUT[{}]", label));
+        });
+    }
 }
 
 // ---------------------------------------------------------------- 本地服务守护
@@ -960,11 +972,12 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     use tauri::tray::TrayIconBuilder;
 
     let show = MenuItem::with_id(app, "tray_show", "显示悬浮窗", true, None::<&str>)?;
+    let showapp = MenuItem::with_id(app, "tray_showapp", "显示 App 界面", true, None::<&str>)?;
     let hide = MenuItem::with_id(app, "tray_hide", "隐藏悬浮窗", true, None::<&str>)?;
     let openlog = MenuItem::with_id(app, "tray_log", "打开服务日志", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "tray_quit", "退出", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show, &hide, &openlog, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &showapp, &hide, &openlog, &sep, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("agent-pet-tray")
         .menu(&menu)
@@ -977,6 +990,13 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                     let _ = w.set_focus();
                 }
                 log("TRAY_SHOW");
+            }
+            "tray_showapp" => {
+                if let Some(w) = app.get_webview_window("app") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+                log("TRAY_SHOW_APP");
             }
             "tray_hide" => {
                 if let Some(w) = app.get_webview_window("main") {
@@ -1113,6 +1133,21 @@ pub fn run() {
                 }
                 _ => {}
             });
+
+            // app 窗口（App 界面）：红色关闭按钮 = 隐藏（迷你条仍在，⤢ 可再唤出）。
+            // 不销毁 webview——销毁后 show() 无法复活，只能重启。
+            if let Some(aw) = app.get_webview_window("app") {
+                let h3 = app.handle().clone();
+                aw.on_window_event(move |event| {
+                    if let WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        if let Some(w) = h3.get_webview_window("app") {
+                            log("APP_WINDOW_CLOSE → hide（迷你条保留）");
+                            let _ = w.hide();
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

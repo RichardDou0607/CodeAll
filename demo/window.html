@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="agentpet-solid" content="1"><!-- 外壳注入脚本据此跳过透明化：本窗口用原生标题栏（红黄绿） -->
 <title>AgentPet · App</title>
 <style>
 :root{--bg:#0b0e14;--win:#12161f;--line:#242c3a;--txt:#e6edf3;--dim:#8b98a9;--idle:#8b98a9;--think:#4aa8ff;--run:#3fb950;--wait:#e3b341;--err:#f85149;--done:#bc8cff;--acc:#1f6feb}
@@ -84,8 +85,6 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
     <nav id="agent-tabs"></nav>
     <span class="aggchip"><span class="dot" id="agg-dot"></span><span id="agg-text">连接中…</span></span>
     <span class="chips" id="chips"></span>
-    <button class="hbtn" id="btn-mini" title="切换到迷你悬浮条（单行进度）">▤ 迷你条</button>
-    <button class="hbtn" id="hide-win" title="隐藏窗口（⌘W 关闭）">✕</button>
   </header>
   <div id="main">
     <aside>
@@ -127,13 +126,6 @@ function esc(s){return String(s).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;'
 function mmss(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 function relTime(ms,now){if(!ms)return '';const s=Math.max(0,Math.floor((now-ms)/1000));if(s<60)return s+' 秒前';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400)return Math.floor(s/3600)+' 小时前';return Math.floor(s/86400)+' 天前'}
 function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);return p.join(' · ')}
-async function trySetSize(w,h){
-  try{
-    const W=window.__TAURI__&&window.__TAURI__.window;
-    if(W&&W.getCurrentWindow&&W.LogicalSize){await W.getCurrentWindow().setSize(new W.LogicalSize(w,h));return}
-    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|set_size',{size:{type:'Logical',width:w,height:h}})}
-  }catch(e){}
-}
 function projNameOf(s,projList){
   if(!s)return '';
   const k=s.projectKey;
@@ -317,14 +309,6 @@ $('queue').addEventListener('click',async e=>{
   const rs=e.target.closest('[data-resend]');
   if(rs){const id=rs.getAttribute('data-resend');try{const j=await api('/api/input/'+encodeURIComponent(id)+'/resend',{});$('note').textContent=j.ok?'重发已送达 ✓':'重发未送达：'+((j.item&&(j.item.detail||j.item.status))||'')}catch(err){$('note').textContent='重发失败：'+err.message}return}
 });
-$('btn-mini').onclick=async function(){try{await trySetSize(360,64)}catch(e){};location.href='/mini.html'};
-$('hide-win').onclick=async function(){
-  try{
-    if(window.__TAURI__&&window.__TAURI__.window){await window.__TAURI__.window.getCurrentWindow().hide();return}
-    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|hide');return}
-  }catch(e){}
-  $('note').textContent='浏览器演示无法隐藏窗口；Tauri 外壳里此按钮会隐藏窗口';
-};
 document.addEventListener('keydown',e=>{if(e.altKey&&e.metaKey&&e.key.toLowerCase()==='i'){e.preventDefault();$('input').focus()}});
 let es=null;
 function connect(){
@@ -333,7 +317,6 @@ function connect(){
   es.onerror=function(){$('hint').textContent='与本地服务断开，3s 后重连…';es.close();setTimeout(connect,3000)};
 }
 connect();
-trySetSize(980,640);
 </script>
 </body>
 </html>

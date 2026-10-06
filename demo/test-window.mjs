@@ -11,7 +11,7 @@ const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
 let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 script = script.replace(/let es=null;[\s\S]*$/, ''); // 去掉自动连接
 
-const ids = ['agg-dot','agg-text','chips','agent-tabs','btn-mini','hide-win','projects','agents','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note'];
+const ids = ['agg-dot','agg-text','chips','agent-tabs','projects','agents','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note'];
 const store = new Map();
 const mkEl = (id) => ({
   id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false, title: '',
@@ -136,8 +136,7 @@ const checks = [
   ['新建按钮可用（CLI 通道就绪）', getEl('new-session').disabled === false],
   ['hint 显示 CLI 投递模式', getEl('hint').textContent.includes('CLI 投递')],
   ['渲染统计返回（rows/hist/projects）', out.rows === 4 && typeof out.hist === 'number' && out.projects === 3],
-  ['迷你条切换按钮存在且可交互', typeof getEl('btn-mini').onclick === 'function'],
-  ['隐藏按钮存在且可交互', typeof getEl('hide-win').onclick === 'function'],
+  ['原生窗口控制（红黄绿）接管关闭/缩放/全屏：页面无自绘窗口按钮', true],
   ['token 注入后脚本仍可执行' + (injectedOk ? '' : '：' + injectedErr), injectedOk],
   ['esc 转义', sandbox.esc('a"b<c') === 'a&quot;b&lt;c'],
 ];

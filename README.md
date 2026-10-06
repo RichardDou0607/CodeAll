@@ -25,10 +25,11 @@
 > 完整演示说明与「诚实边界」见 [demo/README.md](./demo/README.md)。**已跑通的是数据链路（真实 DSH 会话 → 规范事件 → 状态机 → 工作框卡片/悬浮窗）与悬浮窗输入队列；Tauri 真·桌面外壳与常驻 Hub 守护进程尚未实现**（路线图 M0–M3）。**多源观察已上线（M-A/M-B/M-C/M-H）：Claude Code 转录与 Codex rollout 只读接入，与 DSH 会话同窗并列；Kimi Code 按 LevelDB 降级为四态面板（存活 + 近似计数）。**
 
 ```bash
-# ★ 双形态操作界面（2026-10-06 改版）：
-#   迷你悬浮条（/ 默认入口）——单行进度 + agent/项目/会话三级切换，参考 Codex mini(pet) 极简形态
-#   App 界面（/window.html）——顶部切 agent 软件 · 左侧切项目 · 底部控会话；队列只留未完成项
-apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后直接打开「AgentPet」即可（默认迷你条，⤢ 展开 App）
+# ★ 双形态操作界面（2026-10-06 改版，两窗口并存）：
+#   迷你条（/ 默认入口）——动态单行：始终显示当前最优先/最新的会话（其余隐藏，⟳ 轮换），整条可拖拽
+#   App 窗口（/window.html）——与迷你条并存（如 Codex 本体与 pet）：原生红黄绿窗口控制，
+#   顶部切 agent 软件 · 左侧切项目 · 底部控会话；队列只留未完成项；⤢ 唤出 / 红✕ 收起（不退出）
+apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后直接打开「AgentPet」即可
 node demo/framed.mjs --port 7799    # 本地服务：四源观察（DSH/Claude/Codex/Kimi）+ CLI 控制通道 + SSE
 open http://127.0.0.1:7799/         # 迷你悬浮条（demo/mini.html）；/window.html = App 界面
 node demo/test-window.mjs           # App 界面渲染自检（24 项断言）

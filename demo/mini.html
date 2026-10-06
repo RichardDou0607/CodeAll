@@ -8,120 +8,172 @@
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:transparent;overflow:hidden;color:var(--txt);
   font:12px/1.4 -apple-system,"PingFang SC",system-ui,sans-serif;-webkit-user-select:none;user-select:none}
-#bar{height:100vh;display:flex;align-items:center;gap:6px;padding:0 8px;
+#bar{height:100vh;display:flex;align-items:center;gap:7px;padding:0 9px;
   background:rgba(16,20,28,.97);border:1px solid var(--line);border-radius:10px;
-  box-shadow:0 14px 34px rgba(0,0,0,.5)}
-#bar .grip{width:8px;height:8px;border-radius:50%;background:#2f3a4d;flex:0 0 auto}
+  box-shadow:0 14px 34px rgba(0,0,0,.5);cursor:default}
 .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 8px currentColor}
-select{background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:7px;
-  font-size:10px;padding:2px 4px;outline:none;flex:0 0 auto;max-width:96px}
-#m-proj{max-width:110px}
-#m-sess{max-width:150px}
-#m-status{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden;padding:0 2px}
-#m-state{font-weight:600;font-size:11px;flex:0 0 auto}
-#m-act{color:var(--dim);font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#m-src{font-size:10px;color:#9db2cc;flex:0 0 auto;max-width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#m-main{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden}
+#m-title{font-size:12px;font-weight:600;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#m-sub{font-size:10.5px;color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#m-state{font-size:11px;font-weight:600;flex:0 0 auto}
 #m-tm{color:var(--dim);font-size:10px;flex:0 0 auto;width:34px;text-align:right}
 #m-pend{color:#e3b341;font-size:10px;flex:0 0 auto}
 button{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:7px;
-  font-size:11px;padding:3px 7px;cursor:pointer;flex:0 0 auto}
-.empty-opt{color:var(--dim)}
+  font-size:10px;padding:3px 6px;cursor:pointer;flex:0 0 auto;line-height:1.2}
+button:hover{border-color:#3d4a60}
+#m-cycle{min-width:34px;text-align:center}
 </style>
 </head>
 <body>
 <div id="bar" data-tauri-drag-region>
-  <span class="grip" data-tauri-drag-region></span>
   <span class="dot" id="m-dot" style="background:#8b98a9;color:#8b98a9"></span>
-  <select id="m-agent" title="切换 agent 软件"></select>
-  <select id="m-proj" title="切换项目"></select>
-  <select id="m-sess" title="切换会话"></select>
-  <span id="m-status" data-tauri-drag-region><span id="m-state">连接中</span><span id="m-act">…</span><span id="m-pend"></span><span id="m-tm">--</span></span>
-  <button id="m-expand" title="展开为 App 界面（顶部切软件 / 左侧切项目 / 底部控会话）">⤢</button>
+  <span id="m-src" title="当前会话所属 agent 软件">—</span>
+  <span id="m-main" data-tauri-drag-region>
+    <span id="m-title">连接中…</span><span id="m-sub">…</span>
+  </span>
+  <span id="m-state">—</span>
+  <span id="m-pend"></span>
+  <span id="m-tm">--</span>
+  <button id="m-cycle" title="轮换到下一个会话（其余会话隐藏，仅在此轮换）">⟳ 0</button>
+  <button id="m-expand" title="展开 App 界面（查看全部会话 / 项目 / 投递）">⤢</button>
+  <button id="m-pin" title="置顶迷你条">📌</button>
 </div>
 <script>
 window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
 const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错',error:'错误',waiting:'等你',done:'完成'};
 const COLOR={idle:'#8b98a9',thinking:'#4aa8ff',running:'#3fb950',working:'#3fb950','transient-error':'#e3b341',error:'#f85149',waiting:'#e3b341',done:'#bc8cff'};
-const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI']];
+// 动态机制的优先级：等你确认 > 出错 > 运行 > 思考 > 完成；同级按状态变更时间取最新
+const RANK={waiting:0,'transient-error':1,error:2,running:3,working:3,thinking:4,done:5,idle:6};
 const $=id=>document.getElementById(id);
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function mmss(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 function shortSrc(s){return String(s||'dsh').toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI')}
+function projNameOf(s,projList){
+  const p=projList.find(x=>x.key===s.projectKey);
+  return p?p.name:(s.cwd?String(s.cwd).split('/').pop():'');
+}
 async function trySetSize(w,h){
   try{
     const W=window.__TAURI__&&window.__TAURI__.window;
     if(W&&W.getCurrentWindow&&W.LogicalSize){await W.getCurrentWindow().setSize(new W.LogicalSize(w,h));return}
-    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|set_size',{size:{type:'Logical',width:w,height:h}})}
+    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|set_size',{label:'main',size:{type:'Logical',width:w,height:h}})}
   }catch(e){}
+}
+async function showApp(){
+  try{
+    const T=window.__TAURI__;
+    if(T&&T.window&&T.window.WebviewWindow&&T.window.WebviewWindow.getByLabel){const w=T.window.WebviewWindow.getByLabel('app');if(w){await w.show();await w.setFocus();return}}
+    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){
+      await window.__TAURI_INTERNALS__.invoke('plugin:window|show',{label:'app'});
+      await window.__TAURI_INTERNALS__.invoke('plugin:window|set_focus',{label:'app'});
+      return;
+    }
+  }catch(e){}
+  window.open('/window.html','agentpet-app');
+}
+// 拖拽：整条可拖（按钮除外）。外壳注入脚本的 .titlebar 机制对新版式不适用，
+// 这里自己挂 mousedown → start_dragging（与外壳同一实现方式，远程源权限已放行）
+(function wireDrag(){
+  const el=$('bar');
+  el.addEventListener('mousedown',ev=>{
+    if(ev.button!==0)return;
+    const t=ev.target;
+    if(t&&t.closest&&t.closest('button,a,input,select,textarea'))return;
+    try{
+      const T=window.__TAURI__;
+      if(T&&T.window&&T.window.getCurrentWindow){T.window.getCurrentWindow().startDragging();return}
+    }catch(e){}
+    try{
+      const INT=window.__TAURI_INTERNALS__;
+      if(INT&&INT.invoke){INT.invoke('plugin:window|start_dragging',{label:(INT.metadata&&INT.metadata.currentWindow&&INT.metadata.currentWindow.label)||'main'})}
+    }catch(e){}
+  });
+})();
+// 置顶（偏好持久化，与旧版行为一致）
+(function wirePin(){
+  const b=$('m-pin');
+  function paint(on){b.style.opacity=on?'1':'.45';b.style.color=on?'#e3b341':'';b.title=on?'已置顶：悬浮在所有窗口之上（点击取消）':'置顶迷你条（默认关闭）'}
+  let stored=false;
+  try{stored=localStorage.getItem('agent-pet-pin')==='1'}catch(e){}
+  paint(stored);
+  const setTop=v=>{try{const T=window.__TAURI__;if(T&&T.window){T.window.getCurrentWindow().setAlwaysOnTop(v);return}}catch(e){}try{window.__TAURI_INTERNALS__.invoke('plugin:window|set_always_on_top',{label:'main',value:v})}catch(e){}};
+  if(stored)setTop(true);
+  b.addEventListener('click',ev=>{ev.stopPropagation();
+    let on=false;try{on=!(localStorage.getItem('agent-pet-pin')==='1');localStorage.setItem('agent-pet-pin',on?'1':'0')}catch(e){on=true}
+    paint(on);setTop(on);
+  });
+})();
+
+// 动态选择：默认显示「优先级最高（等待/出错优先）→ 最新」的会话；
+// 手动 ⟳ 轮换会锁定所选（其余隐藏），环回一圈后恢复自动；出现 waiting/error 紧急会话时自动抢占。
+let lockSid=null;
+function rankLive(live){return [...live].sort((a,b)=>(RANK[a.state]??9)-(RANK[b.state]??9)||(b.since??0)-(a.since??0))}
+function pickSession(live){
+  if(!live.length)return null;
+  const ranked=rankLive(live);
+  const urgent=ranked[0];
+  if(urgent&&(urgent.state==='waiting'||urgent.state==='error'||urgent.state==='transient-error')){lockSid=null;return urgent}
+  if(lockSid){const hit=live.find(s=>s.id===lockSid);if(hit)return hit}
+  return ranked[0];
 }
 function render(snap){
   window.__SNAP__=snap;
-  const now=snap.ts||Date.now();
-  // ---- 三个选择器：agent / 项目 / 会话（级联过滤）----
-  const agentSel=window.__AGENT__||'';
-  const projListAll=(snap.catalog&&snap.catalog.projects)||[];
-  const projList=agentSel?projListAll.filter(p=>(p.sources||[]).indexOf(agentSel)>=0):projListAll;
-  if(window.__MINI_PROJ__&&projList.length&&!projList.some(p=>p.key===window.__MINI_PROJ__))window.__MINI_PROJ__='';
-  const projSel=window.__MINI_PROJ__||'';
-  const curProj=projList.filter(p=>p.key===projSel)[0];
-  const inProj=s=>!curProj?true:(s.projectKey!==undefined?s.projectKey===curProj.key:(s.cwd&&curProj.cwd===s.cwd));
-  const live=(snap.sessions||[]).filter(s=>(!agentSel||s.source===agentSel)&&s.kind!=='subagent'&&inProj(s));
-  const hist=(((snap.catalog&&snap.catalog.history)||[])).filter(s=>(!agentSel||s.source===agentSel)&&s.kind!=='subagent'&&!s.live&&inProj(s));
-  // agent 下拉
-  const agEl=$('m-agent');
-  const agHtml=AGENT_TABS.map(([v,l])=>'<option value="'+v+'"'+(agentSel===v?' selected':'')+'>'+l+'</option>').join('');
-  if(agEl.__petLastHtml!==agHtml){agEl.innerHTML=agHtml;agEl.__petLastHtml=agHtml}
-  // 项目下拉
-  const pjEl=$('m-proj');
-  const pjHtml='<option value="">全部项目</option>'+projList.map(p=>'<option value="'+esc(p.key)+'"'+(projSel===p.key?' selected':'')+'>'+esc(p.name)+(p.liveCount?' ●'+p.liveCount:'')+'</option>').join('');
-  if(pjEl.__petLastHtml!==pjHtml){pjEl.innerHTML=pjHtml;pjEl.__petLastHtml=pjHtml}
-  // 会话下拉：实时优先（●），历史殿后；值 = sessionId；默认自动选第一个实时会话
-  const sessEl=$('m-sess');
-  const opts=[];
-  for(const s of live)opts.push(['live',s]);
-  for(const s of hist.slice(0,40))if(!live.some(x=>x.id===s.sessionId))opts.push(['hist',s]);
-  if(window.__MINI_SESS__&&!opts.some(([,s])=>s.id===window.__MINI_SESS__||s.sessionId===window.__MINI_SESS__))window.__MINI_SESS__='';
-  if(!window.__MINI_SESS__&&live.length)window.__MINI_SESS__=live[0].id;
-  const ssHtml=opts.length?opts.map(([kind,s])=>{
-    const id=s.id||s.sessionId;
-    const mark=kind==='live'?'● ':'';
-    return '<option value="'+esc(id)+'"'+(window.__MINI_SESS__===id?' selected':'')+'>'+mark+esc(String(s.label||s.title||id).slice(0,26))+' · '+shortSrc(s.source)+'</option>';
-  }).join(''):'<option value="" class="empty-opt">（无会话）</option>';
-  if(sessEl.__petLastHtml!==ssHtml){sessEl.innerHTML=ssHtml;sessEl.__petLastHtml=ssHtml}
-  // ---- 单行进度：选中会话优先，否则聚合 ----
-  let state,act,tm,pend=0,col;
-  const sel=window.__MINI_SESS__?(live.find(s=>s.id===window.__MINI_SESS__)||hist.find(s=>s.sessionId===window.__MINI_SESS__)):null;
+  const projList=(snap.catalog&&snap.catalog.projects)||[];
+  const live=(snap.sessions||[]).filter(s=>s.kind!=='subagent');
+  if(lockSid&&!live.some(s=>s.id===lockSid))lockSid=null;
+  const sel=pickSession(live);
+  let state,act,tm,pend=0,col,src='—',title='全部空闲',sub='',tip='';
   if(sel){
     state=STATE_LABEL[sel.state]||sel.state;col=COLOR[sel.state]||'#8b98a9';
-    act=(sel.activity||sel.title||'')+(sel.model?' · '+sel.model:'');
+    src=shortSrc(sel.source);
+    title=sel.label||sel.title||sel.id;
+    const proj=projNameOf(sel,projList);
+    sub='· '+proj+(sel.model?' · '+sel.model:'');
+    tip=String(sel.cwd||'')||proj;
     tm=sel.state==='idle'?'--':sel.state==='done'?'完成':mmss(sel.elapsedMs||0);
     pend=sel.pending||0;
   }else{
     state=STATE_LABEL[snap.agg]||snap.agg;col=COLOR[snap.agg]||'#8b98a9';
     const c=snap.counters||{};
-    act='聚合 · '+(live.length?live.length+' 实时会话':'无实时会话')+(c.thinking?' · 思考'+c.thinking:'')+(c.running?' · 运行'+c.running:'')+(c.errors?' · 出错'+c.errors:'');
+    title='无进行中会话';
+    sub='· '+(projList.length?projList.length+' 个项目':'…')+(c.errors?' · 出错 '+c.errors:'');
     tm='--';
-    pend=live.reduce((a,s)=>a+(s.pending||0),0);
   }
   $('m-dot').style.background=col;$('m-dot').style.color=col;
+  $('m-src').textContent=src;$('m-src').title='agent 软件：'+src;
+  $('m-title').textContent=title;$('m-title').title=(tip?tip+'\n':'')+'点击 ⤢ 打开 App 查看全部 '+live.length+' 个会话';
+  $('m-sub').textContent=sub;
   $('m-state').textContent=state;$('m-state').style.color=col;
-  $('m-act').textContent=act;
   $('m-tm').textContent=tm;
   $('m-pend').textContent=pend?('⏳'+pend):'';
-  window.__RENDER_OUT__={state:state,act:act,tm:tm,pend:pend,live:live.length,agents:AGENT_TABS.length,sessOpts:opts.length,selSource:sel?shortSrc(sel.source):null};
+  const cyc=$('m-cycle');
+  cyc.textContent='⟳ '+live.length;
+  cyc.disabled=!live.length;
+  cyc.title=live.length?('切换会话（'+(lockSid?'已锁定手动选择':'自动跟随最新')+'，共 '+live.length+' 个，其余隐藏）'):'无会话';
+  window.__RENDER_OUT__={state:state,src:src,title:String(title).slice(0,18),tm:tm,pend:pend,live:live.length,locked:!!lockSid};
   return window.__RENDER_OUT__;
 }
-$('m-agent').addEventListener('change',e=>{window.__AGENT__=e.target.value;window.__MINI_PROJ__='';window.__MINI_SESS__='';if(window.__SNAP__)render(window.__SNAP__)});
-$('m-proj').addEventListener('change',e=>{window.__MINI_PROJ__=e.target.value;window.__MINI_SESS__='';if(window.__SNAP__)render(window.__SNAP__)});
-$('m-sess').addEventListener('change',e=>{window.__MINI_SESS__=e.target.value;if(window.__SNAP__)render(window.__SNAP__)});
-$('m-expand').onclick=async function(){try{await trySetSize(980,640)}catch(e){};location.href='/window.html'};
+$('m-cycle').addEventListener('click',ev=>{ev.stopPropagation();
+  const snap=window.__SNAP__;if(!snap)return;
+  const live=(snap.sessions||[]).filter(s=>s.kind!=='subagent');
+  if(!live.length)return;
+  const ranked=rankLive(live);
+  const cur=pickSession(live);
+  const idx=Math.max(0,ranked.findIndex(s=>s.id===(cur&&cur.id)));
+  const nxt=ranked[(idx+1)%ranked.length];
+  lockSid=(nxt&&nxt.id===ranked[0].id&&idx===ranked.length-1)?null:(nxt?nxt.id:null);   // 环回一圈 → 恢复自动
+  render(snap);
+});
+$('m-expand').addEventListener('click',ev=>{ev.stopPropagation();showApp()});
 let es=null;
 function connect(){
   es=new EventSource('/api/stream');
   es.onmessage=e=>{try{render(JSON.parse(e.data))}catch(err){}};
-  es.onerror=function(){$('m-act').textContent='与本地服务断开，重连中…';es.close();setTimeout(connect,3000)};
+  es.onerror=function(){$('m-sub').textContent='· 与本地服务断开，重连中…';es.close();setTimeout(connect,3000)};
 }
 connect();
-trySetSize(360,44);
+trySetSize(380,46);
 </script>
 </body>
 </html>

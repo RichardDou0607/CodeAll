@@ -158,3 +158,14 @@
 - **顺手修**：聚合态 `working` 缺中文文案/配色（两页都补「工作中」绿色；此前顶部一直显示英文 working）。
 - **测试**：`demo/test-window.mjs` 重写为 App 断言 24 项；新增 `demo/test-mini.mjs` 9 项——全绿。浏览器实测：mini 42 会话可选、自动选中活跃会话；App 顶部切 CLAUDE（项目 23→11、实时 2→1、历史 30→16）、左侧点项目（agent综合管理平台 · 2 进行）、行选中目标全链路可用。
 - docs/55 人机交互方案的双面模型与新形态的对应关系待 v2 修订（常驻层=迷你条、控制台层=App）。
+
+### 双窗口并存 + 迷你条动态机制 + 原生窗口控制（2026-10-06 晚，UI/shell）
+
+- **App 界面与迷你条改为两个窗口并存**（如 Codex 软件本体与 pet 的关系，不再同窗口跳转）：
+  - 外壳（tauri.conf）新增 `app` 窗口（1000×680，原生标题栏），main=迷你条（380×46）；capabilities 放行双窗口。
+  - 迷你条 ⤢ = `show+set_focus` app 窗口；App 红色关闭按钮 = 隐藏不销毁（CloseRequested → prevent_close + hide，⤢ 可再唤出）；托盘新增「显示 App 界面」。
+  - lib.rs：start_url_watcher 双窗口化（REMOTE_COMMITTED[main]/[app]）；REMOTE_INJECT 按 `agentpet-solid` meta 跳过透明化（App 窗口用原生标题栏，不再注透明 CSS）；webui/app.html 引导页（探活优先，避免与 main 引导页双拉服务进程）。
+- **迷你条改动态单行机制**：始终显示「优先级最高（等你确认 > 出错 > 运行 > 思考）→ 最新」的会话，其余隐藏；⟳ 按钮轮换锁定（环回一圈恢复自动）；出现 waiting/error 紧急会话时自动抢占回最新；行内容 = `来源 · 标题 · 项目 · 模型 · 状态 · 计时 · ⏳`（可分辨会话×项目×agent）。无实时会话时显示聚合行。
+- **App 用 macOS 原生窗口控制**：decorations=true（红=隐藏/黄=缩放/绿=全屏），移除自绘标题栏按钮。
+- **拖拽 bug 修复**：根因是外壳注入脚本只认 `.titlebar` 挂 mousedown 拖拽，新版式没有该元素。迷你条改为自挂 mousedown → start_dragging（整条可拖，按钮除外），App 走原生标题栏。
+- **验证**：cargo check 干净；`run.sh --install` 重建安装；受控启动日志确认 `REMOTE_COMMITTED[main]+[app]`、REMOTE_IPC_OK、单服务进程（app 引导页探活优先生效）；浏览器实测迷你条动态机制（自动跟随 CLAUDE 运行中会话 → ⟳ 锁定 DSH → 环回自动）；test-mini 重写 11 项、test-window 调整后 24 项全绿。

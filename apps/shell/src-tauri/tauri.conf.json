@@ -12,11 +12,11 @@
     "windows": [
       {
         "label": "main",
-        "title": "Agent 悬浮窗 · 启动中",
-        "width": 360,
-        "height": 340,
-        "minWidth": 360,
-        "minHeight": 340,
+        "title": "AgentPet · 迷你条",
+        "width": 380,
+        "height": 96,
+        "minWidth": 320,
+        "minHeight": 48,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": false,
@@ -24,6 +24,23 @@
         "resizable": true,
         "visible": false,
         "skipTaskbar": true,
+        "center": true
+      },
+      {
+        "label": "app",
+        "title": "AgentPet · App",
+        "url": "app.html",
+        "width": 1000,
+        "height": 680,
+        "minWidth": 760,
+        "minHeight": 520,
+        "transparent": false,
+        "decorations": true,
+        "alwaysOnTop": false,
+        "shadow": true,
+        "resizable": true,
+        "visible": false,
+        "skipTaskbar": false,
         "center": true
       }
     ],
