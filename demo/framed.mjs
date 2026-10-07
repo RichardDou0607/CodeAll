@@ -25,12 +25,14 @@ import { scanLocalAgents } from '../adapters/local-agents.mjs';
 import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, followKimiLogs, SOURCE as KM_SOURCE } from '../adapters/kimi-code-adapter.mjs';
+import { scanZcodeCatalog, followZcodeLogs, SOURCE as ZC_SOURCE } from '../adapters/zcode-adapter.mjs';
+import { scanAllUsage, serializeUsageScan } from '../adapters/usage-collect.mjs';
 import { CLI_TARGETS, availableCliChannels, deliverControl, newCliSession, openCliSession } from '../adapters/cli-control.mjs';
 import net from 'node:net';
 import crypto from 'node:crypto';
 
-/** 多源会话目录（M-C）：DSH（workspace 注册表）+ Claude Code（目录即项目）+ Codex（session_meta.cwd 归并）。 */
-const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', agentos: 'AgentOS', opencode: 'OpenCode' };
+/** 多源会话目录（M-C）：DSH（workspace 注册表）+ Claude Code（目录即项目）+ Codex（session_meta.cwd 归并）+ ZCode（sqlite session.path）。 */
+const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', zcode: 'ZCode', agentos: 'AgentOS', opencode: 'OpenCode' };
 
 // Codex 桌面端任务工作目录（~/Documents/Codex/<日期>/<任务名>，每任务一个一次性目录）：
 // 按 cwd 归并会让侧栏出现大量单会话「项目」（he / qi / jian / xia …）——统一折叠为一个「Codex 任务目录」组
@@ -224,7 +226,7 @@ function workspaceIndex(force) {
   }
   return wsCache.data;
 }
-// 多源目录缓存：DSH + Claude Code + Codex + Kimi Code 四路扫描合并（各 ~20ms，5s 复用）
+// 多源目录缓存：DSH + Claude Code + Codex + Kimi Code + ZCode 五路扫描合并（各 ~20ms / zcode ~90ms，5s 复用）
 let multiCache = { at: 0, data: null };
 function multiCatalog(force) {
   if (force || !multiCache.data || Date.now() - multiCache.at > 5000) {
@@ -232,14 +234,31 @@ function multiCatalog(force) {
     let cc = { projects: [], sessions: [], elapsedMs: 0 };
     let cx = { projects: [], sessions: [], elapsedMs: 0 };
     let km = { projects: [], sessions: [], elapsedMs: 0 };
+    let zc = { projects: [], sessions: [], elapsedMs: 0 };
     try { cc = scanClaudeCatalog(); } catch (e) { cc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
     try { cx = scanCodexCatalog(); } catch (e) { cx = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
     try { km = scanKimiCatalog(); } catch (e) { km = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
-    multiCache = { at: Date.now(), data: { dsh, cc, cx, km, elapsedMs: Math.round(((dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0)) * 100) / 100 } };
+    try { zc = scanZcodeCatalog(); } catch (e) { zc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+    multiCache = { at: Date.now(), data: { dsh, cc, cx, km, zc, elapsedMs: Math.round(((dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0) + (zc.elapsedMs || 0)) * 100) / 100 } };
   }
   return multiCache.data;
 }
 const sessionStates = new Map(); // sessionId -> 来自目录的粗粒度状态（无实时事件时用）
+
+// ---------- Token 用量慢缓存（60s；与 5s 目录缓存分离——usage 需全文件精确累计） ----------
+// 首轮全量 ~2s（本机 1.1GB 转录）；文件级增量（size+mtime）让后续轮次只重读有增长的文件。
+let usageCache = { at: 0, busy: false, data: null };
+async function refreshUsage() {
+  if (usageCache.busy) return;
+  usageCache.busy = true;
+  try {
+    usageCache.data = await scanAllUsage();
+    usageCache.at = Date.now();
+  } catch (e) {
+    usageCache.data = usageCache.data ?? { overview: null, cc: null, cx: null, km: null, zc: null, error: String(e?.message || e).slice(0, 120) };
+  } finally { usageCache.busy = false; }
+  broadcast();                                          // 扫描完成立刻推新快照（不等 2s 心跳）
+}
 
 // ---------- 进行中口径（修复「N 进行」误报，2026-10-06）----------
 // 实时会话表只增不减：进程被杀/会话结束后，running/thinking 会永远滞留（曾导致已完成会话被计入「进行」）。
@@ -337,12 +356,25 @@ function snapshot() {
   const multi = multiCatalog(false);
   const cat = multi.dsh;
   const ws = workspaceIndex(false);
+  // ---- Token 用量：慢缓存 → 会话行附带 + 全局 usage 块（首轮未完成时 {pending:true}）----
+  const usage = usageCache.data;
+  const usageBySid = new Map();                          // 'source:sessionId' → 扁平 usage（源内会话 id 不重复）
+  if (usage) for (const sc of [usage.dsh, usage.cc, usage.cx, usage.km, usage.zc]) {
+    if (sc?.bySession) for (const [sid, r] of sc.bySession) usageBySid.set((sc.source ?? '') + ':' + sid, r);
+  }
+  const usageOf = (source, sid) => {
+    const r = usageBySid.get((source ?? '') + ':' + sid);
+    return r && (r.input || r.output || r.cacheRead || r.cacheWrite || r.requests)
+      ? { input: r.input, output: r.output, cacheRead: r.cacheRead, cacheWrite: r.cacheWrite, requests: r.requests }
+      : undefined;
+  };
   // 跨源元信息表：sessionId → 目录记录（claude/codex/kimi 记录自带 source / agentName / model）
   const metaById = new Map();
   for (const p of cat.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   for (const p of multi.cc.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   for (const p of multi.cx.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   for (const p of multi.km.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
+  for (const p of multi.zc.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   // 子代理判定：插件 session.start 的 origin 立即可判（零延迟）；目录 kind 兜底（≤5s 滞后）
   const isSubagent = (id, s) => s?.origin === 'subagent' || (metaById.get(id)?.kind || 'main') === 'subagent';
   // projectKey：DSH 注册表优先；claude/codex 按 cwd 归并进同目录 workspace；Codex 任务目录折叠为一组；都不中 → 'path:<cwd>'（M-C）
@@ -376,6 +408,7 @@ function snapshot() {
       agentName: meta.agentName || SOURCE_LABEL[s.source] || 'DSH', model: meta.model || null, reasoningEffort: meta.reasoningEffort || null,
       variant: meta.variant || null,
       agentPreset: meta.agentPreset || null, title: meta.title || null, kind: 'main', live: true,
+      usage: usageOf(s.source ?? 'dsh', s.id),
     };
   });
   const liveIds = new Set(live.map(s => s.id));
@@ -418,6 +451,7 @@ function snapshot() {
   for (const s of multi.cc.sessions || []) collectExtra(s);
   for (const s of multi.cx.sessions || []) collectExtra(s);
   for (const s of multi.km.sessions || []) collectExtra(s);
+  for (const s of multi.zc.sessions || []) collectExtra(s);
 
   const sidebarProjects = [];
   const listed = new Set();
@@ -529,7 +563,7 @@ function snapshot() {
   const history = sidebarProjects.flatMap(p => p.sessions)
     .filter(s => !liveIds.has(s.sessionId))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .map(s => ({ ...s, source: s.source || 'dsh', projectKey: keyOfSession(s.sessionId, s) }));
+    .map(s => ({ ...s, source: s.source || 'dsh', projectKey: keyOfSession(s.sessionId, s), usage: usageOf(s.source || 'dsh', s.sessionId) }));
   return {
     v: 1, ts: Date.now(), agg,
     build: { window: pageBuild(path.join(HTML_DIR, 'window.html')), mini: pageBuild(path.join(HTML_DIR, 'mini.html')) },
@@ -540,6 +574,7 @@ function snapshot() {
       for (const s of multi.cc.sessions || []) bump('claude-code', s.variant);
       for (const s of multi.cx.sessions || []) bump('codex', s.variant);
       for (const s of multi.km.sessions || []) bump('kimi-code', s.variant);
+      for (const s of multi.zc.sessions || []) bump('zcode', s.variant);   // 库内无形态标记：恒无徽标计数
       // CLI/桌面端拆行后（base+variantTag）：每行只带自己形态的会话计数
       // （claude 桌面行含 桌面+IDE；CLI 行只含 CLI；DSH/AgentOS/OpenCode 无形态）
       return (agentStatus.agents || []).map((a) => {
@@ -555,12 +590,15 @@ function snapshot() {
     agentCounts: agentStatus.counts || {},
     counters: state.counters,
     stateCounts,
+    usage: usage
+      ? { generatedAt: usageCache.at, refreshing: usageCache.busy, ...usage.overview }
+      : { pending: true },
     inputs: state.inputs.slice(-8).reverse(),
     lastEvent: state.lastEvent,
     inputChannel: (() => {
       const cli = cliChannelsCache();
       if (INPUT_CMD) return { mode: 'cmd', detail: INPUT_CMD };
-      if (cli.length) return { mode: 'cli', detail: 'DSH 经本地队列（挂插件可直投）；Claude Code / Codex / Kimi Code 会话直接经各自 CLI 投递' };
+      if (cli.length) return { mode: 'cli', detail: 'DSH 经本地队列（挂插件可直投）；Claude Code / Codex / Kimi Code / ZCode 会话直接经各自 CLI 投递' };
       return { mode: 'manual', detail: '未配置输入通道：输入会进本地队列，点击可复制手动投递命令' };
     })(),
     catalog: {
@@ -573,7 +611,7 @@ function snapshot() {
       })),
       history,
       elapsedMs: multi.elapsedMs, scannedAt: cat.scannedAt,
-      source: 'multi:disk-full+workspace-order+disk(claude-code,codex,kimi-code)',
+      source: 'multi:disk-full+workspace-order+disk(claude-code,codex,kimi-code,zcode)',
     },
     capabilities: (() => {
       const cli = cliChannelsCache();
@@ -630,10 +668,10 @@ function startFollower() {
 }
 
 // ---------- 输入投递 ----------
-/** 跨源定位会话（支持前缀）：DSH / Claude Code / Codex / Kimi Code 目录各查一遍，返回时附带所属项目。 */
+/** 跨源定位会话（支持前缀）：DSH / Claude Code / Codex / Kimi Code / ZCode 目录各查一遍，返回时附带所属项目。 */
 function resolveSessionAny(sessionId) {
   const multi = multiCatalog(false);
-  for (const cat of [multi.dsh, multi.cc, multi.cx, multi.km]) {
+  for (const cat of [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc]) {
     for (const p of cat.projects || []) {
       const s = (p.sessions || []).find(x => x.sessionId === sessionId || String(x.sessionId).indexOf(sessionId) === 0);
       if (s) return { ...s, project: { projectId: p.projectId, cwd: p.cwd, name: p.name, title: p.title } };
@@ -761,7 +799,7 @@ const server = http.createServer(async (req, res) => {
     // M-C：三源合并（DSH / Claude Code / Codex），projects[].sources 标注每个项目的来源构成。
     const multi = multiCatalog(url.searchParams.get('refresh') === '1');
     const projects = [];
-    for (const cat of [multi.dsh, multi.cc, multi.cx, multi.km]) {
+    for (const cat of [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc]) {
       for (const p of cat.projects || []) {
         const mains = (p.sessions || []).filter(s => s.kind !== 'subagent');
         projects.push(Object.assign({}, p, {
@@ -777,7 +815,7 @@ const server = http.createServer(async (req, res) => {
     const visible = projects.filter(p => p.sessionCount > 0);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(Object.assign({}, multi.dsh, {
-      source: 'multi:workspace-registry+disk(claude-code,codex,kimi-code)',
+      source: 'multi:workspace-registry+disk(claude-code,codex,kimi-code,zcode)',
       projects: visible,
       mainSessions: visible.reduce((a, p) => a + p.sessionCount, 0),
       subagentSessions: visible.reduce((a, p) => a + p.subagentCount, 0),
@@ -786,6 +824,7 @@ const server = http.createServer(async (req, res) => {
         'claude-code': { projects: (multi.cc.projects || []).length, sessions: (multi.cc.sessions || []).length },
         codex: { projects: (multi.cx.projects || []).length, sessions: (multi.cx.sessions || []).filter(s => s.kind !== 'subagent').length },
         'kimi-code': { projects: (multi.km.projects || []).length, sessions: (multi.km.sessions || []).length },
+        zcode: { projects: (multi.zc.projects || []).length, sessions: (multi.zc.sessions || []).length },
       },
     })));
     return;
@@ -861,7 +900,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(501, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         ok: false, error: 'not-authorized',
-        reason: '新建 DSH 会话需要在 DSH 进程内完成（Cordis 插件），当前未授权挂载；不得使用 DSH 凭证绕过。Claude Code / Codex / Kimi Code 的新建可用（请求带 source 字段即走终端通道）',
+        reason: '新建 DSH 会话需要在 DSH 进程内完成（Cordis 插件），当前未授权挂载；不得使用 DSH 凭证绕过。Claude Code / Codex / Kimi Code / ZCode 的新建可用（请求带 source 字段即走终端通道）',
         requested: { cwd, agentName: payload0.agentName || 'DSH', model: payload0.model || null, reasoningEffort: payload0.reasoningEffort || null },
         howto: '见 demo/README.md「打开已存在会话 / 新建会话」与 docs/52-session-catalog.md 的能力矩阵',
       }));
@@ -871,6 +910,24 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/agents') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(agentStatus));
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/usage') {
+    // 全量用量明细（overview + 每源 byModel/bySession）；?refresh=1 异步触发重扫（响应仍返回当前缓存）
+    if (url.searchParams.get('refresh') === '1') refreshUsage();
+    const u = usageCache.data;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(u ? {
+      generatedAt: usageCache.at, refreshing: usageCache.busy,
+      overview: u.overview,
+      perSource: {
+        dsh: serializeUsageScan(u.dsh),
+        'claude-code': serializeUsageScan(u.cc),
+        codex: serializeUsageScan(u.cx),
+        'kimi-code': serializeUsageScan(u.km),
+        zcode: serializeUsageScan(u.zc),
+      },
+    } : { pending: true }));
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/state') {
@@ -949,13 +1006,16 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log('  输入通道： ' + (INPUT_CMD ? 'PET_INPUT_CMD（自动投递）' : '手动队列（未配置 PET_INPUT_CMD）'));
   startFollower();
   connectPlugin();   // 若 DSH 插件已挂载：进程内事件 + 直接投递
-  // M-A/M-B/M-H：Claude Code / Codex / Kimi Code 的多文件观察跟随（增量 tail → 同一个状态机）
+  // M-A/M-B/M-H/M-L：Claude Code / Codex / Kimi Code / ZCode 的多文件观察跟随（增量 → 同一个状态机）
   const ccFollow = followClaudeLogs({ onEvent: applyEvent });
   const cxFollow = followCodexLogs({ onEvent: applyEvent });
   const kmFollow = followKimiLogs({ onEvent: applyEvent });
-  console.log('  观察通道： DSH=日志tail/插件 · Claude Code=转录tail · Codex=rollout tail · Kimi Code=wire.jsonl tail（M-H A 路径）');
+  const zcFollow = followZcodeLogs({ onEvent: applyEvent });
+  console.log('  观察通道： DSH=日志tail/插件 · Claude Code=转录tail · Codex=rollout tail · Kimi Code=wire.jsonl tail · ZCode=sqlite轮询（M-L）');
   console.log('  控制通道： ' + (cliChannelsCache().map((c) => c.name + '(' + c.bin + ')').join(' · ') || '无（CLI 不在 PATH）') + '；投递=tmux/无头续会话，新建/打开=Terminal 窗口');
   refreshAgentStatus();
   setInterval(refreshAgentStatus, 3000);   // 软件四态（ps + mtime 探测，实测 ~40ms）
+  refreshUsage();                          // Token 用量：首轮全量后 60s 增量轮询（usage-collect 文件级缓存）
+  setInterval(refreshUsage, 60_000);
 });
 export { snapshot, deliverInput };

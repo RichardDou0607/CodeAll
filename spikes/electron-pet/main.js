@@ -7,10 +7,21 @@ const os = require("node:os");
 const path = require("node:path");
 
 const t0 = Date.now();
-const petDir = path.join(process.env.PET_SPIKE_DIR || os.tmpdir(), "agent-pet");
+// 路径边界（Mimosa 预提交检查 2026-10-07：env → socket/报告路径曾是无界污点）：
+// 环境变量只允许覆写 os.tmpdir() 或用户主目录之下的路径，其余回退默认值。
+// run-spike.sh 的覆写路径本就取自 os.tmpdir()，行为不变。
+function boundedEnvPath(envVal, fallback) {
+  if (typeof envVal === "string" && envVal) {
+    for (const base of [os.tmpdir(), os.homedir()]) {
+      if (envVal === base || envVal.startsWith(base + path.sep)) return envVal;
+    }
+  }
+  return fallback;
+}
+const petDir = path.join(boundedEnvPath(process.env.PET_SPIKE_DIR, os.tmpdir()), "agent-pet");
 fs.mkdirSync(petDir, { recursive: true });
-const socketPath = process.env.PET_SPIKE_SOCKET || path.join(petDir, "electron-spike.sock");
-const reportPath = process.env.PET_SPIKE_REPORT || path.join(petDir, "electron-spike-report.jsonl");
+const socketPath = boundedEnvPath(process.env.PET_SPIKE_SOCKET, path.join(petDir, "electron-spike.sock"));
+const reportPath = boundedEnvPath(process.env.PET_SPIKE_REPORT, path.join(petDir, "electron-spike-report.jsonl"));
 const runSeconds = Number(process.env.PET_SPIKE_RUN_SECONDS || 14);
 fs.writeFileSync(reportPath, "");
 function report(line) { process.stdout.write(line + "\n"); fs.appendFileSync(reportPath, line + "\n"); }

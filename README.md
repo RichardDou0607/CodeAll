@@ -20,9 +20,9 @@
 5. **内存验收口径**：`phys_footprint` 合计（RSS 仅作参考）。
 6. **分发**：优先 DMG 直分发（`macOSPrivateApi` 与 App Store 审核存在冲突，见风险登记册 R-12）。
 
-## 三、现在就有的可运行演示（2026-10-06）
+## 三、现在就有的可运行演示（2026-10-07）
 
-> 完整演示说明与「诚实边界」见 [demo/README.md](./demo/README.md)。**已跑通的是数据链路（真实 DSH 会话 → 规范事件 → 状态机 → 工作框卡片/悬浮窗）与悬浮窗输入队列；Tauri 真·桌面外壳与常驻 Hub 守护进程尚未实现**（路线图 M0–M3）。**多源观察已上线（M-A/M-B/M-C/M-H）：Claude Code 转录与 Codex rollout 只读接入，与 DSH 会话同窗并列；Kimi Code 按 LevelDB 降级为四态面板（存活 + 近似计数）。**
+> 完整演示说明与「诚实边界」见 [demo/README.md](./demo/README.md)。**已跑通的是数据链路（真实 DSH 会话 → 规范事件 → 状态机 → 工作框卡片/悬浮窗）与悬浮窗输入队列；Tauri 真·桌面外壳与常驻 Hub 守护进程尚未实现**（路线图 M0–M3）。**多源观察已上线（M-A/M-B/M-C/M-H/M-L）：Claude Code 转录、Codex rollout、ZCode sqlite（WAL 只读并发）接入，与 DSH 会话同窗并列；Kimi Code 走 A 路径（state.json + wire.jsonl 事件流）。**
 
 ```bash
 # ★ 双形态操作界面（2026-10-06 改版，两窗口并存）：
@@ -30,17 +30,18 @@
 #   App 窗口（/window.html）——与迷你条并存（如 Codex 本体与 pet）：原生红黄绿窗口控制，
 #   顶部切 agent 软件 · 左侧切项目 · 底部控会话；队列只留未完成项；⤢ 唤出 / 红✕ 收起（不退出）
 apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后直接打开「AgentPet」即可
-node demo/framed.mjs --port 7799    # 本地服务：四源观察（DSH/Claude/Codex/Kimi）+ CLI 控制通道 + SSE
+node demo/framed.mjs --port 7799    # 本地服务：五源观察（DSH/Claude/Codex/Kimi/ZCode）+ CLI 控制通道 + SSE
 open http://127.0.0.1:7799/         # 迷你悬浮条（demo/mini.html）；/window.html = App 界面
-node demo/test-window.mjs           # App 界面渲染自检（24 项断言）
-node demo/test-mini.mjs             # 迷你条渲染自检（9 项断言）
+node demo/test-window.mjs           # App 界面渲染自检（59 项断言）
+node demo/test-mini.mjs             # 迷你条渲染自检（11 项断言）
 node adapters/session-catalog.mjs   # DSH 会话目录（~20ms）
 node adapters/claude-code-adapter.mjs    # Claude Code 会话目录（本机 11 项目 / 48 会话，~18ms）
 node adapters/codex-adapter.mjs          # Codex 会话目录（13 主会话 / 19 子代理自动排除，~19ms）
 node adapters/kimi-code-adapter.mjs      # Kimi Code 会话目录（A 路径：state.json + wire 事件流，~4ms；--status 看四态数据）
+node adapters/zcode-adapter.mjs          # ZCode 会话目录（sqlite 只读：session/message/part，~90ms；--follow 实时跟随）
 node adapters/local-agents.mjs      # 软件四态探测：已连接 / 已打开·未连接 / 未打开 / 未下载（~40ms）
-node adapters/cli-control.mjs --selftest # 控制通道自检：claude/codex/kimi 投递·新建·打开（Terminal 机制验证）
-node scripts/multi-source-check.mjs # 多源适配验收（28 项静态 + --live 3 项真实投递闭环，共 31 项）
+node adapters/cli-control.mjs --selftest # 控制通道自检：claude/codex/kimi/zcode 投递·新建·打开（Terminal 机制验证）
+node scripts/multi-source-check.mjs # 多源适配验收（48 项静态 + --live 4 项真实投递闭环，共 52 项）
 
 # 其它演示
 node demo/frame.mjs                 # 终端实时工作框：跟随你正在跑的 DSH 会话（约 400ms 刷新）

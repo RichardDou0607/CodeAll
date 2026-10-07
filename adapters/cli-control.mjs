@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * adapters/cli-control.mjs — Claude Code / Codex / Kimi Code 的控制通道（docs/21 M-D/M-E/M-H 控制层）
+ * adapters/cli-control.mjs — Claude Code / Codex / Kimi Code / ZCode 的控制通道（docs/21 M-D/M-E/M-H/M-L 控制层）
  *
  * 三类动作，全部走各 CLI 的**官方能力**（不注入、不改配置、不绕过各 CLI 自身的权限系统）：
  *
@@ -10,6 +10,7 @@
  *          claude --resume <id> -p "<text>"
  *          codex  exec resume <id> "<text>"
  *          kimi   -S <id> -p "<text>"
+ *          zcode  --resume <id> --mode build --prompt "<text>"（CLI 随 ZCode.app 捆绑分发）
  *        detached 执行、输出落 ~/.agent-pet/cli-control/*.log（0600）；回合结束后转录/rollout/wire
  *        增长，观察跟随器（M-A/M-B/M-H）自动看到状态变化 —— 控制→观察闭环。
  *
@@ -30,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 
 const execFileP = promisify(execFile);
 
-/** 每个后端的 CLI 定义。args 全部走参数数组（不经 shell）。 */
+/** 每个后端的 CLI 定义。args 全部走参数数组（不经 shell）。extraPaths = PATH 之外的兜底二进制位置。 */
 export const CLI_TARGETS = Object.freeze({
   'claude-code': Object.freeze({
     name: 'Claude Code',
@@ -38,13 +39,15 @@ export const CLI_TARGETS = Object.freeze({
     deliverArgs: (id, text) => ['--resume', id, '-p', text],
     openArgs: (id) => ['--resume', id],
     interactiveArgs: () => [],
+    extraPaths: () => [],
   }),
   codex: Object.freeze({
     name: 'Codex',
     bin: 'codex',
     deliverArgs: (id, text) => ['exec', 'resume', id, text],
-    openArgs: (id) => ['resume', id],
+    openArgs: (id) => ['--resume', id],
     interactiveArgs: () => [],
+    extraPaths: () => [],
   }),
   'kimi-code': Object.freeze({
     name: 'Kimi Code',
@@ -52,8 +55,44 @@ export const CLI_TARGETS = Object.freeze({
     deliverArgs: (id, text) => ['-S', id, '-p', text],
     openArgs: (id) => ['-S', id],
     interactiveArgs: () => [],
+    extraPaths: () => [path.join(os.homedir(), '.kimi-code', 'bin', 'kimi')],
+  }),
+  zcode: Object.freeze({
+    name: 'ZCode',
+    // CLI 随桌面 App 分发（可执行 .cjs，shebang node；PATH 里叫 zcode，若独立安装）。
+    // 上游限制（2026-10-07 实测）：独立 CLI 没有桌面的 Z.AI 登录态（~/.zcode/credentials.json
+    // 不存在），无头 --resume 持久化为 account:* provider（coding-plan）的会话会
+    // "Model creation failed"；builtin provider 会话可正常续接。快速失败检测会把该错误
+    // 如实回报为 failed；用户在终端跑一次 `zcode login` 后 account 会话亦可续接。
+    bin: 'zcode',
+    // 无头 --prompt 的默认权限档是 yolo——显式压到 build：不越权，无头无人在场时危险操作按拒绝处理
+    deliverArgs: (id, text) => ['--resume', id, '--mode', 'build', '--prompt', text],
+    openArgs: (id) => ['--resume', id],
+    interactiveArgs: () => [],
+    extraPaths: () => [path.join('/Applications', 'ZCode.app', 'Contents', 'Resources', 'glm', 'zcode.cjs')],
+    /**
+     * 桌面 App 进程会注入的 provider 配置路径（CLI 脱离 App 环境运行时缺它 →
+     * "无法定位 CLI ZCode Built-in Provider Config" → Model creation failed，2026-10-07 实测）。
+     * builtin 取 bin 同级的 App 包 config（../../config/provider）；personal 取 ~/.zcode/v2。
+     */
+    envFor: (bin) => {
+      const out = {};
+      const bundled = bin && /ZCode\.app\//.test(bin)
+        ? path.join(path.dirname(path.dirname(bin)), 'config', 'provider', 'zcode-builtin.json')
+        : null;
+      if (bundled && fs.existsSync(bundled)) out.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = bundled;
+      const personal = path.join(os.homedir(), '.zcode', 'v2', 'provider_config.json');
+      if (fs.existsSync(personal)) out.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = personal;
+      return out;
+    },
   }),
 });
+
+/** 目标 CLI 需要的额外环境（无则空对象）；bin 供按位置推导（zcode 的 App 包内 config）。 */
+export function cliEnvFor(source, bin = resolveCliBin(source)) {
+  const t = CLI_TARGETS[source];
+  return t?.envFor ? t.envFor(bin) : {};
+}
 
 const CONTROL_DIR = path.join(os.homedir(), '.agent-pet', 'cli-control');
 
@@ -71,8 +110,8 @@ export function resolveCliBin(source) {
     const p = path.join(d, t.bin);
     try { if (fs.statSync(p).isFile() && fs.accessSync(p, fs.constants.X_OK) === undefined) { found = p; break; } } catch { /* 下一个 */ }
   }
-  // 常见兜底（不在 PATH 时）
-  if (!found) for (const p of [path.join(os.homedir(), '.local', 'bin', t.bin), path.join(os.homedir(), '.kimi-code', 'bin', t.bin)]) {
+  // 常见兜底（不在 PATH 时）：~/.local/bin + 各后端声明的 extraPaths（如 ZCode.app 内捆绑的 CLI）
+  if (!found) for (const p of [path.join(os.homedir(), '.local', 'bin', t.bin), ...(t.extraPaths ? t.extraPaths() : [])]) {
     try { if (fs.statSync(p).isFile()) { found = p; break; } } catch { /* 下一个 */ }
   }
   binCache.set(source, { at: Date.now(), path: found });
@@ -131,10 +170,13 @@ function sanitizedEnv() {
 }
 
 /**
- * 无头续会话投递。立即返回（不等待回合完成）；回合写入各自的会话文件，
- * 观察跟随器自动看到。失败（二进制缺失/spawn 报错）同步返回。
+ * 无头续会话投递。spawn 后观察 2.5s 的快速失败窗口：立即退出的 CLI 几乎必然是
+ * 配置/鉴权类错误（zcode 的 "Model creation failed"——独立 CLI 无桌面登录态，建不出
+ * account:* provider；claude 的 "Not logged in"），读日志尾巴如实回报 failed，
+ * 不再把静默失败当「已投递」（与 ME3 抓过的 pid-undefined 假成功同类）。活过窗口的回合
+ * 继续异步执行，写入各自会话文件后观察跟随器自动看到。
  */
-export function deliverViaCli(source, session, text) {
+export async function deliverViaCli(source, session, text) {
   const t = CLI_TARGETS[source];
   if (!t) return { ok: false, error: 'unknown-source' };
   const bin = resolveCliBin(source);
@@ -152,16 +194,29 @@ export function deliverViaCli(source, session, text) {
     const child = spawn(bin, args, {
       cwd,
       detached: true, stdio: ['ignore', out, out],
-      env: sanitizedEnv(),
+      env: { ...sanitizedEnv(), ...cliEnvFor(source, bin) },
     });
     const pid = child.pid;
     if (!pid) {
       // spawn 的 ENOENT（二进制消失 / cwd 已被移动或删除）是异步错误：pid 为 undefined。
       // 不能当「已投递」回报——这是把静默失败当成功的洞（烟测 ME3 抓到）。
       try { child.on('error', () => {}); } catch {}
+      try { fs.closeSync(out); } catch { /* ignore */ }
       return { ok: false, error: 'spawn', detail: t.bin + ' 启动失败：二进制或会话目录（cwd）不可用' };
     }
     child.unref();
+    const earlyCode = await new Promise((resolve) => {
+      const done = (v) => { clearTimeout(timer); resolve(v); };
+      const timer = setTimeout(() => done(null), 2500);        // 活过窗口 = 回合正常开跑
+      child.on('exit', (code) => done(code));
+      child.on('error', () => done(-1));
+    });
+    if (earlyCode !== null && earlyCode !== 0) {
+      let tail = '';
+      try { tail = (fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).pop() || '').slice(0, 160); } catch { /* ignore */ }
+      try { fs.closeSync(out); } catch { /* ignore */ }
+      return { ok: false, error: 'cli-exit', detail: tail || (t.bin + ' 启动后立即退出（code ' + earlyCode + '）') };
+    }
     child.on('error', () => { /* pid 已在：真异步错误进日志文件 */ });
     setTimeout(() => { try { fs.closeSync(out); } catch { /* 已随进程退出 */ } }, 30_000).unref();
     return { ok: true, via: t.bin + ' 无头续会话（异步，pid ' + pid + '）', pid, logFile };
@@ -188,12 +243,13 @@ export async function newCliSession(source, cwd) {
   if (!bin) return { ok: false, error: 'cli-not-found', detail: t.bin + ' 不在 PATH' };
   const dir = cwd && fs.existsSync(cwd) ? cwd : os.homedir();
   const extra = t.interactiveArgs();
+  const envVars = Object.entries(cliEnvFor(source, bin));        // Terminal/tmux 里跑 CLI 同样需要（zcode 的 provider 路径）
   try {
     if (tmuxPanes().length) {
-      await execFileP('tmux', ['new-window', '-c', dir, bin, ...extra], { timeout: 2000 });
+      await execFileP('tmux', ['new-window', '-c', dir, ...envVars.flatMap(([k, v]) => [k + '=' + v]), bin, ...extra], { timeout: 2000 });
       return { ok: true, via: 'tmux new-window（' + t.bin + ' @ ' + dir + '）' };
     }
-    await terminalDo('cd ' + shQuote(dir) + ' && ' + shQuote(bin) + (extra.length ? ' ' + extra.map(shQuote).join(' ') : ''));
+    await terminalDo('cd ' + shQuote(dir) + ' && ' + (envVars.length ? envVars.map(([k, v]) => 'export ' + k + '=' + shQuote(v) + '; ').join('') : '') + shQuote(bin) + (extra.length ? ' ' + extra.map(shQuote).join(' ') : ''));
     return { ok: true, via: 'Terminal 新窗口（' + t.bin + ' @ ' + dir + '）' };
   } catch (e) {
     return { ok: false, error: 'terminal', detail: String(e.message || e).slice(0, 120) };
@@ -208,8 +264,9 @@ export async function openCliSession(source, session) {
   if (!bin) return { ok: false, error: 'cli-not-found', detail: t.bin + ' 不在 PATH' };
   const dir = session?.cwd && fs.existsSync(session.cwd) ? session.cwd : os.homedir();
   const id = String(session.sessionId || session.id);
+  const envVars = Object.entries(cliEnvFor(source, bin));
   try {
-    await terminalDo('cd ' + shQuote(dir) + ' && ' + shQuote(bin) + ' ' + t.openArgs(id).map(shQuote).join(' '));
+    await terminalDo('cd ' + shQuote(dir) + ' && ' + (envVars.length ? envVars.map(([k, v]) => 'export ' + k + '=' + shQuote(v) + '; ').join('') : '') + shQuote(bin) + ' ' + t.openArgs(id).map(shQuote).join(' '));
     return { ok: true, via: 'Terminal 新窗口（' + t.bin + ' resume ' + id.slice(0, 12) + '…）', opened: true };
   } catch (e) {
     return { ok: false, error: 'terminal', detail: String(e.message || e).slice(0, 120) };

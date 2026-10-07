@@ -11,7 +11,7 @@ const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
 let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 script = script.replace(/let es=null;[\s\S]*$/, ''); // 去掉自动连接
 
-const ids = ['agg-dot','agg-text','chips','agent-tabs','toggle-pet','projects','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note','view-sessions','view-status','status-page','status-cards','main','toolbar','sess-filter','variant-filter'];
+const ids = ['agg-dot','agg-text','chips','agent-tabs','toggle-pet','projects','proj-hint','toggle-history','new-session','sessions','target','input','hint','send','queue','note','view-sessions','view-status','view-usage','status-page','status-cards','usage-page','usage-body','main','toolbar','sess-filter','variant-filter'];
 const store = new Map();
 const mkEl = (id) => ({
   id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false, title: '',
@@ -44,12 +44,13 @@ const snap = {
   v: 1, ts: now, agg: 'waiting',
   sessions: [
     { id: 'session-1', lastActiveMs: now - 30000, source: 'dsh', label: 'agent桌宠', state: 'running', activity: '运行命令', elapsedMs: 74000, pending: 0, agentName: 'DSH', model: 'deepseek-flash', reasoningEffort: 'max', kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
-    { id: 'session-2', lastActiveMs: now - 30000, source: 'claude-code', label: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, agentName: 'Claude Code', model: 'glm-5.3', reasoningEffort: 'high', kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
+    { id: 'session-2', lastActiveMs: now - 30000, source: 'claude-code', label: 'api-fix', state: 'thinking', activity: '思考中', elapsedMs: 12000, pending: 0, agentName: 'Claude Code', model: 'glm-5.3', reasoningEffort: 'high', kind: 'main', projectKey: 'ws-1', variant: 'desktop', usage: { input: 1234567, output: 23456, cacheRead: 987654, cacheWrite: 0, requests: 42 } },
     { id: 'session-3', lastActiveMs: now - 30000, source: 'codex', label: 'docs', state: 'waiting', activity: '等待你批准', elapsedMs: 4000, pending: 2, agentName: 'Codex', model: 'gpt-6-sol', kind: 'main', projectKey: 'ws-1', variant: 'cli' },
     { id: 'session-4', lastActiveMs: now - 30000, source: 'dsh', label: 'web-ui', state: 'error', activity: '连接错误', elapsedMs: 2000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-2' },
     { id: 'session-5', source: 'dsh', label: '旧任务', state: 'done', activity: '已完成', elapsedMs: 7200000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-1', since: now - 7200000, lastActiveMs: now - 7200000 },
     { id: 'session-6', source: 'dsh', label: '刚完成', state: 'done', activity: '已完成', elapsedMs: 300000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-1', since: now - 300000, lastActiveMs: now - 300000 },
     { id: 'session-7', source: 'dsh', label: '闲置会话', state: 'idle', activity: '空闲', elapsedMs: 7200000, pending: 0, agentName: 'DSH', kind: 'main', projectKey: 'ws-2', since: now - 7200000, lastActiveMs: now - 7200000 },
+    { id: 'session-8', lastActiveMs: now - 30000, source: 'zcode', label: '现在确认项目进度', state: 'thinking', activity: '思考中', elapsedMs: 9000, pending: 0, agentName: 'ZCode', model: 'GLM-5.3', reasoningEffort: 'max', kind: 'main', projectKey: 'ws-1' },
     { id: 'session-sub', source: 'dsh', label: '子代理内部', state: 'running', kind: 'subagent', projectKey: 'ws-1' },
   ],
   counters: { thinking: 1, running: 1, errors: 1, done: 1 },
@@ -62,6 +63,7 @@ const snap = {
     { id: 'codex-desktop', name: 'Codex 桌面端', source: 'codex', base: 'codex', variantTag: 'desktop', status: 'open-unconnected', installed: true, running: true, connected: false, connectionKind: null, processes: 3, lastActivityMs: now - 400000, version: '1.5.0', variants: { desktop: 32 }, evidence: ['/Applications/Codex++.app'] },
     { id: 'kimi-cli', name: 'Kimi CLI', source: 'kimi-code', base: 'kimi-code', variantTag: 'cli', status: 'closed', installed: true, running: false, connected: false, processes: 0, evidence: ['~/.kimi-code/bin/kimi'] },
     { id: 'kimi-desktop', name: 'Kimi Code 桌面端', source: 'kimi-code', base: 'kimi-code', variantTag: 'desktop', status: 'closed', installed: true, running: false, connected: false, processes: 0, lastActivityMs: now - 7200000, version: '1.0.4', sessionCount: 9, evidence: ['/Applications/Kimi Code.app'] },
+    { id: 'zcode', name: 'ZCode', source: 'zcode', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 8, lastActivityMs: now - 1000, version: '3.14.4', sessionCount: 39, evidence: ['/Applications/ZCode.app'] },
     { id: 'agentos', name: 'AgentOS M1', source: 'agentos', status: 'closed', installed: true, running: false, connected: false, processes: 0, evidence: [] },
     { id: 'opencode', name: 'OpenCode', source: 'opencode', status: 'not-installed', installed: false, running: false, processes: 0, evidence: [] },
   ],
@@ -73,12 +75,39 @@ const snap = {
   ],
   inputChannel: { mode: 'cli', detail: 'x' },
   lastEvent: { type: 'tool.call', ts: now, sessionId: 'session-1' },
+  usage: {
+    generatedAt: now - 5000,
+    totals: { input: 123456789, output: 2345678, cacheRead: 987654321, cacheWrite: 12345, requests: 4321, freshInput: 136802468, hitRate: 0.9 },
+    byModel: [
+      { model: 'GLM-5.3', sources: ['zcode', 'claude-code'], input: 800000000, output: 1500000, cacheRead: 700000000, cacheWrite: 0, requests: 2000, hitRate: 0.47 },
+      { model: 'gpt-6-sol', sources: ['codex'], input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, hitRate: 0.23 },
+    ],
+    bySource: {
+      dsh: { totals: { input: 1700000, output: 2000000, cacheRead: 270000000, cacheWrite: 0, requests: 1341, hitRate: 0.994 }, inputIncludesCache: false, partial: false, elapsedMs: 300, variants: [], models: [{ model: 'deepseek-flash', input: 1700000, output: 2000000, cacheRead: 270000000, cacheWrite: 0, requests: 1341, hitRate: 0.994 }] },
+      'claude-code': { totals: { input: 30000000, output: 1000000, cacheRead: 8000000, cacheWrite: 0, requests: 500, hitRate: 0.21 }, inputIncludesCache: false, partial: false, elapsedMs: 2100, variants: [{ variant: 'desktop', totals: { input: 29000000, output: 950000, cacheRead: 7500000, cacheWrite: 0, requests: 420, hitRate: 0.21 } }, { variant: 'cli', totals: { input: 1000000, output: 50000, cacheRead: 500000, cacheWrite: 0, requests: 80, hitRate: 0.33 } }], models: [{ model: 'glm-5.3', input: 30000000, output: 1000000, cacheRead: 8000000, cacheWrite: 0, requests: 500, hitRate: 0.21 }] },
+      codex: { totals: { input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, hitRate: 0.23 }, inputIncludesCache: true, partial: false, elapsedMs: 430, variants: [{ variant: 'desktop', totals: { input: 39000000, output: 490000, cacheRead: 11900000, cacheWrite: 0, requests: 296, hitRate: 0.23 } }], models: [{ model: 'gpt-6-sol', input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, hitRate: 0.23 }] },
+      'kimi-code': { totals: { input: 2600000, output: 609000, cacheRead: 0, cacheWrite: 0, requests: 181, hitRate: 0 }, inputIncludesCache: false, partial: false, elapsedMs: 300, variants: [{ variant: 'desktop', totals: { input: 2400000, output: 577000, cacheRead: 0, cacheWrite: 0, requests: 170, hitRate: 0 } }], models: [{ model: 'k3', input: 1600000, output: 161000, cacheRead: 0, cacheWrite: 0, requests: 181, hitRate: 0 }] },
+      zcode: { totals: { input: 1670000000, output: 5000000, cacheRead: 990000000, cacheWrite: 0, requests: 6300, hitRate: 0.6 }, inputIncludesCache: true, partial: false, elapsedMs: 24, variants: [], models: [{ model: 'GLM-5.3', input: 807000000, output: 1900000, cacheRead: 700000000, cacheWrite: 0, requests: 2810, hitRate: 0.65 }] },
+    },
+    ranges: {
+      today: {
+        totals: { input: 5000000, output: 300000, cacheRead: 4000000, cacheWrite: 0, requests: 210, hitRate: 0.44 },
+        bySource: {
+          dsh: { totals: { input: 100000, output: 20000, cacheRead: 900000, cacheWrite: 0, requests: 30, hitRate: 0.9 }, variants: [], models: [] },
+          'claude-code': { totals: { input: 2000000, output: 100000, cacheRead: 1500000, cacheWrite: 0, requests: 90, hitRate: 0.43 }, variants: [{ variant: 'cli', totals: { input: 2000000, output: 100000, cacheRead: 1500000, cacheWrite: 0, requests: 90, hitRate: 0.43 } }], models: [{ model: 'glm-5.3', input: 2000000, output: 100000, cacheRead: 1500000, cacheWrite: 0, requests: 90, hitRate: 0.43 }] },
+        },
+        byModel: [{ model: 'glm-5.3', sources: ['claude-code'], input: 2000000, output: 100000, cacheRead: 1500000, cacheWrite: 0, requests: 90, hitRate: 0.43 }],
+      },
+      d7: { totals: { input: 10000000, output: 600000, cacheRead: 8000000, cacheWrite: 0, requests: 420, hitRate: 0.44 }, bySource: {}, byModel: [] },
+      d30: { totals: { input: 50000000, output: 2000000, cacheRead: 40000000, cacheWrite: 0, requests: 1200, hitRate: 0.44 }, bySource: {}, byModel: [] },
+    },
+  },
   build: { window: 1730000000000, mini: 1730000000000 },
-  capabilities: { canCatalog: true, canOpen: true, canCreate: true, canInput: true, cliChannels: [{ source: 'claude-code' }, { source: 'codex' }, { source: 'kimi-code' }], plugin: { available: false } },
+  capabilities: { canCatalog: true, canOpen: true, canCreate: true, canInput: true, cliChannels: [{ source: 'claude-code' }, { source: 'codex' }, { source: 'kimi-code' }, { source: 'zcode' }], plugin: { available: false } },
   catalog: {
     elapsedMs: 55,
     projects: [
-      { key: 'ws-1', projectId: 'ws-1', name: 'agent桌宠', cwd: '/Users/demo/Desktop/agent桌宠', sessionCount: 9, liveCount: 3, sources: ['dsh', 'claude-code', 'codex'] },
+      { key: 'ws-1', projectId: 'ws-1', name: 'agent桌宠', cwd: '/Users/demo/Desktop/agent桌宠', sessionCount: 10, liveCount: 4, sources: ['dsh', 'claude-code', 'codex', 'zcode'] },
       { key: 'ws-2', projectId: 'ws-2', name: '原生AI操作系统', cwd: '/Users/demo/Desktop/原生AI操作系统', sessionCount: 4, liveCount: 0, sources: ['dsh'] },
       { key: '__none__', projectId: '__none__', name: '未归入项目', cwd: null, sessionCount: 2, liveCount: 0, unregistered: true, sources: ['dsh'] },
       { key: 'path:/tmp/x', projectId: 'path:/tmp/x', name: 'x（临时）', cwd: '/tmp/x', sessionCount: 1, liveCount: 0, sources: ['dsh'], dead: true, scratch: true },
@@ -88,6 +117,7 @@ const snap = {
       { sessionId: 'hist-cc', title: '修复 replay fixture', state: 'done', source: 'claude-code', agentName: 'Claude Code', model: 'glm-5.3', updatedAt: now - 5400000, kind: 'main', projectKey: 'ws-1', variant: 'cli' },
       { sessionId: 'hist-cx', title: 'SVG鹈鹕动画', state: 'done', source: 'codex', agentName: 'Codex', model: 'gpt-6-sol', updatedAt: now - 6600000, kind: 'main', projectKey: 'ws-2', variant: 'desktop' },
       { sessionId: 'hist-km', title: '前端简洁科技感重设计', state: 'idle', source: 'kimi-code', agentName: 'Kimi Code', model: 'k3', updatedAt: now - 9000000, kind: 'main', projectKey: '__none__' },
+      { sessionId: 'hist-zc', title: '清理混入教材图片并重新整理', state: 'done', source: 'zcode', agentName: 'ZCode', model: 'GLM-5.3', updatedAt: now - 7200000, kind: 'main', projectKey: 'ws-1' },
       { sessionId: 'hist-act', title: '半小时前完成的会话', state: 'done', source: 'dsh', agentName: 'DSH', model: 'deepseek-flash', updatedAt: now - 1800000, kind: 'main', projectKey: 'ws-1' },
       { sessionId: 'hist-ended', title: '昨天正常结束的会话', state: 'ended', source: 'dsh', agentName: 'DSH', model: 'deepseek-flash', updatedAt: now - 86400000, kind: 'main', projectKey: 'ws-2' },
       { sessionId: 'hist-sub', title: '子代理历史', state: 'idle', agentName: 'DSH', kind: 'subagent', projectKey: 'ws-1', updatedAt: now - 1000 },
@@ -108,6 +138,10 @@ sandbox.render(snap);
 const rowsClaude = getEl('sessions').innerHTML;
 const projClaude = getEl('projects').innerHTML;
 const hintClaude = getEl('proj-hint').textContent;
+sandbox.window.__AGENT__ = 'zcode';
+sandbox.render(snap);
+const rowsZcode = getEl('sessions').innerHTML;
+const projZcode = getEl('projects').innerHTML;
 sandbox.window.__AGENT__ = '';
 // 场景三：左侧选项目 ws-1
 sandbox.window.__PROJECT__ = 'ws-1';
@@ -184,25 +218,44 @@ sandbox.render(snap);
 const targetDsh = getEl('target').innerHTML;
 sandbox.window.__TARGET__ = '';
 sandbox.render(snap);
+// 场景 3.10：用量页（视图切换 + 合计 chips + 跨源合并模型表 + 分源表）
+sandbox.window.__VIEW__ = 'usage';
+sandbox.render(snap);
+const usageBodyHtml = getEl('usage-body').innerHTML;
+const usageMainDisplay = getEl('main').style.display;
+const usagePageCls = getEl('usage-page').className;
+const usageNavBtn = getEl('view-usage').className;
+// 场景 3.11：用量页时间窗切换（当日）——chips/Agent 表/模型表全部切到当日数据
+sandbox.window.__USAGE_RANGE__ = 'today';
+sandbox.render(snap);
+const usageTodayHtml = getEl('usage-body').innerHTML;
+sandbox.window.__USAGE_RANGE__ = 'all';
+sandbox.render(snap);
+sandbox.window.__VIEW__ = 'sessions';
+sandbox.render(snap);
 
 const checks = [
-  ['顶部 agent 切换渲染 5 个 tab（全部/DSH/CLAUDE/CODEX/KIMI）', (tabsHtml.match(/class="tab/g) || []).length === 5 && tabsHtml.includes('全部') && tabsHtml.includes('CODEX')],
-  ['默认实时行=活跃档 5 行（1-4 进行中/出错 + session-6 刚完成缓冲；session-5 完成/session-7 隐藏已分档；子代理过滤）', (rows.match(/class="srow"/g) || []).length === 5 && rows.includes('data-session="session-6"') && !rows.includes('data-session="session-5"') && !rows.includes('data-session="session-7"') && !rows.includes('session-sub')],
+  ['顶部 agent 切换渲染 6 个 tab（全部/DSH/CLAUDE/CODEX/KIMI/ZCODE）', (tabsHtml.match(/class="tab/g) || []).length === 6 && tabsHtml.includes('全部') && tabsHtml.includes('CODEX') && tabsHtml.includes('ZCODE')],
+  ['默认实时行=活跃档 6 行（1-4/8 进行中/出错 + session-6 刚完成缓冲；session-5 完成/session-7 隐藏已分档；子代理过滤）', (rows.match(/class="srow"/g) || []).length === 6 && rows.includes('data-session="session-6"') && rows.includes('data-session="session-8"') && !rows.includes('data-session="session-5"') && !rows.includes('data-session="session-7"') && !rows.includes('session-sub')],
   ['会话行可辨来源与项目（来源列 + 项目名进 meta）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('· agent桌宠')],
+  ['ZCode 实时行带 ZCODE 源徽标且无形态徽标（库内无 CLI/桌面标记，与 DSH 同口径）', rows.includes('>ZCODE</span>') && !rows.includes('ZCODE·')],
   ['实时行来源形态徽标（CLAUDE·桌面 / CODEX·CLI）', rows.includes('>CLAUDE·桌面</span>') && rows.includes('>CODEX·CLI</span>')],
   ['DSH 会话也带形态徽标（DSH·桌面），实时行与历史行一致', rows.includes('>DSH·桌面</span>') && rowsDone.includes('>DSH·桌面</span>')],
   ['来源徽标带 title 全文（截断时可悬停读全）', rows.includes('class="src" title="CLAUDE·桌面"') && rowsDone.includes('class="src" title="CODEX·桌面"')],
   ['完成/隐藏视图的历史行徽标（CODEX·桌面 在完成；KIMI 在隐藏）', rowsDone.includes('>CODEX·桌面</span>') && rowsHiddenView.includes('>KIMI</span>')],
-  ['左侧项目列表（全部项目 + 4 项，含进行中计数）', (projHtml.match(/class="pitem/g) || []).length === 5 && projHtml.includes('3 进行') && projHtml.includes('agent桌宠')],
+  ['左侧项目列表（全部项目 + 4 项，含进行中计数）', (projHtml.match(/class="pitem/g) || []).length === 5 && projHtml.includes('4 进行') && projHtml.includes('agent桌宠')],
   ['临时/已删项目淡化标记（pitem dim + 目录已删除提示）', projHtml.includes('class="pitem dim"') && projHtml.includes('（目录已删除）') && projHtml.includes('x（临时）')],
-  ['软件状态独立页：9 张卡片（CLI 与桌面端拆行）+ 四态徽标', (statusCards.match(/class="scard"/g) || []).length === 9 && ['已连接', '已打开 · 未连接', '未打开', '未下载'].every(t => statusCards.includes(t))],
+  ['软件状态独立页：10 张卡片（CLI 与桌面端拆行 + ZCode）+ 四态徽标', (statusCards.match(/class="scard"/g) || []).length === 10 && ['已连接', '已打开 · 未连接', '未打开', '未下载'].every(t => statusCards.includes(t))],
   ['CLI 与桌面端各自独立行（Claude Code CLI / Claude Code 桌面端 / Codex CLI / Codex 桌面端 / Kimi CLI / Kimi Code 桌面端）', ['Claude Code CLI','Claude Code 桌面端','Codex CLI','Codex 桌面端','Kimi CLI','Kimi Code 桌面端'].every(n=>statusCards.includes(n))],
   ['独立页不与会话页重叠（main 隐藏 / status on / 会话工具栏隐藏）', mainDisplay === 'none' && statusCls === 'on' && sessToolbarVisible === 'hidden'],
   ['独立页显示观察通道与活跃度', statusCards.includes('观察通道') && statusCards.includes('活动中') && statusCards.includes('静默')],
   ['独立页按行带各自形态计数（CLI 行=CLI 13；桌面行=桌面 33 · IDE 4）', statusCards.includes('CLI 13') && statusCards.includes('桌面 33 · IDE 4')],
   ['独立页 Kimi 精确计数（9 会话，无 ≈）', statusCards.includes('>9</b>') && !statusCards.includes('≈9')],
+  ['独立页 ZCode 卡片（sqlite 只读观察 + 39 会话精确计数）', statusCards.includes('ZCode') && statusCards.includes('>39</b>')],
   ['回到会话视图：main 恢复显示', getEl('main').style.display === 'flex' && getEl('status-page').className === ''],
   ['顶部切 CLAUDE → 仅 claude 的活跃实时行（活跃档历史为空不掺行）', rowsClaude.includes('data-session="session-2"') && !rowsClaude.includes('data-session="session-1"') && !rowsClaude.includes('data-session="hist-1"')],
+  ['顶部切 ZCODE → 仅 zcode 的活跃实时行（session-8 在；其它源与历史不在）', rowsZcode.includes('data-session="session-8"') && !rowsZcode.includes('data-session="session-1"') && !rowsZcode.includes('data-session="hist-zc"') && !rowsZcode.includes('data-session="hist-1"')],
+  ['顶部切 ZCODE → 项目侧栏只留含 zcode 的项目（仅 ws-1，sources 含 zcode）', (projZcode.match(/class="pitem/g) || []).length === 2 && projZcode.includes('agent桌宠') && !projZcode.includes('原生AI操作系统')],
   ['顶部切 CLAUDE → 项目侧栏只留含 claude 的项目（仅 ws-1）', (projClaude.match(/class="pitem/g) || []).length === 2 && projClaude.includes('agent桌宠') && !projClaude.includes('原生AI操作系统')],
   ['proj-hint 反映 agent 过滤', hintClaude.includes('CLAUDE-CODE') && hintClaude.includes('claude') === false],
   ['左侧选项目 ws-1 → 只留该项目活跃行（session-1/2/3/6；ws-2 的 session-4/7 不在）', ['session-1','session-2','session-3','session-6'].every(id=>rowsProj.includes('data-session="'+id+'"')) && !rowsProj.includes('data-session="session-4"') && !rowsProj.includes('data-session="session-7"')],
@@ -210,7 +263,7 @@ const checks = [
   ['项目钻取不含其它项目的历史行（ws-2 的 hist-cx / hist-ended 不在）', !rowsProj.includes('data-session="hist-cx"') && !rowsProj.includes('data-session="hist-ended"')],
   ['项目钻取 hint 用「列出全部 N」口径（列表数=全部会话数，三档只作参考，消除「活跃 0 却列出一堆」的不一致）', hintProj.includes('列出全部') && hintProj.includes('活跃')],
   ['形态分段控件渲染 4 档（全部/CLI/桌面/IDE）带选中态', (vfCli.match(/class="btn fbtn/g) || []).length === 4 && /class="btn fbtn on" data-variant="cli"/.test(vfCli) && vfCli.includes('data-variant="desktop"') && vfCli.includes('data-variant="ide"')],
-  ['形态计数在当前口径统计（CLI 档 = session-3 实时 + hist-cc 历史 = 2；「全部」恒为未过滤总数 13）', vfCli.includes('>CLI 2<') && vfCli.includes('>桌面 4<') && vfCli.includes('>全部 13<')],
+  ['形态计数在当前口径统计（CLI 档 = session-3 实时 + hist-cc 历史 = 2；「全部」恒为未过滤总数 15）', vfCli.includes('>CLI 2<') && vfCli.includes('>桌面 4<') && vfCli.includes('>全部 15<')],
   ['形态切到 CLI → 仅 CLI 会话（session-3 在；桌面的 session-1/2 不在）', rowsCli.includes('data-session="session-3"') && !rowsCli.includes('data-session="session-1"') && !rowsCli.includes('data-session="session-2"')],
   ['形态切到 CLI → proj-hint 标注 仅CLI', hintCli.includes('仅CLI')],
   ['形态切到桌面端 → 桌面会话在（session-1/2），CLI 的 session-3 不在', rowsDesk.includes('data-session="session-1"') && rowsDesk.includes('data-session="session-2"') && !rowsDesk.includes('data-session="session-3"')],
@@ -237,7 +290,17 @@ const checks = [
   ['聚合状态=等待你', getEl('agg-text').textContent === '等待你'],
   ['新建按钮可用（CLI 通道就绪）', getEl('new-session').disabled === false],
   ['hint 显示 CLI 投递模式', getEl('hint').textContent.includes('CLI 投递')],
-  ['渲染统计返回（rows=活跃档 5 / projects=4）', out.rows === 5 && typeof out.hist === 'number' && out.projects === 4],
+  ['渲染统计返回（rows=活跃档 6 / projects=4）', out.rows === 6 && typeof out.hist === 'number' && out.projects === 4],
+  ['会话行 meta 显示 token 用量（tok in/out；session-2 带 usage）', rows.includes('tok 1.2M/23k') && rows.includes('glm-5.3')],
+  ['用量页：主界面隐藏 / usage-page on / 导航按钮选中', usageMainDisplay === 'none' && usagePageCls === 'on' && usageNavBtn === 'on'],
+  ['用量页：各 Agent 消耗量汇总表（DSH/ZCode 单行 + 形态值正确）', usageBodyHtml.includes('各 Agent 消耗量') && usageBodyHtml.includes('>DSH</td><td>1.7M</td>') && usageBodyHtml.includes('>ZCODE</td><td>1.67B</td>')],
+  ['用量页：Claude/Codex/Kimi 按形态拆行（CLAUDE·桌面 / CLAUDE·CLI / CODEX·桌面 / KIMI·桌面）', usageBodyHtml.includes('>CLAUDE·桌面</td>') && usageBodyHtml.includes('>CLAUDE·CLI</td>') && usageBodyHtml.includes('>CODEX·桌面</td>') && usageBodyHtml.includes('>KIMI·桌面</td>')],
+  ['用量页：命中率展示（合计 chips 90.0% + 表格百分比列）', usageBodyHtml.includes('命中率 90.0%') && usageBodyHtml.includes('%</td>')],
+  ['用量页：时间窗切换器（全部/当日/7 日内/30 日内）', usageBodyHtml.includes('data-urange="all"') && usageBodyHtml.includes('data-urange="today"') && usageBodyHtml.includes('data-urange="d7"') && usageBodyHtml.includes('data-urange="d30"')],
+  ['切到当日：全部表格切当日数据（in 5.0M · CLAUDE·CLI 行在；全量 123.5M 不再显示）', usageTodayHtml.includes('in 5.0M') && usageTodayHtml.includes('>CLAUDE·CLI</td>') && !usageTodayHtml.includes('in 123.5M')],
+  ['用量页：合计 chips + 跨源合并模型表（GLM-5.3 标注 ZCODE+CLAUDE 来源）', usageBodyHtml.includes('in 123.5M') && usageBodyHtml.includes('GLM-5.3') && usageBodyHtml.includes('ZCODE CLAUDE')],
+  ['用量页：分源模型表 + 口径脚注（命中率折算 / 自然日归桶 / 60s 缓存）', usageBodyHtml.includes('gpt-6-sol') && usageBodyHtml.includes('时间窗按本地自然日') && usageBodyHtml.includes('60s 增量缓存')],
+  ['回到会话视图：用量页隐藏', getEl('usage-page').className === '' && getEl('main').style.display === 'flex'],
   ['原生窗口控制（红黄绿）接管关闭/缩放/全屏：页面无自绘窗口按钮', true],
   ['token 注入后脚本仍可执行' + (injectedOk ? '' : '：' + injectedErr), injectedOk],
   ['esc 转义', sandbox.esc('a"b<c') === 'a&quot;b&lt;c'],

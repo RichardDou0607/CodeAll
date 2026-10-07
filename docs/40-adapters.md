@@ -23,6 +23,7 @@
 | 10 | **Aider** | 无 hook；JSON 输出/历史文件/进程观测 | 3～4 类（进程级为主） | **P2** | 3～4 人日 |
 | 11 | **进程/日志兜底层** | ps / lsof / 文件监听 | 2 类（session.start/end 级别） | **P1（兜底）** | 2～3 人日 |
 | 12 | **Kimi Code**（桌面 App + CLI，1.0.4） | `~/.kimi-code/` 文件级数据（state.json + agents/main/wire.jsonl 事件流）+ 内置 hooks（20 事件，未用） | wire 实测可映射 8 类（含**原生审批对**） | **首批（A 路径 ✅）** | 已落地（hooks 升级项另计） |
+| 13 | **ZCode**（桌面 App 3.14.4，CLI 0.16.9 随包分发） | `~/.zcode/cli/db/db.sqlite`（WAL；session/message/part 三表，node:sqlite 只读并发）+ 包内 `zcode.cjs` CLI（--resume/--prompt） | sqlite 实测可映射 8 类（turn/step/tool/message；**无审批流**——permission 表为项目配置） | **首批 ✅（M-L）** | 已落地（无头投递对 account:* provider 会话受上游登录态限制，见 §3.12） |
 
 **三条结论**：
 1. **Phase 2 的关键不是「能不能拿到事件」，而是「拿到事件要不要用户改配置」**：Claude Code / Codex / Cursor / Copilot / Gemini 的 hook 都要写进用户或项目配置文件，属于「需用户同意安装」的接入方式；**离线日志兜底（只读、零侵入）应当作为每个后端的默认降级路径**。本机实测证明两条路都可行（见 §3.1/§3.2 的实测证据段）。
@@ -480,6 +481,51 @@ $ node -e 'fs.watch(dir, ...)'    # 文件级变化（会话日志增长 = 有�
 **勘误记录**：首版 spike 曾误判「会话仅在 Electron LevelDB → 降级为进程级兜底」——根因是探测命令 `ls -d ~/.kimi* ~/kimi*` 中 `~/kimi*` 无匹配导致 zsh 整体中止，`~/.kimi-code/` 未被列出。LevelDB 实为前端层缓存，现降为第三层兜底（`scanKimiLegacyCount`，近似计数）。
 
 **证据等级**：[A] 本机实测（2026-10-06 两轮：上午 LevelDB spike + 下午 wire/state 全量分析，均只读）。
+
+---
+
+### 3.12 ZCode（首批 ✅ M-L，2026-10-07 落地）【本会话同款桌面 Agent】
+
+**接入点（本机实测 [A]，全部只读）**：`~/.zcode/cli/db/db.sqlite`，**WAL 模式**，用 `node:sqlite`（Node ≥22.5 自带，零依赖）以 `readOnly` 连接并发读——与桌面 App 共存无锁（本机实测：调研期间的查询本身即出现在 part 流里）。表结构：
+- `session`——会话目录：`id / title(title_source) / path(=cwd) / parent_id / task_type(interactive|subagent_child|selection_side_chat) / version / time_created / time_updated / time_archived`。**子代理判定 = task_type='subagent_child'（本机 56 个），SQL 层直接排除**。
+- `message`——消息信封：`role(user|assistant) / finish(stop|completed|tool-calls|failed|interrupted) / semantics.origin(real_user|agent_runtime|system；synthetic 注入不产事件) / anchor.turnId / tokens`。
+- `part`——消息内片段：`type=step-start|step-finish(reason)|tool(callID,state.status=running|completed|error)|text|reasoning|timeline|compaction`。**tool 的 running→completed 是同行 UPDATE（time_updated 变、time_created 不变）**——跟随器按 time_updated 水位 + `(tbl,id)→data 指纹`去重捕获状态迁移。
+- `session_entry`——`runtime/model_selection`（模型/思考档/`providerId`——注意 `account:*` = 登录态 coding-plan）。
+
+**映射（已落地于 `adapters/zcode-adapter.mjs`）**：real_user message→turn.start（合成注入如 todo_reminder 跳过）；tool(running)→tool.call、tool(completed/error)→tool.result；step-start/finish→step.start/end；assistant finish(stop|completed→ok / failed→error / interrupted→aborted)→turn.end；text part→message.assistant(截断 280)。**无审批族**：permission 表是项目级配置（本机 0 行），observes 如实声明不含 approval.*。
+
+**控制通道（包内 CLI `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`，PATH 里无 zcode）**：
+- 投递 = `zcode --resume <id> --mode build --prompt "<text>"`（`--mode build` 显式压掉无头默认的 yolo，守住「不越权」红线）；新建/打开 = Terminal 窗口跑同 CLI。
+- **必须补两个环境变量**（桌面 App 进程会注入、独立运行时缺失，否则 `无法定位 CLI ZCode Built-in Provider Config` → `Model creation failed`）：`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`（App 包 `config/provider/zcode-builtin.json`，按 bin 相对位置推导）与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`（`~/.zcode/v2/provider_config.json`）。
+- **上游限制（2026-10-07 实测）**：`~/.zcode/credentials.json` 不存在——桌面登录态未落到 CLI 共享位置，独立 CLI 建不出 `account:*` provider 的模型 → **无头 --resume 该类会话必失败**（builtin provider 会话正常，实测探测会话可记忆续接）。cli-control 的 2.5s 快速失败检测把该错误如实回报 failed（带日志尾）；用户在终端跑一次 `zcode login` 后可解除。
+
+**形态（CLI/桌面）**：库内无 surface 标记（message/session_entry 均查过）——ZCode 会话不打形态徽标（与 DSH 同口径），软件状态面板为单行（App 捆 CLI，无独立安装）。
+
+**证据等级**：[A] 本机实测（2026-10-07：schema/枚举值全量核对 + 当前运行会话实时跟随验证 + 无头新建/续接/provider 边界二分定位，均只读）。
+
+---
+
+### 3.13 usage-collect：Token 用量采集（跨五源慢通道，2026-10-07 落地）
+
+**定位**：`adapters/usage-collect.mjs`——按 **Agent × 模型**计数 token 用量的独立采集层，与目录扫描（头/尾窗口、5s 热缓存）分离：usage 需全文件精确累计（本机 Claude 1.1GB / 164 文件），走 **60s 慢缓存 + 文件级增量**（size+mtime 复用，首轮 ~2s，之后只重读增长文件）+ 15s 软时限护栏（partial 截断最旧文件，下轮续扫）。
+
+**五源口径（本机实测，2026-10-07）**：
+
+| 源 | usage 出处 | 口径要点 | input 含 cache? |
+|---|---|---|---|
+| DSH | `assistant/message` 的 `data.usage` | 多帧 zstd 逐帧解压（明文直读）；每调用一组直接累加；model 取行序 `request/header`；每目录只取最高代日志（pickLogFile 防双计）；∑分量=∑totalTokens 恒等式对账 | 否 |
+| Claude Code | assistant 行 `message.usage` | 按 message.id 去重（流式快照后写覆盖）；`<sid>/subagents/agent-*.jsonl` 子代理消耗归入父会话 | 否 |
+| Codex | `token_count.info.total_token_usage` | 取最后一条权威累计；单模型会话整额归属（last_token_usage 增量实测漏 ~25%） | 是 |
+| Kimi Code | `usage.record`（每请求一条） | inputOther/inputCacheRead/inputCacheCreation 映射；含全部 agents/<id>/ 子代理流 | 否 |
+| ZCode | `message.data.tokens`（SQL 按 session × modelId 聚合） | 与 part.step-finish 双路一致；逐行对齐官方账本 model_usage 相等；**input 含 cacheRead**（raw_usage_json 证实：totalTokens=inputTokens+outputTokens，inputTokens 为全量 prompt）；subagent_child 计入 | 是 |
+
+- DSH 的 title 生成小额消耗无 usage 事件、不计（成文边界）。
+- 跨源同名模型**小写归并**；子代理/子链路消耗一律计入总量（真实消耗口径）；子代理会话行不单列（只进源级合计）。
+- **三个展示维度（二期，2026-10-07）**：① 时间窗——本地自然日分桶（绝对口径，缓存跨天正确），切 当日/7日/30日/全部；② 形态——Claude(entrypoint)/Codex(originator)/Kimi(clientMetadata) 文件级归属 CLI/桌面/IDE（全量=byVariantFlat 恒等；Codex 时间窗内为增量近似）；③ 缓存命中率——cacheRead/(fresh+cacheRead)，fresh 按源 input 含 cache 语义折算（**Codex 与 ZCode 含**），跨源合并行经 freshInput 累计同样可算。
+
+**输出面**：framed 快照 `usage` 块（totals/byModel/bySource + ranges 时间窗 + 会话行 `usage` 字段）、`/api/usage` 明细端点、UI「用量」页（时间窗切换器 + **各 Agent 消耗量表（形态拆分 + 命中率列）** + 模型表 + 会话行 `tok in/out`）；CLI `node adapters/usage-collect.mjs [--json|--refresh]`。
+
+**复现**：`node scripts/multi-source-check.mjs` 看 MU1–MU9（独立对账：Claude 去重证明 / Codex 权威值反读 / Kimi 原始行计数 / ZCode 双路互证 / DSH 恒等式+独立解压重数 / 形态归属恒等 / 日桶对账与单调性 / framed 端到端）。**证据等级 [A]**。
 
 ---
 

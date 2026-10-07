@@ -1,5 +1,113 @@
 # 变更日志（文档与契约）
 
+## 2026-10-07
+
+### ZCode 接入（M-L，五源；用户当日指定「把 ZCode 也接入并完整回归」）
+
+**新增 `adapters/zcode-adapter.mjs`（全量只读）**
+- 数据源：`~/.zcode/cli/db/db.sqlite`（WAL）经 `node:sqlite`（Node ≥22.5 自带，零依赖）readOnly 连接，与桌面 App 并发无锁。表：`session`（目录/标题/cwd/`task_type`——**subagent_child = 子代理，SQL 层排除，本机 56 个**）、`message`（role/finish/`semantics.origin`——合成注入不产事件）、`part`（step-start/finish、tool(callID,state.status running|completed|error)、text）、`session_entry`（runtime/model_selection → 模型/思考档/providerId）。
+- 三入口与 kimi 适配器同构：`scanZcodeCatalog()`（本机 18 项目 / 39 主会话，~90ms，窗口函数一次取每会话最近 14 行推导粗状态）、`followZcodeLogs()`（**time_updated 水位轮询 + (tbl,id)→data 指纹去重**——捕获 tool running→completed 的同行 UPDATE；对正在运行的会话实测实时可见，本次调研查询本身即出现在事件流里）、`scanZcodeStatus()`（四态面板数据）。
+- 映射：real_user→turn.start；tool running/completed→tool.call/result；step-start/finish→step.start/end；assistant finish(stop|completed→ok/failed→error/interrupted→aborted)→turn.end；text→message.assistant(280 截断)。**无审批族**（permission 表为项目配置、本机 0 行），observes 如实声明。
+- 形态：库内无 CLI/桌面标记 → ZCode 会话不打形态徽标（与 DSH 同口径）。
+
+**framed.mjs / local-agents / cli-control / UI 接线**
+- framed：五源目录合并（dsh/cc/cx/km/zc）、实时跟随、`/api/catalog` perSource、跨源定位投递路由；SOURCE_LABEL/UI tab「ZCODE」。
+- local-agents：新增 ZCode 行（进程特征 `ZCode.app/`、`zcode-cli`、`zcode-host-local-1`；活动 = db.sqlite* mtime；39 会话精确计数）。
+- cli-control：新增 zcode 通道——bin 兜底到 App 包内 `glm/zcode.cjs`；`extraPaths` 机制替代硬编码兜底；投递 `--resume <id> --mode build --prompt`（**显式 build 压掉无头默认 yolo**，守不越权红线）。
+
+**实测发现并修复的两个真问题**
+1. **独立 CLI 缺 provider 环境**：脱离桌面 App 运行报「无法定位 CLI ZCode Built-in Provider Config」→ Model creation failed。修复：按 bin 位置推导并注入 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`（App 包 config）+ `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`（~/.zcode/v2）；投递（spawn env）与新建/打开（Terminal/tmux 前缀 export）三条路径全覆盖。
+2. **上游登录态限制（定位成文，不修——留给用户一次性 `zcode login`）**：`~/.zcode/credentials.json` 不存在，桌面登录态未共享给独立 CLI → 无头 `--resume` **account:\* provider**（coding-plan，本机大多数会话）的会话必失败；builtin provider 会话实测可记忆续接（探测会话记住 42 并答对）。**配套修复：cli-control 投递加 2.5s 快速失败检测**——立即退出的 CLI（Model creation failed / Not logged in 类）读日志尾如实回报 failed，不再谎报「已投递」（与 ME3 的 pid-undefined 假成功同类；对四家 CLI 一致生效，实测 account 会话投递返回 `failed: Error: Model creation failed`）。
+
+**验收（全量回归）**
+- multi-source-check：新增 ML1–ML10（目录/子代理排除/元信息/状态集/性能/行映射×3/信封/滞留修正/**只读红线：建表被拒**）；MC1/MC4/MD1 升级为五源/四通道；`--live` 新增 ML11（探测会话真实投递 → session.time_updated 增长闭环）；live 选样上限 300KB→1MB（连续 --live 会把上轮投过的最小会话顶出上限，假失败）。共 52 项全过 ✅。
+- test-window：mock 增加 zcode 实时/历史行、状态卡、cliChannels；新增 6 断言（ZCODE tab、无形态徽标、独立页卡片 39 会话、tab 过滤、项目侧栏过滤）；受影响计数断言同步（tab 6 个、活跃档 6 行、全部 15、状态卡 10 张）。59 项全过 ✅。
+- test-mini / test-html / catalog-check / schema 自测 / replay-check / cli-control 自测 全过；check-fixtures 仍为既有 session-replay 基线失败（与本轮无关，待重录）。
+- 真实实例验证：/api/catalog perSource.zcode=18 项目/39 会话；实时区出现本会话（ZCode·running·运行命令）；四态面板 ZCode=打开·已连接/observe/39 会话。
+- 文档：README（五源/新命令/断言数）、40-adapters（TL;DR #13 + §3.12 全节）、21 计划 v3.1（§1 盘点 #12 + M-L 里程碑）。
+
+### 用户报障「显示没有会话」排查（2026-10-07 下午，已解决）
+
+- **现象**：接入完成后 App 界面无会话。**根因不是代码**：生产服务进程是 2026-10-06 23:32 启动的旧代码（`perSource` 无 zcode 证实），而 window.html 已是新版——旧服务没有 ZCode 观察器、其它源当时全为 done/idle，活跃列表自然为空。
+- **修复**：重启 AgentPet（外壳引导页按需重拉 `demo/framed.mjs`，从磁盘加载新代码）。重启后实测：五源齐、实时区出现当前 ZCode 会话（运行中）、侧栏 34 项目、三档 9/70/78、ZCODE 标签页正常；清理了检测残留的失败队列项。
+- **运维口径（重要）**：`demo/framed.mjs` 代码更新后**必须重启服务/应用**才生效（外壳只在端口无监听时拉起，页面自动刷新只覆盖 HTML，不覆盖 Node 进程内存）。
+
+### 修复：ZCode 活跃数虚高 / 完成会话滞留不进完成·隐藏档（用户报障，2026-10-07 下午 II）
+
+- **症状**：与此前 claude/codex/kimi 接入时同类——活跃会话数不对；回合结束转空闲后不进完成/隐藏档。
+- **根因（两个，叠加）**：ZCode 的 `message.time_created` 是**生成开始时间**，早于它自己的 part 行；`finish=stop` 等终态是**行内 UPDATE**（time_updated 晚于 part 落盘）；且 `step-finish` part 在消息终态**之后**才 INSERT。而适配器两层都按 `time_created` 排序：
+  1. 跟随器把 `turn.end(done)` 发在最终 step-start 之前 → 状态机被迟到的 step 事件拉回 `running`，回合结束仍滞留「运行中」；
+  2. 粗状态推导的最新显著行是 step-finish（→running）而非完成消息（→done）→ 目录也说 running → `effectiveState` 的 5 分钟滞留修正失效（修正源本身是错的）→ `running/thinking` 不设时间上限（UI classify 规则），永远算活跃。
+- **修复**（`adapters/zcode-adapter.mjs`）：
+  1. 两层统一改按 **time_updated（真实完成序）**：跟随器 `ORDER BY time_updated`，事件 ts 取 `time_updated ?? time_created`；目录窗口函数与粗状态遍历按 `time_updated DESC`。
+  2. **step-start/step-finish 不再映射为事件、粗状态不认领 step-finish**（对齐 Kimi 口径）：迟到的 step 边界再也无法把 done 拉回 running。
+- **验证**：真实数据状态分布从「全 idle」变为 1 running / 39 done / 5 idle（完成的会话正确显示完成档）；端到端——向探测会话真实投递一个回合，实时行 `thinking → done 已完成` 且 40s 无反弹；生产实例同样实时跟踪该回合落定 done；侧栏「进行中」=1（仅当前运行会话），历史三档复算 完成 108 / 活跃 1 / 隐藏 46 与事实一致。multi-source-check 新增 ML12（完成回合时序回归）并更新 ML7，49 项全过；全套件回归全绿。
+
+### 修复：ZCode 会话数量虚高且波动（用户报障，2026-10-07 下午 III）
+
+- **症状**：会话计数仍不对且数字会自己变。
+- **根因**：`selection_side_chat`（**划词问答**）被当普通会话计数并列出。它是 ZCode 桌面端的瞬态 UI 产物——在 App 里选中一段文字提问即生成一条（标题恒为「Selection side chat」），随使用增减（当日 1→2 条），ZCode 自身的会话列表不视为对话；快照审计确认无重复行、三档复算一致，剔除该项后计数即与真值对齐。
+- **修复**（`adapters/zcode-adapter.mjs` 三处 + 状态快照）：目录扫描排除（计入 `stats.sideChats`）、跟随器 SQL 排除（不产行）、四态面板 sessionCount 同口径；CLI 树显示「划词问答 N 不列出」。
+- **验证**：会话数 46→44（= DB interactive 真值）；multi-source-check 新增 ML13，50 项全过；全套件回归全绿；服务重启后 perSource.zcode=44、侧栏「进行中」=1。
+- 附注：调试期间用无头 CLI 建的探测/测试会话（如「只回复 ok」×3、「请记住数字42」）是真实数据，按只读红线不做删除；它们位于 /tmp 临时组（沉底标注），1 小时无活动后自动进隐藏档。
+
+### Token 用量计数（M-U：五源 per-Agent × per-Model 计数，usage-collect；分支 feat/token-usage-counting）
+
+**新增 `adapters/usage-collect.mjs`（独立慢通道，零依赖）**
+- 动因与架构：usage 需要**全文件**精确累计（本机 Claude 转录 1.1GB / 164 文件），不能进 5s 目录热路径 → 独立 **60s 慢缓存 + 文件级增量**（size+mtime 不变直接复用上次结果：首轮全量 ~2s，之后只重读有增长的文件）；流式 readline + 行 marker 预过滤（不含 `"usage"`/`"token_count"` 的行不 JSON.parse）+ 15s 软时限（partial=true 截掉最旧文件，下轮续扫）。
+- 各源口径（字段全部本机实测）：
+  - **Claude Code**：assistant 行 `message.usage` 按 **message.id 去重**（流式分块多行快照，后写覆盖=最终值）累加；input_tokens 不含 cache（Anthropic 语义）；sidechain 行与新版子代理链路 `<sid>/subagents/agent-*.jsonl`（本机 164 文件中 106 个在此结构下）都计入，子代理消耗**归入父会话**。
+  - **Codex**：会话扁平值 = 最后一条 `token_count.info.total_token_usage`（**权威累计值**）；`last_token_usage` 增量实测比权威总量**少 ~25%**（未触发事件的请求不产增量）→ **单模型会话整额归属该模型，多模型会话保留增量归属（近似）**；input 含 cache（OpenAI 语义）；子代理 rollout 计入。
+  - **Kimi Code**：`usage.record` 每请求一条直接累加（inputOther→input、inputCacheRead→cacheRead、inputCacheCreation→cacheWrite）；会话内全部 `agents/<id>/wire.jsonl`（含子代理流）计入。
+  - **ZCode**：一条 SQL 按 `(session_id, modelId)` 聚合 `message.data.tokens`（与 `part.step-finish` 路径**双路实测一致**）；input 含 cache.read；`subagent_child` 会话计入。
+  - **DSH**：多帧 zstd 会话日志逐帧解压（明文 jsonl 直读，与 framed.mjs decodeFrames 同款）；`assistant/message` 的 `data.usage`（inputTokens/outputTokens/cacheReadTokens/cacheWriteTokens/totalTokens，**每调用一组**，input 不含 cache）累加；model 归属按行序取 `request/header` 的 `header.config.model`；每会话目录只取最高代日志（复用 `pickLogFile`：v3+v4 并存不双计）；自带**恒等式对账**（∑分量 = ∑totalTokens，失配文件计入 stats.identityMismatched）。
+- 汇总：`usageOverview()` 跨源按模型**小写归并**（`GLM-5.3`[zcode] 与 `glm-5.3`[claude] 同模型合并，13→11 个）；CLI：`node adapters/usage-collect.mjs [--json|--refresh]`。
+
+**framed.mjs / UI 接线**
+- framed：`refreshUsage()`（启动即扫 + 60s 轮询，完成立刻 broadcast）；快照新增 `usage` 块（totals / byModel / bySource；首轮未完成时 `{pending:true}`）；实时行与历史行附带扁平 `usage`；新端点 **`/api/usage`**（overview + perSource 五源 byModel/bySession 明细；`?refresh=1` 异步触发重扫）。
+- window.html：顶部导航新增**「用量」页**（合计 chips + **各 Agent 消耗量汇总表** + 跨源合并模型表 + 分源模型表 + 口径脚注）；会话行 meta 追加 `tok in/out`。
+
+**验收（multi-source-check 57 项全过 ✅，新增 MU1–MU7 独立对账）**
+- MU1 Claude 去重证明（requests=去重 message.id ≤ 独立重数原始 usage 行；per-model 折叠一致）；MU2 Codex 独立反读最后一条 total_token_usage 与扫描器相等 + per-model ≈ 总量（≤2%）；MU3 Kimi usage.record 原始行数 = requests；MU4 ZCode message.tokens = part.step-finish 双路互证；MU5/MU6：framed 快照 usage 块（五源）+ 历史行附带 + `/api/usage` 五源明细；**MU7 DSH 恒等式零失配 + 独立解压重数 usage 行 = requests**（与采集器不同代码路径）。
+- 真实实例：/api/state totals in≈2.09B · out≈20.2M · cacheRead≈4.33B · 请求 20,962；DSH 37 会话 in 1.7M · out 2.0M · cacheRead 272M · 1,341 请求（deepseek-flash）。
+- 边界：DSH 的 title 生成小额消耗无 usage 事件、不计（成文）；input「是否含 cache」随源而异（Claude/Kimi/DSH 不含 / Codex·ZCode 含），统一折算与价格表（models.dev）留给后续独立层。
+
+### Token 用量二期（当日补）：时间窗 × 形态 × 缓存命中率
+
+- **三个新维度**：
+  - **时间窗**：按本地自然日分桶（dayKey=yyyymmdd——**绝对口径**，文件级增量缓存跨天仍正确），聚合层按 now 切 **当日 / 7 日内 / 30 日内 / 全部** 四窗；每窗都有 totals/bySource（含形态拆分）/byModel。
+  - **形态（CLI/桌面/IDE）**：Claude=entrypoint / Codex=session_meta.originator / Kimi=clientMetadata(composer)——与目录扫描同源判定，**文件级归属**；全量口径用 byVariantFlat（权威值恒等 Σ形态=总量），Codex 时间窗内的形态为事件增量近似（成文）。
+  - **缓存命中率**：hitRate = cacheRead/(fresh+cacheRead)，fresh 按「input 是否含 cache」的源语义折算（DSH/Claude/Kimi 不含 → fresh=input；Codex/ZCode 含 → fresh=input−cacheRead）；跨源合并行也通过 freshInput 累计算出统一命中率。
+- **UI**：用量页新增**时间窗切换器**（客户端即时切换，零往返）；「各 Agent 消耗量」表新增**命中率列**与**形态拆分行**（CLAUDE·桌面 / CLAUDE·CLI / CLAUDE·IDE / CODEX·桌面 / KIMI·桌面——与软件状态页标签同源）；模型表（合并+分源）均带命中率列。
+- **验收（multi-source-check 59 项全过）**：**MU8** 五源 Σ形态=总量（文件级权威归属恒等）+ Claude ≥2 种 / Codex·Kimi ≥1 种形态；**MU9** Σ日桶=总量（requests 五源精确 / input 非Codex精确、Codex≥70%）+ today≤d7≤d30≤全部单调；MU5 升级（ranges+形态）。test-window 69 项（切换器、形态行、命中率、当日切换）。
+- **真实实例**：合计命中率 **96.4%**（当日 96.5 / 7日 97.4 / 30日 96.8）；Claude 三形态 CLI 0.8M（90.5%）/ 桌面 60.4M（97.1%）/ IDE 2.6M（90.2%）；当日 Claude 桌面 11.0M。
+
+### Token 用量完整测试轮（当日补二；用户指定「对这个功能进行完整的测试」）
+
+- **新增 `scripts/usage-check.mjs`（合成数据单元测试，15 项 ✅）**：可控 fixture 精确验证真实数据测不到的边界——Claude message.id 去重/后写覆盖/无 id 行/sidechain 计入/子代理文件归父会话/超大行跳过、Codex 权威累计 vs 增量日桶、Kimi 子代理 wire 并入+别名取尾段、DSH **多帧 zstd 自造双帧**+v3/v4 防双计+恒等式、命中率两种语义折算、ranges 当日/7日/30日归属、**文件级增量缓存三态**（不变→全命中且逐字节一致；文件增长→仅该文件重读且增量精确；refresh→强制重读）。测试自身幂等、临时目录自清理。
+- **全套仓库测试**：multi-source-check 59 ✅（MU1–MU9 真实数据独立对账）· test-window 69 ✅ · test-mini 12 ✅ · test-html 8 ✅ · catalog-check 17 ✅ · replay-check --selftest 15 ✅；check-fixtures 失败确认为**既有** session-replay fixture 基线问题（§2.4 乱序窗口，早于本功能、CHANGELOG 已记录待重录，与 usage 无关）。
+- **缓存与实时行为实测**：双轮 scanAllUsage 3529ms → 77ms（**45.8x**，四源 247 文件全部缓存命中且结果逐字节一致）；zcode 双轮差异归因为**活数据**（本会话自身在写库，静默窗口 Δ0、当日单调增长——实时性旁证）；framed 启动 pending(0.6s)→ready(5.6s) 转换、`/api/usage?refresh=1` 异步重扫 0.3s 完成（缓存生效）、`dayApproximate` 诚实标注在列；SSE 单帧 264KB（usage 块 24.7KB/9.4%，大头为本就存在的 155 条历史行全量字段）。
+- **浏览器实测（IAB）**：真实页面加载 → 用量页渲染完整（四时间窗按钮、合计 chips 含命中率 96.4%、Agent 表 9 行形态拆分 CLAUDE·CLI/桌面/IDE + CODEX·CLI/桌面 + KIMI·桌面 + 未识别形态单列、合并模型表带命中率列）；切「当日」全表联动（2.21B→279.4M、CLAUDE·桌面→11.0M、DSH→0 正确）；截图存档。注：IAB 面板未前台化时 Playwright 点击可达性受限，经页内 click 处理器触发（与按钮点击等价）完成验证。
+
+### ZCode 用量准确度三方对账（用户基准：官方 UI「今日消耗 5.4 亿」；当日晚，已确认）
+
+- **发现官方账本表**：`~/.zcode/cli/db/db.sqlite` 里有 ZCode 自己的用量账本 **`model_usage`**（每请求一行：input/output/reasoning/cache 三件套 + provider/computed_total_tokens；另有 turn_usage/tool_usage）——即官方 UI 数字的来源，此前未被发现与使用。
+- **三方对账结果**：
+  1. **采集器 vs message 表（采集器的声明数据源）**：今日四字段（in/out/cacheRead/cacheWrite）**差值全部为 0**——采集管道 100% 精确。
+  2. **message 表 vs 官方账本 model_usage（逐行）**：有 assistant_message_id 的行**逐字段完全相等**（in=164036/cr=163456/total=164073 级别的逐行对齐）；表间 ~1-2% 差异来自边界（账本含 title 生成/错误重试请求；message 表个别流式中断行 tokens 归零——这些行被采集器正确跳过）。
+  3. **vs 用户基准 5.4 亿**：官方 UI「今日消耗」口径 = **全口径 Σ(input+cacheRead+cacheWrite+output)**，此刻实测 5.358 亿（535.8M），与 5.4 亿差 **0.7%**——由会话进行中的实时增长 + 读数时刻不同解释（官方账本同口径 5.276 亿，两个表都 < 用户读数，因为数字一直在涨）。
+- **修正一个语义误判（本次对账的真正价值）**：逐行模式证明 **ZCode message.tokens 的 input 是 fresh 口径（不含 cacheRead）**……**该结论当晚被推翻**，见下节再修正。
+
+### ZCode input 语义再修正（用户质疑「不可能 40 几的命中率」——用户正确，96.4% 为准）
+
+- **裁决实验（两 个，均指向 input 含 cacheRead）**：
+  1. **官方账本 raw_usage_json**（provider 原始返回，此前未查）：`{"inputTokens":139716,"outputTokens":454,"totalTokens":140170,"cacheReadTokens":138688}`——`totalTokens = inputTokens + outputTokens`，即 **inputTokens 是全量 prompt（OpenAI 式含 cache）**，fresh 仅 1028；
+  2. **同会话连续请求递推**：若 input 含 cache，则 `cr[t+1] ≈ in[t]`（上次输入即全上下文，下次全量命中）——实测累计误差 **1.7 万**；若 input 为 fresh，则 `cr[t+1] ≈ in[t]+cr[t]`，误差 **35 万（20 倍）**。样本：in=25041 → 下条 cr=25024（Δ17），全序列吻合。
+  3. 旁证：全日 Σ(in−cr)/请求 ≈ 5k/次（每请求新增内容的合理量级）；fresh 说会推出 155k/次新内容——上下文无法持续，不可能。
+- **错误原因复盘**：上一轮把「in=164036/cr=163456 → fresh=580」的解读方向弄反了——该模式恰恰证明 input 含 cache；而引用的「账本 input_tokens 与 message 逐行相等」根本不能区分两种语义（相等与含不含无关）。**教训入库：语义判定必须用递推/原始报文这类结构性证据，不能用字段名类比。**
+- **回滚**：usage-collect `inputIncludesCache: zcode → true`（回到最初实现）、window.html 两处脚注、docs/40 §3.13 表格、test-window mock。**ZCode 命中率恢复 96.4%**（fresh = in − cr ≈ 9.3M，hit = cr/(fresh+cr)）。
+- **对 5.4 亿基准的影响**：不变——`in+cacheRead+cacheWrite+output = 5.431 亿` 是对官方 UI 数字的精确复现（该公式即 ZCode UI 的「今日消耗」定义，input 含 cache 时它把 cache 计了两遍，属官方口径自身的定义，照实对齐）。
+
 ## 2026-10-05
 
 ### 契约 v1.2（Lead 冻结，docs/00-interface-contract.md）

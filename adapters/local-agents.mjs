@@ -24,6 +24,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { KIMI_LEVELDB, scanKimiCatalog, scanKimiLegacyCount } from './kimi-code-adapter.mjs';
+import { scanZcodeCatalog } from './zcode-adapter.mjs';
 
 const execFileP = promisify(execFile);
 const HOME = os.homedir();
@@ -99,6 +100,16 @@ export const LOCAL_AGENTS = Object.freeze([
     processRe: /Kimi Code\.app\//,
     activity: [{ dir: KIMI_LEVELDB, depth: 1, fileRe: /\.(log|ldb)$/ }],
     note: '桌面版：Kimi Code.app（Electron）',
+  },
+  {
+    id: 'zcode', name: 'ZCode', source: 'zcode',
+    installPaths: ['/Applications/ZCode.app', path.join(HOME, '.zcode')],
+    appBundle: '/Applications/ZCode.app',
+    // 进程特征：App 包路径 / 裸 CLI / 桌面 App 的 zcode-cli、zcode-host-local-1 辅助进程
+    //（大写 ZCode 只认 .app 路径段，避免误伤 Application Support/ZCode 之外的普通词）
+    processRe: /ZCode\.app\/|(^|[\/\s])zcode(\.cjs|-cli|-host-local-1)?(\s|$)/,
+    activity: [{ dir: path.join(HOME, '.zcode', 'cli', 'db'), depth: 1, fileRe: /^db\.sqlite(-wal|-shm)?$/ }],
+    note: 'GLM 系桌面 Agent：观察 = sqlite 只读（WAL 并发读）',
   },
   {
     id: 'agentos', name: 'AgentOS M1', source: 'agentos',
@@ -186,6 +197,16 @@ function kimiSessionCount() {
   return kimiCountCache;
 }
 
+/** ZCode 会话计数（30s 缓存，sqlite 只读一条 COUNT）。 */
+let zcodeCountCache = { at: 0, count: null };
+function zcodeSessionCount() {
+  if (zcodeCountCache.count === null || Date.now() - zcodeCountCache.at > 30_000) {
+    try { zcodeCountCache = { at: Date.now(), count: scanZcodeCatalog().sessionCount }; }
+    catch { zcodeCountCache = { at: Date.now(), count: null }; }
+  }
+  return zcodeCountCache;
+}
+
 // ---------------------------------------------------------------------------
 // 四态计算
 // ---------------------------------------------------------------------------
@@ -239,7 +260,7 @@ export async function scanLocalAgents(ctx = {}) {
       installed, running: procs.length > 0, connected, connectionKind,
       processes: procs.length, pids: procs,
       lastActivityMs, lastActivityWithinWindow: !!(lastActivityMs && now - lastActivityMs < windowMs),
-      sessionCount: a.id === 'kimi-desktop' ? kimiSessionCount().count : undefined,
+      sessionCount: a.id === 'kimi-desktop' ? kimiSessionCount().count : a.id === 'zcode' ? zcodeSessionCount().count : undefined,
       sessionCountApproximate: a.id === 'kimi-desktop' ? kimiSessionCount().approximate || undefined : undefined,
       version: (await macAppVersion(a.appBundle))
         ?? (a.id === 'claude-code-cli' ? pkgVersion(['/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json', path.join(HOME, '.local/lib/node_modules/@anthropic-ai/claude-code/package.json')]) : null)

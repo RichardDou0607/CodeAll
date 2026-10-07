@@ -20,8 +20,15 @@ import { fileURLToPath } from 'node:url';
 import { scanClaudeCatalog, mapClaudeLine } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, mapCodexLine } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, mapKimiLine, scanKimiStatus, scanKimiLegacyCount } from '../adapters/kimi-code-adapter.mjs';
+import { scanZcodeCatalog, mapZcodeRow, openZcodeDb, coarseStateFromZcodeRows } from '../adapters/zcode-adapter.mjs';
+import { scanClaudeUsage, scanCodexUsage, scanKimiUsage, scanZcodeUsage, scanDshUsage, usageOverview } from '../adapters/usage-collect.mjs';
+import { SESSIONS_ROOT as DSH_ROOT, pickLogFile } from '../adapters/session-catalog.mjs';
+import zlib from 'node:zlib';
+import { SESSIONS_ROOT as CODEX_ROOT, threadIdOf } from '../adapters/codex-adapter.mjs';
+import { SESSIONS_ROOT as KIMI_ROOT } from '../adapters/kimi-code-adapter.mjs';
+import { PROJECTS_ROOT } from '../adapters/claude-code-adapter.mjs';
 import { scanCatalog } from '../adapters/session-catalog.mjs';
-import { CLI_TARGETS, availableCliChannels } from '../adapters/cli-control.mjs';
+import { CLI_TARGETS, availableCliChannels, resolveCliBin, cliEnvFor } from '../adapters/cli-control.mjs';
 
 const AS_JSON = process.argv.includes('--json');
 const LIVE = process.argv.includes('--live');   // --live：对每后端做一次真实无头投递（花费极小的一次回合），验证控制→观察闭环
@@ -146,10 +153,251 @@ let cx;
   }
 }
 
-// ================================================================ M-D/E/H 控制层（CLI 通道）
+// ================================================================ M-L ZCode（sqlite 只读观察）
+{
+  const t0 = process.hrtime.bigint();
+  const zc = scanZcodeCatalog();
+  const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  check('ML1', 'ZCode 目录可扫描（sqlite 只读，≥ 5 会话 / ≥ 2 项目）', zc.stats.sessions >= 5 && zc.stats.projects >= 2, { sessions: zc.stats.sessions, projects: zc.stats.projects, subagent: zc.stats.subagentSessions });
+  check('ML2', '子代理识别（task_type=subagent_child）且不进项目列表',
+    zc.stats.subagentSessions >= 1 && !zc.projects.some((p) => p.sessions.some((s) => s.kind === 'subagent')),
+    { main: zc.stats.sessions, subagent: zc.stats.subagentSessions });
+  check('ML13', '划词问答不进会话列表（selection_side_chat = 瞬态 UI 产物，仅计入 stats.sideChats；计数与 ZCode 自身会话列表对齐）',
+    !zc.sessions.some((s) => /selection side/i.test(String(s.title || '')) || s.kind === 'sidechat') && (zc.stats.sideChats ?? 0) >= 0,
+    { sideChats: zc.stats.sideChats ?? null, sessions: zc.stats.sessions });
+  check('ML3', '元信息完整（title / cwd / agentVersion / 有限 updatedAt）',
+    zc.sessions.every((s) => s.title && s.cwd) && zc.sessions.filter((s) => Number.isFinite(s.updatedAt)).length === zc.stats.sessions && zc.sessions.filter((s) => s.agentVersion).length >= zc.stats.sessions * 0.8,
+    { withVersion: zc.sessions.filter((s) => s.agentVersion).length });
+  const STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'unknown']);
+  check('ML4', '粗状态在已知集合内（含 5min 滞留修正）', zc.sessions.every((s) => STATE_SET.has(s.state)), { states: [...new Set(zc.sessions.map((s) => s.state))] });
+  check('ML5', '扫描性能 < 300ms', tookMs < 300, { tookMs: Number(tookMs.toFixed(1)) });
+  const ctx = { sessionId: 'sess_z1', seq: 0 };
+  const e1 = mapZcodeRow({ tbl: 'message', time_created: 1, data: { role: 'user', semantics: { origin: 'real_user' }, anchor: { turnId: 'turn-1' } } }, ctx);
+  const e1s = mapZcodeRow({ tbl: 'message', time_created: 1, data: { role: 'user', synthetic: true, semantics: { origin: 'agent_runtime', kind: 'todo_reminder' } } }, ctx);
+  const e2 = mapZcodeRow({ tbl: 'part', time_created: 2, data: { type: 'tool', callID: 'c1', tool: 'Bash', state: { status: 'running' } } }, ctx);
+  const e3 = mapZcodeRow({ tbl: 'part', time_created: 3, data: { type: 'tool', callID: 'c1', tool: 'Bash', state: { status: 'completed' } } }, ctx);
+  const e4 = mapZcodeRow({ tbl: 'message', time_created: 4, data: { role: 'assistant', finish: 'stop', anchor: { turnId: 'turn-1' } } }, ctx);
+  const e5 = mapZcodeRow({ tbl: 'message', time_created: 5, data: { role: 'assistant', finish: 'interrupted', anchor: { turnId: 'turn-2' } } }, ctx);
+  const e6 = mapZcodeRow({ tbl: 'part', time_created: 6, data: { type: 'text', text: '完成'.repeat(200) } }, ctx);
+  const e7 = mapZcodeRow({ tbl: 'part', time_created: 7, data: { type: 'step-start' } }, ctx);
+  const e7f = mapZcodeRow({ tbl: 'part', time_created: 8, data: { type: 'step-finish', reason: 'stop' } }, ctx);
+  const e8 = mapZcodeRow({ tbl: 'part', time_created: 9, data: { type: 'reasoning', text: '内部推理不外传' } }, ctx);
+  check('ML6', '行映射：real_user→turn.start（合成注入忽略）；tool running/completed→call/result；finish stop→turn.end(ok)',
+    e1[0]?.type === 'turn.start' && e1s.length === 0 && e2[0]?.type === 'tool.call' && e2[0]?.data?.category === 'exec' && e3[0]?.type === 'tool.result' && e3[0]?.data?.status === 'ok' && e4[0]?.type === 'turn.end' && e4[0]?.data?.status === 'ok',
+    { e1: e1.map(e => e.type), e2: e2.map(e => e.type), e3: e3.map(e => e.type), e4: e4.map(e => e.type) });
+  check('ML7', '行映射：interrupted→aborted；text→message.assistant(280 截断)；step 边界不映射（迟到 step.end 会把 done 拉回 running）；reasoning 不外传',
+    e5[0]?.data?.status === 'aborted' && e6[0]?.type === 'message.assistant' && e6[0]?.data?.text.length <= 280 && e7.length === 0 && e7f.length === 0 && e8.length === 0,
+    { textLen: e6[0]?.data?.text.length });
+  check('ML8', '事件信封含 source/sessionId/seq（供状态机与去重）',
+    e1[0]?.source === 'zcode' && e1[0]?.sessionId === 'sess_z1' && Number.isInteger(e1[0]?.seq), {});
+  {
+    const now = 1_000_000_000_000;
+    const coarse = (row) => coarseStateFromZcodeRows([row], { now });
+    const running = coarse({ tbl: 'part', time_created: now - 1000, data: { type: 'tool', state: { status: 'running' } } });
+    const staleThinking = coarse({ tbl: 'message', time_created: now - 400_000, data: { role: 'user', semantics: { origin: 'real_user' } } });
+    check('ML9', '粗状态推导：tool running → running；旧 thinking 超 5min → idle（滞留修正）',
+      running.state === 'running' && staleThinking.state === 'idle',
+      { running: running.state, stale: staleThinking.state });
+    // 完成回合回归（2026-10-07 bug）：message.time_created=生成开始（早于 part），finish=stop 为行内
+    // UPDATE（time_updated 晚于 part），step-finish 在消息终态之后 INSERT——按 time_created 序会误判
+    // running（活跃数虚高、滞留不进完成/隐藏档）；按 time_updated 完成序 + step 边界不认领 → done。
+    const finishedTurn = coarseStateFromZcodeRows([
+      { tbl: 'part', time_created: now - 9000, time_updated: now - 9000, data: { type: 'text', text: '答案' } },
+      { tbl: 'message', time_created: now - 9500, time_updated: now - 8500, data: { role: 'assistant', finish: 'stop', anchor: { turnId: 't1' } } },
+      { tbl: 'part', time_created: now - 8400, time_updated: now - 8400, data: { type: 'step-finish', reason: 'stop' } },
+    ].sort((a, b) => (b.time_updated ?? b.time_created) - (a.time_updated ?? a.time_created)), { now });
+    check('ML12', '完成回合粗状态 = done（time_updated 完成序；step-finish 迟到不认领，不再滞留 running）',
+      finishedTurn.state === 'done',
+      { got: finishedTurn.state, src: finishedTurn.stateSource });
+  }
+  // 只读红线：follow 的 sqlite 连接必须打不开写库（readOnly 打开 + 无写语句）
+  {
+    let writable = false;
+    try {
+      const db = openZcodeDb();
+      if (db) { try { db.prepare("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pet_probe'").get(); db.exec('CREATE TABLE pet_probe(x)'); writable = true; } catch { /* 只读拒绝 = 通过 */ } finally { try { db.close(); } catch {} } }
+    } catch { /* 打不开 = 未安装 */ }
+    check('ML10', '观察连接只读红线（建表被拒绝，零写入）', !writable, {});
+  }
+}
+
+// ================================================================ M-U Token 用量（usage-collect 五源，独立对账）
+{
+  const [dsh, cc, cx, km, zc] = await Promise.all([scanDshUsage(), scanClaudeUsage(), scanCodexUsage(), scanKimiUsage(), Promise.resolve(scanZcodeUsage())]);
+
+  // MU1 Claude：① 折叠一致（per-model 之和 = 总量）；② 去重证明——对最大会话独立重数原始 usage 行数，
+  //             扫描器的 requests（去重后 message.id 数）必须 ≤ 原始行数（无 JSON 解析的纯计数）
+  {
+    const foldOk = cc.totals.requests === [...cc.byModel.values()].reduce((a, u) => a + u.requests, 0)
+      && cc.totals.input === [...cc.byModel.values()].reduce((a, u) => a + u.input, 0);
+    const biggest = [...cc.bySession.entries()].sort((a, b) => b[1].input - a[1].input)[0];
+    let rawLines = null, sidDir = null;
+    if (biggest) {
+      // 会话主文件 + subagents/ 子代理文件都算这个会话的原始行（跨全部项目目录累加——会话文件与
+      // 检查循环的遍历顺序无关，不能只留最后一个目录的计数）
+      rawLines = 0;
+      for (const projDir of fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true })) {
+        if (!projDir.isDirectory()) continue;
+        const p = path.join(PROJECTS_ROOT, projDir.name);
+        const main = path.join(p, biggest[0] + '.jsonl');
+        const sub = path.join(p, biggest[0], 'subagents');
+        try {
+          if (fs.existsSync(main)) { rawLines += fs.readFileSync(main, 'utf8').split('\n').filter((l) => l.includes('"usage"') && l.includes('"assistant"')).length; sidDir = p; }
+          if (fs.existsSync(sub)) for (const f of fs.readdirSync(sub)) if (f.endsWith('.jsonl')) { rawLines += fs.readFileSync(path.join(sub, f), 'utf8').split('\n').filter((l) => l.includes('"usage"') && l.includes('"assistant"')).length; sidDir = p; }
+        } catch { /* 读取失败：跳过该路径 */ }
+      }
+    }
+    check('MU1', 'Claude 用量：去重口径（requests=去重 message.id ≤ 原始 usage 行）且 per-model 折叠一致',
+      cc.totals.input > 0 && cc.byModel.size >= 1 && foldOk && rawLines !== null && biggest[1].requests <= rawLines,
+      { input: cc.totals.input, models: cc.byModel.size, requests: cc.totals.requests, biggestSid: String(biggest?.[0]).slice(0, 8), dedupRequests: biggest?.[1].requests, rawUsageLines: rawLines, dirFound: !!sidDir });
+  }
+
+  // MU2 Codex：独立反读最新 rollout 的最后一条 token_count.total_token_usage（权威累计值），
+  //            与扫描器 bySession 比对（不同代码路径读同一字段，验证解析与 threadId 映射）
+  {
+    const rollouts = [];
+    (function walk(d) { let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of ents) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.name.startsWith('rollout-') && e.name.endsWith('.jsonl')) rollouts.push(p); } })(CODEX_ROOT);
+    rollouts.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+    const f = rollouts[0];
+    let expect = null;
+    try {
+      const lines = fs.readFileSync(f, 'utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].includes('"token_count"')) continue;
+        const j = JSON.parse(lines[i]);
+        if (j?.payload?.type === 'token_count') { expect = j.payload.info?.total_token_usage ?? null; break; }
+      }
+    } catch { /* 读取失败 */ }
+    const got = cx.bySession.get(threadIdOf(f));
+    const byModelSum = [...cx.byModel.values()].reduce((a, u) => a + u.input, 0);
+    check('MU2', 'Codex 用量：会话扁平值 = 最后一条 total_token_usage（独立反读对账）；per-model 归属总量 ≈ 总量',
+      !!expect && !!got && got.input === expect.input_tokens && Math.abs(byModelSum - cx.totals.input) <= cx.totals.input * 0.02 + 1,
+      { file: path.basename(f).slice(0, 30), expect: expect?.input_tokens, got: got?.input, byModelSum, totals: cx.totals.input });
+  }
+
+  // MU3 Kimi：最新 wire 的 usage.record 原始行数 = 扫描器该会话 requests（每请求一条，直接累加）
+  {
+    let wire = null, mtime = 0;
+    for (const wd of fs.readdirSync(KIMI_ROOT, { withFileTypes: true })) {
+      if (!wd.isDirectory() || wd.name.startsWith('.')) continue;
+      const wdPath = path.join(KIMI_ROOT, wd.name);
+      let ses; try { ses = fs.readdirSync(wdPath, { withFileTypes: true }); } catch { continue; }
+      for (const s of ses) {
+        if (!s.isDirectory() || !s.name.startsWith('session_')) continue;
+        const agentsDir = path.join(wdPath, s.name, 'agents');
+        let ags; try { ags = fs.readdirSync(agentsDir, { withFileTypes: true }); } catch { continue; }
+        for (const a of ags) {
+          const w = path.join(agentsDir, a.name, 'wire.jsonl');
+          try { const m = fs.statSync(w).mtimeMs; if (m > mtime) { mtime = m; wire = { file: w, sessionDir: path.join(wdPath, s.name) }; } } catch { /* 无 */ }
+        }
+      }
+    }
+    let sid = null, rawCount = null;
+    if (wire) {
+      try { sid = JSON.parse(fs.readFileSync(path.join(wire.sessionDir, 'state.json'), 'utf8')).id ?? null; } catch { /* 无 state */ }
+      rawCount = fs.readFileSync(wire.file, 'utf8').split('\n').filter((l) => l.includes('"usage.record"')).length;
+    }
+    const got = sid ? km.bySession.get(sid) : null;
+    check('MU3', 'Kimi 用量：requests = usage.record 原始行数（独立计数对账）',
+      !!got && rawCount !== null && got.requests === rawCount && km.totals.requests > 0,
+      { sid: String(sid).slice(0, 12), got: got?.requests, rawCount });
+  }
+
+  // MU4 ZCode：message.tokens 路径（扫描器 SQL）vs part.step-finish 路径（独立 SQL）——双存储路径互证
+  {
+    const biggest = [...zc.bySession.entries()].sort((a, b) => b[1].input - a[1].input)[0];
+    let sfSum = null;
+    if (biggest) {
+      const db = openZcodeDb();
+      try {
+        sfSum = db.prepare(`SELECT COALESCE(SUM(CAST(json_extract(data,'$.tokens.input') AS INTEGER)),0) v
+                            FROM part WHERE session_id = ? AND json_extract(data,'$.type') = 'step-finish'`).get(biggest[0]).v;
+      } finally { try { db.close(); } catch {} }
+    }
+    check('MU4', 'ZCode 用量：message.tokens（采集路径）= part.step-finish（独立路径）双路一致',
+      !!biggest && sfSum !== null && biggest[1].input === sfSum,
+      { sid: String(biggest?.[0]).slice(0, 18), msgPath: biggest?.[1].input, stepFinishPath: sfSum });
+  }
+
+  // MU7 DSH：① 解析恒等式（∑(input+output+cacheRead+cacheWrite) = ∑totalTokens，全文件零失配）；
+  //          ② 独立解压重数最大会话的 usage 行数 = 扫描器该会话 requests（与采集器不同代码路径）
+  {
+    const identityOk = (dsh.stats?.identityMismatched ?? 1) === 0;
+    const biggest = [...dsh.bySession.entries()].sort((a, b) => b[1].input - a[1].input)[0];
+    let rawUsageLines = null, usedFile = null;
+    if (biggest) {
+      // 独立定位该会话目录（sid = 目录名）并取最高代日志
+      for (const wd of fs.readdirSync(DSH_ROOT, { withFileTypes: true })) {
+        if (!wd.isDirectory()) continue;
+        const cand = path.join(DSH_ROOT, wd.name, biggest[0]);
+        try {
+          const pick = pickLogFile(cand);
+          if (!pick) continue;
+          const buf = fs.readFileSync(pick.file);
+          // 独立解压（多帧 zstd）：与采集器不同实现路径
+          const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+          let text = '';
+          if (buf.subarray(0, 4).equals(MAGIC)) {
+            const offs = [];
+            let i2 = buf.indexOf(MAGIC, 0);
+            while (i2 >= 0) { offs.push(i2); i2 = buf.indexOf(MAGIC, i2 + 1); }
+            for (let k = 0; k < offs.length; k++) {
+              const end = k + 1 < offs.length ? offs[k + 1] : buf.length;
+              try { text += zlib.zstdDecompressSync(buf.subarray(offs[k], end)).toString('utf8'); } catch { /* 坏帧 */ }
+            }
+          } else text = buf.toString('utf8');
+          rawUsageLines = text.split('\n').filter((l) => l.includes('"usage"') && l.includes('"assistant/message"')).length;
+          usedFile = pick.file;
+          break;
+        } catch { /* 无该会话目录 */ }
+      }
+    }
+    check('MU7', 'DSH 用量：恒等式零失配（∑分量=∑totalTokens）+ 独立解压重数 usage 行 = requests',
+      dsh.totals.requests > 0 && identityOk && !!biggest && rawUsageLines !== null && biggest[1].requests === rawUsageLines,
+      { requests: dsh.totals.requests, identityMismatched: dsh.stats?.identityMismatched ?? null, biggestSid: String(biggest?.[0]).slice(0, 18), got: biggest?.[1].requests, rawUsageLines, file: usedFile ? path.basename(usedFile) : null });
+  }
+
+  // MU8 形态维度（CLI/桌面/IDE）：cc ≥2 种、cx/km ≥1 种；Σ形态 = 源总量（byVariantFlat 文件级权威归属恒等式）
+  {
+    const vSumOf = (sc) => {
+      const u = { input: 0, output: 0, cacheRead: 0, requests: 0 };
+      for (const d of (sc.byVariantFlat ?? new Map()).values()) {
+        u.input += d.input; u.output += d.output; u.cacheRead += d.cacheRead; u.requests += d.requests;
+      }
+      return u;
+    };
+    const keys = (sc) => [...(sc.byVariantFlat ?? sc.byVariantDay ?? new Map()).keys()].filter((v) => v);
+    const sumOk = (sc) => { const s = vSumOf(sc); return s.requests === sc.totals.requests && s.input === sc.totals.input; };
+    check('MU8', '形态维度：Claude ≥2 种 / Codex·Kimi ≥1 种形态；五源 Σ形态 = 总量（文件级权威归属恒等）',
+      keys(cc).length >= 2 && keys(cx).length >= 1 && keys(km).length >= 1 && sumOk(dsh) && sumOk(cc) && sumOk(cx) && sumOk(km) && sumOk(zc),
+      { cc: keys(cc), cx: keys(cx), km: keys(km) });
+  }
+
+  // MU9 时间维度（自然日桶）：五源 Σ日桶.requests = 总量；非 Codex 源 input 精确相等、Codex 事件增量近似 ≥70%；
+  // ranges 单调：today ≤ d7 ≤ d30 ≤ 全部（requests 口径）
+  {
+    const dayReq = (sc) => [...(sc.byDay ?? new Map()).values()].reduce((a, u) => a + u.requests, 0);
+    const dayIn = (sc) => [...(sc.byDay ?? new Map()).values()].reduce((a, u) => a + u.input, 0);
+    const exactReq = [dsh, cc, cx, km, zc].every((sc) => dayReq(sc) === sc.totals.requests);
+    const exactIn = [dsh, cc, km, zc].every((sc) => dayIn(sc) === sc.totals.input);
+    const cxRatio = cx.totals.input > 0 ? dayIn(cx) / cx.totals.input : 0;
+    const ov = usageOverview({ dsh, cc, cx, km, zc });
+    const r = (k) => ov.ranges[k].totals.requests;
+    const mono = r('today') <= r('d7') && r('d7') <= r('d30') && r('d30') <= ov.totals.requests;
+    const todayNonZero = r('today') > 0;      // 扫描当日有真实使用
+    check('MU9', '时间维度：Σ日桶=总量（requests 全源精确 / input 非Codex精确·Codex≥70%）；today≤d7≤d30≤全部',
+      exactReq && exactIn && cxRatio >= 0.7 && mono && todayNonZero,
+      { dayReq: { dsh: dayReq(dsh), cc: dayReq(cc), cx: dayReq(cx), km: dayReq(km), zc: dayReq(zc) }, cxRatio: Number(cxRatio.toFixed(3)), ranges: { today: r('today'), d7: r('d7'), d30: r('d30'), all: ov.totals.requests } });
+  }
+
+  // MU5/MU6 在 M-C 实例上验（见下）：framed 快照 usage 块 + /api/usage 明细端点
+  void cc; void cx; void km; void zc;
+}
+
+// ================================================================ M-D/E/H/L 控制层（CLI 通道）
 {
   const channels = availableCliChannels();
-  check('MD1', '三个 CLI 控制通道可用（claude / codex / kimi 在 PATH）', ['claude-code', 'codex', 'kimi-code'].every((s) => channels.some((c) => c.source === s)), { channels: channels.map((c) => c.source) });
+  check('MD1', '四个 CLI 控制通道可用（claude / codex / kimi / zcode）', ['claude-code', 'codex', 'kimi-code', 'zcode'].every((s) => channels.some((c) => c.source === s)), { channels: channels.map((c) => c.source) });
   check('MD2', '控制语法表完整（投递/打开/新建 args 均为字符串数组）',
     Object.keys(CLI_TARGETS).every((s) => {
       const t = CLI_TARGETS[s];
@@ -178,12 +426,12 @@ let cx;
     const srcs = new Set();
     for (const h of snap.catalog.history || []) srcs.add(h.source);
     const multiProjects = (snap.catalog.projects || []).filter((p) => (p.sources || []).length >= 2);
-    check('MC1', '快照历史行含四源（dsh + claude-code + kimi-code）', srcs.has('dsh') && srcs.has('claude-code') && srcs.has('kimi-code'), { sources: [...srcs] });
+    check('MC1', '快照历史行含五源（dsh + claude-code + kimi-code + zcode）', srcs.has('dsh') && srcs.has('claude-code') && srcs.has('kimi-code') && srcs.has('zcode'), { sources: [...srcs] });
     check('MC2', '同 cwd 多源项目归并（≥1 个项目 sources ≥ 2）', multiProjects.length >= 1, { multiProjects: multiProjects.map((p) => p.name + '[' + p.sources.join('+') + ']').slice(0, 4) });
     check('MC3', '快照目录 source = multi 标注', snap.catalog.source.startsWith('multi:'), { source: snap.catalog.source });
-    // 控制层能力位：CLI 通道就绪（真实投递验证在 --live 的 MD3/ME3/MH3）
-    check('MC4', 'CLI 投递通道能力位（canInput/canCreate/canOpen + cliChannels 三家）',
-      snap.capabilities?.canInput === true && snap.capabilities?.canCreate === true && ['claude-code', 'codex', 'kimi-code'].every((s) => (snap.capabilities?.cliChannels || []).some((c) => c.source === s)),
+    // 控制层能力位：CLI 通道就绪（真实投递验证在 --live 的 MD3/ME3/MH3/ML11）
+    check('MC4', 'CLI 投递通道能力位（canInput/canCreate/canOpen + cliChannels 四家）',
+      snap.capabilities?.canInput === true && snap.capabilities?.canCreate === true && ['claude-code', 'codex', 'kimi-code', 'zcode'].every((s) => (snap.capabilities?.cliChannels || []).some((c) => c.source === s)),
       { cliChannels: (snap.capabilities?.cliChannels || []).map((c) => c.source) });
     // 会话成员口径回归（2026-10-06 修复：workspace.json 只登记 GUI 打开过的子集，不能当成员真相源）
     {
@@ -228,6 +476,30 @@ let cx;
           check('MC11', 'Codex 任务目录折叠（本机任务目录会话 < 2，条件不满足，跳过深度断言）', true, { taskSessions: taskSess.length });
         }
       }
+      // ---- MU5/MU6：Token 用量端到端（framed 快照 usage 块 + /api/usage 明细端点）----
+      {
+        let snapU = null, snapFresh = null;
+        for (let i = 0; i < 20 && !snapU; i++) {           // 首轮全量 ~2s（1.1GB 转录），轮询至多 40s
+          try {
+            const r = await fetch('http://127.0.0.1:' + PORT + '/api/state');
+            const j = await r.json();
+            if (j.usage && !j.usage.pending) { snapU = j.usage; snapFresh = j; } else await new Promise((r2) => setTimeout(r2, 2000));
+          } catch { await new Promise((r2) => setTimeout(r2, 1000)); }
+        }
+        check('MU5', 'framed 快照含 usage 块（五源聚合 + ranges 时间窗 + 形态拆分 + 历史行附带 usage）',
+          !!snapU && (snapU.totals?.input ?? 0) > 0 && (snapU.byModel || []).length >= 3 && Object.keys(snapU.bySource || {}).length === 5
+            && ['today', 'd7', 'd30'].every((k) => Number.isFinite(snapU.ranges?.[k]?.totals?.requests))
+            && (snapU.bySource?.['claude-code']?.variants?.length ?? 0) >= 1
+            && ((snapFresh?.catalog?.history) || []).some((h) => h.usage),
+          { totals: { input: snapU?.totals?.input, hitRate: snapU?.totals?.hitRate }, models: (snapU?.byModel || []).length, sources: Object.keys(snapU?.bySource || {}), ranges: ['today', 'd7', 'd30'].map((k) => snapU?.ranges?.[k]?.totals?.requests ?? null), histWithUsage: ((snapFresh?.catalog?.history) || []).filter((h) => h.usage).length });
+        if (snapU) {
+          const r2 = await fetch('http://127.0.0.1:' + PORT + '/api/usage');
+          const ju = await r2.json().catch(() => ({}));
+          check('MU6', '/api/usage 明细端点（overview + perSource 五源 byModel/bySession，DSH 在列）',
+            r2.status === 200 && !!ju.overview?.totals && Object.keys(ju.perSource || {}).length === 5 && ju.perSource['claude-code']?.bySessionCount >= 1 && (ju.perSource?.dsh?.bySessionCount ?? 0) >= 1,
+            { status: r2.status, sources: Object.keys(ju.perSource || {}), ccSessions: ju.perSource?.['claude-code']?.bySessionCount, dshSessions: ju.perSource?.dsh?.bySessionCount });
+        }
+      }
     }
     // ---- --live：控制→观察闭环（每后端挑一个**最小**旧会话，真实无头投递一条「只回复 ok」，等会话文件增长）----
     if (LIVE) {
@@ -242,9 +514,11 @@ let cx;
         return null;
       };
       const plan = [
-        ['MD3', 'claude-code', scanClaudeCatalog(), 300 * 1024, 'CLAUDE-CODE'],
-        ['ME3', 'codex', scanCodexCatalog(), 300 * 1024, 'CODEX'],
-        ['MH3', 'kimi-code', scanKimiCatalog(), 300 * 1024, 'KIMI-CODE'],
+        // 上限 1MB：约束投递成本（挑最小会话）；300KB 时连续两轮 --live 会把上一轮投过的
+        // 最小会话顶出上限，造成「无可用的旧会话」假失败（2026-10-07 实测）
+        ['MD3', 'claude-code', scanClaudeCatalog(), 1024 * 1024, 'CLAUDE-CODE'],
+        ['ME3', 'codex', scanCodexCatalog(), 1024 * 1024, 'CODEX'],
+        ['MH3', 'kimi-code', scanKimiCatalog(), 1024 * 1024, 'KIMI-CODE'],
       ];
       for (const [id, source, cat, cap, label] of plan) {
         const target = pickSmallest(cat, cap);
@@ -262,6 +536,65 @@ let cx;
         const grew = accepted ? await waitForGrowth(target.logFile, before, 150_000) : null;
         check(id, label + '：真实无头投递 → 会话文件增长（控制→观察闭环）', !!grew,
           { code: res.status, status: body.item?.status, detail: (body.item?.detail || body.detail || '').slice(0, 90), bytes: before + '→' + (grew ?? '未增长') });
+      }
+      // ZCode 的闭环判据不同：无独立会话文件，看该会话在 sqlite 里的 time_updated 增长。
+      // 选样约束：无头 --resume 只对非 account:* provider 的会话可用（独立 CLI 无桌面登录态，
+      // 上游限制）——优先挑旧的非 account 会话；没有则用 CLI 建一个「AgentPet 自检」探测会话（可复用）。
+      {
+        const PROBE_TITLE = '（AgentPet 总控自检）探测会话';
+        const zcSess = (scanZcodeCatalog().sessions || []);
+        let zTarget = zcSess
+          .filter((s) => s.kind === 'main' && s.cwd && fs.existsSync(s.cwd) && Number.isFinite(s.updatedAt)
+            && Date.now() - s.updatedAt > 600_000                                    // 10 分钟未动即可（探测会话不必等 1h）
+            && !(s.provider || '').startsWith('account:'))
+          .sort((a, b) => (a.updatedAt ?? 0) - (b.updatedAt ?? 0))[0] ?? null;
+        if (!zTarget) {
+          // 建探测会话：无头 --prompt 新建（该路径不依赖 account provider），标题即首个输入
+          const probeDir = path.join(os.tmpdir(), 'agent-pet-zcode-probe');
+          fs.mkdirSync(probeDir, { recursive: true });
+          const bin = resolveCliBin('zcode');
+          const r = await new Promise((resolve) => {
+            const child = spawn(bin, ['--prompt', PROBE_TITLE + '，只回复：ok'], {
+              cwd: probeDir, stdio: 'ignore',
+              env: { ...process.env, ...cliEnvFor('zcode', bin) },
+            });
+            const done = (v) => { clearTimeout(timer); resolve(v); };
+            const timer = setTimeout(() => done({ ok: true }), 120_000);
+            child.on('exit', (code) => done(code === 0 ? { ok: true } : { ok: false, code }));
+            child.on('error', (e) => done({ ok: false, error: String(e.message || e) }));
+          });
+          for (let i = 0; i < 10 && !zTarget; i++) {                                 // 等目录出现探测会话（≤20s）
+            await new Promise((r2) => setTimeout(r2, 2000));
+            zTarget = (scanZcodeCatalog().sessions || []).find((s) => s.title === PROBE_TITLE) ?? null;
+          }
+          if (!zTarget) check('ML11', 'ZCODE：探测会话创建失败（无头 --prompt）', false, r);
+        }
+        if (zTarget) {
+          const sid = String(zTarget.sessionId);
+          const updatedAtOf = () => { const db = openZcodeDb(); try { return db?.prepare('SELECT time_updated t FROM session WHERE id = ?').get(sid)?.t ?? null; } finally { try { db?.close(); } catch {} } };
+          const before = updatedAtOf();
+          let res = null;
+          try {
+            res = await fetch('http://127.0.0.1:' + PORT + '/api/input', {
+              method: 'POST', headers: { 'content-type': 'application/json', 'x-pet-token': token },
+              body: JSON.stringify({ text: '（AgentPet 总控自检）请只回复：ok', sessionId: sid.slice(0, 12) }),
+            });
+          } catch (e) { check('ML11', 'ZCODE：投递请求失败', false, String(e.message || e)); }
+          if (res) {
+            const body = await res.json().catch(() => ({}));
+            const accepted = res.status === 200 && body.item?.status === 'delivered';
+            let grew = null;
+            if (accepted) {
+              for (let i = 0; i < 75 && grew === null; i++) {                        // 最长 150s
+                await new Promise((r) => setTimeout(r, 2000));
+                const t = updatedAtOf();
+                if (t !== null && t > before) grew = t;
+              }
+            }
+            check('ML11', 'ZCODE：真实无头投递 → session.time_updated 增长（控制→观察闭环；account:* 会话受上游登录态限制，探测会话走 builtin provider）', !!grew,
+              { code: res.status, status: body.item?.status, detail: (body.item?.detail || body.detail || '').slice(0, 90), time_updated: before + '→' + (grew ?? '未增长') });
+          }
+        }
       }
     }
   } catch (e) {

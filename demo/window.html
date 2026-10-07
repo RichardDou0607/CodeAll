@@ -41,6 +41,23 @@ header .logo small{color:var(--dim);font-weight:400;font-size:10px;margin-left:4
 .scard .sc-row .k{color:var(--dim);flex:0 0 auto}
 .scard .sc-note{font-size:10.5px;color:var(--dim)}
 .scard .sc-ev{font-size:10px;color:#5c6a7e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ---- 用量页（按 Agent × 模型计数） ---- */
+#usage-page{flex:1;min-height:0;overflow:auto;padding:16px 18px;display:none}
+#usage-page.on{display:block}
+.u-title{font-size:15px;font-weight:700;margin:0 0 2px}
+.u-sub{font-size:11px;color:var(--dim);margin-bottom:12px}
+.u-tot{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px 6px}
+.u-tot .chip{font-size:11px;color:#c3ceda}
+.utable{border-collapse:collapse;margin:0 0 4px 6px;font-size:11.5px;width:calc(100% - 12px)}
+.utable th,.utable td{text-align:right;padding:3px 10px;border-bottom:1px solid rgba(36,44,58,.5);white-space:nowrap}
+.utable th{color:var(--dim);font-weight:500;font-size:10.5px}
+.utable td:first-child,.utable th:first-child{text-align:left}
+.u-src-h{font-size:12px;font-weight:700;margin:14px 0 4px 6px}
+.u-note{font-size:10.5px;color:var(--dim);margin:10px 0 0 6px}
+.u-ranges{display:flex;gap:2px;margin:0 0 10px 6px}
+.u-ranges button{background:#0d1117;color:var(--dim);border:1px solid var(--line);border-radius:6px;font-size:11px;padding:3px 10px;cursor:pointer}
+.u-ranges button:hover{color:var(--txt)}
+.u-ranges button.on{color:#fff;background:#1d2531}
 /* ---- 主体：左项目 / 右会话 ---- */
 #main{flex:1;display:flex;min-height:0}
 aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid var(--line);min-height:0}
@@ -114,6 +131,7 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
     <span class="logo">AgentPet<small>总控</small></span>
     <nav id="view-nav">
       <button id="view-sessions" class="on" title="会话总览（实时 / 历史 / 投递）">会话</button>
+      <button id="view-usage" title="Token 用量（按 Agent × 模型计数；全量扫描 60s 增量缓存）">用量</button>
       <button id="view-status" title="软件状态独立页（四态 / 通道 / CLI与桌面 / 证据）">软件</button>
     </nav>
     <nav id="agent-tabs"></nav>
@@ -152,6 +170,11 @@ footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;backg
     <div class="sp-sub">本机 agent 软件 · 四态（已连接 / 已打开 / 未打开 / 未下载）· 观察通道 · 命令行版与桌面版</div>
     <div id="status-cards"></div>
   </section>
+  <section id="usage-page">
+    <div class="u-title">Token 用量</div>
+    <div class="u-sub">按 Agent × 模型计数 · 子代理消耗计入 · in 是否含 cache 随源而异（Claude/DSH/Kimi 不含 / Codex·ZCode 含）· 对账 ZCode UI「今日消耗」= in+cache读+cache写+out · 明细见 /api/usage</div>
+    <div id="usage-body"><div class="empty">首次全量扫描中…</div></div>
+  </section>
   <footer>
     <div class="trow" id="target" title="点击恢复自动选择">投递目标：自动 · 最近活跃主会话（点击会话行可指定）</div>
     <div class="composer">
@@ -169,14 +192,52 @@ const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',workin
 const COLOR={idle:'#8b98a9',thinking:'#4aa8ff',running:'#3fb950',working:'#3fb950','transient-error':'#e3b341',error:'#f85149',waiting:'#e3b341',done:'#bc8cff',ended:'#bc8cff',unknown:'#8b98a9'};
 const AGENT_STATUS_LABEL={connected:'已连接','open-unconnected':'已打开 · 未连接',closed:'未打开','not-installed':'未下载'};
 const AGENT_STATUS_COLOR={connected:'#3fb950','open-unconnected':'#e3b341',closed:'#8b98a9','not-installed':'#5a6676'};
-const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI']];
+const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI'],['zcode','ZCODE']];
 const $=id=>document.getElementById(id);
 function esc(s){return String(s).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]))}
 function mmss(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 function relTime(ms,now){if(!ms)return '';const s=Math.max(0,Math.floor((now-ms)/1000));if(s<60)return s+' 秒前';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400)return Math.floor(s/3600)+' 小时前';return Math.floor(s/86400)+' 天前'}
 const VARIANT_LABEL={cli:'CLI',desktop:'桌面',ide:'IDE'};
 function srcLabel(s){const base=String(s&&s.source||'dsh').toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI');return base+(s&&s.variant&&VARIANT_LABEL[s.variant]?'·'+VARIANT_LABEL[s.variant]:'')}
-function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);return p.join(' · ')}
+function fmtTok(n){n=Number(n)||0;return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'k':String(n)}
+function pct(r){return (r==null||isNaN(r))?'—':(r*100).toFixed(1)+'%'}
+function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);if(s.usage&&(s.usage.input||s.usage.output))p.push('tok '+fmtTok(s.usage.input)+'/'+fmtTok(s.usage.output));return p.join(' · ')}
+const USAGE_RANGES=[['all','全部'],['today','当日'],['d7','7 日内'],['d30','30 日内']];
+function uTable(rows,withSources){
+  if(!rows||!rows.length)return '<div class="empty" style="text-align:left;margin-left:6px">（该时间窗内无用量）</div>';
+  let h='<table class="utable"><tr><th>模型</th>'+(withSources?'<th>来源</th>':'')+'<th>in</th><th>cache读</th><th>out</th><th>命中率</th><th>请求</th></tr>';
+  for(const m of rows){h+='<tr><td>'+esc(m.model)+'</td>'+(withSources?'<td style="color:var(--dim)">'+esc((m.sources||[]).map(x=>srcLabel({source:x})).join(' '))+'</td>':'')+'<td>'+fmtTok(m.input)+'</td><td>'+fmtTok(m.cacheRead)+'</td><td>'+fmtTok(m.output)+'</td><td>'+pct(m.hitRate)+'</td><td>'+fmtTok(m.requests)+'</td></tr>'}
+  return h+'</table>';
+}
+function usageHtml(us,now){
+  if(!us||us.pending)return '<div class="empty" style="text-align:left;margin-left:6px">首次全量扫描中…（本机 1.1GB 转录约需数秒，完成后自动出现）</div>';
+  const range=window.__USAGE_RANGE__||'all';
+  const view=(range==='all'||!(us.ranges||{})[range])?us:us.ranges[range];
+  const rl={today:'当日',d7:'7 日内',d30:'30 日内'}[range];
+  let h='<div class="u-ranges">'+USAGE_RANGES.map(([k,l])=>'<button data-urange="'+k+'"'+(range===k?' class="on"':'')+'>'+l+'</button>').join('')+'</div>';
+  const t=view.totals||{};
+  h+='<div class="u-tot"><span class="chip">in '+fmtTok(t.input)+'</span><span class="chip">out '+fmtTok(t.output)+'</span><span class="chip">cache读 '+fmtTok(t.cacheRead)+'</span><span class="chip">命中率 '+pct(t.hitRate)+'</span><span class="chip">请求 '+fmtTok(t.requests)+'</span>'+(us.refreshing?'<span class="chip">扫描中…</span>':'')+(rl?'<span class="chip">'+rl+'</span>':'')+'</div>';
+  // 各 Agent 消耗量：claude/codex/kimi 按 CLI/桌面/IDE 形态拆行（与会话目录/软件状态页同口径）；dsh/zcode 单行
+  const SRC_ORDER=['dsh','claude-code','codex','kimi-code','zcode'];
+  const SRC_SPLIT={ 'claude-code':1, codex:1, 'kimi-code':1 };
+  h+='<div class="u-src-h">各 Agent 消耗量'+(rl?'（'+rl+'）':'')+'</div><table class="utable"><tr><th>Agent</th><th>in</th><th>cache读</th><th>out</th><th>命中率</th><th>请求</th><th>模型数</th></tr>';
+  for(const src of SRC_ORDER){
+    const d=view.bySource&&view.bySource[src];if(!d)continue;
+    const vs=(SRC_SPLIT[src]&&d.variants&&d.variants.length)?d.variants:[{variant:null,totals:d.totals}];
+    for(const v of vs){
+      const t2=v.totals||{};
+      h+='<tr><td>'+esc(srcLabel({source:src,variant:v.variant}))+'</td><td>'+fmtTok(t2.input)+'</td><td>'+fmtTok(t2.cacheRead)+'</td><td>'+fmtTok(t2.output)+'</td><td>'+pct(t2.hitRate)+'</td><td>'+fmtTok(t2.requests)+'</td><td style="color:var(--dim)">'+(v.variant?'—':((d.models||[]).length+(d.partial?' · ⚠部分':'')))+'</td></tr>';
+    }
+  }
+  h+='</table>';
+  h+='<div class="u-src-h">全部来源 · 同名模型合并'+(rl?'（'+rl+'）':'')+'</div>'+uTable(view.byModel||[],true);
+  for(const src of SRC_ORDER){
+    const d=view.bySource&&view.bySource[src];if(!d)continue;
+    h+='<div class="u-src-h">'+esc(srcLabel({source:src}))+' · '+(d.partial?'<span style="color:var(--wait)">部分扫描（下轮续）</span>':(d.models||[]).length+' 个模型')+'</div>'+uTable(d.models||[]);
+  }
+  h+='<div class="u-note">生成于 '+(us.generatedAt?new Date(us.generatedAt).toLocaleString('zh-CN'):'—')+'（60s 增量缓存）· 时间窗按本地自然日归桶 · 命中率=cacheRead/(fresh+cacheRead)，fresh 按源语义折算（Codex/ZCode 的 input 含 cache）· 形态：Claude=entrypoint / Codex=originator / Kimi=clientMetadata</div>';
+  return h;
+}
 function projNameOf(s,projList){
   if(!s)return '';
   const k=s.projectKey;
@@ -216,6 +277,7 @@ function render(snap){
   const view=window.__VIEW__||'sessions';
   $('main').style.display=view==='sessions'?'flex':'none';
   $('status-page').className=view==='status'?'on':'';
+  $('usage-page').className=view==='usage'?'on':'';
   const sessPane=$('toolbar');
   if(sessPane)sessPane.style.visibility=view==='sessions'?'visible':'hidden';
   const agentsList=(snap.agents||[]);
@@ -240,8 +302,10 @@ function render(snap){
     }).join('');
   const cardsEl=$('status-cards');
   if(cardsEl.__petLastHtml!==cardsHtml){cardsEl.innerHTML=cardsHtml;cardsEl.__petLastHtml=cardsHtml}
-  const vSel=$('view-sessions'),vSta=$('view-status');
-  vSel.className=view==='sessions'?'on':'';vSta.className=view==='status'?'on':'';
+  const vSel=$('view-sessions'),vSta=$('view-status'),vUsa=$('view-usage');
+  vSel.className=view==='sessions'?'on':'';vSta.className=view==='status'?'on':'';vUsa.className=view==='usage'?'on':'';
+  const usageBody=$('usage-body');
+  if(view==='usage'){const uh=usageHtml(snap.usage,now);if(usageBody.__petLastHtml!==uh){usageBody.innerHTML=uh;usageBody.__petLastHtml=uh}}
   // ---- 会话三档分类（互斥、完备；每个会话恰好归入 活跃/完成/隐藏 之一）----
   // ① 进行中状态（思考/运行/等你确认/瞬态错误）→ 活跃（与时间无关；等审批的会话不会被藏掉）
   // ② 完成且结束 ≤ 10 分钟 → 活跃（缓冲期：看得见 ✓ 即时反馈）
@@ -379,7 +443,7 @@ function render(snap){
   $('new-session').disabled=!caps.canCreate;
   $('new-session').title=caps.canCreate?'在当前筛选下新建会话（DSH=插件；其余=终端新窗口）':'新建通道不可用（DSH 需插件；CLI 后端需在 PATH）';
   const ch=snap.inputChannel||{};
-  $('hint').textContent=ch.mode==='cmd'?('自动投递：'+ch.detail):ch.mode==='cli'?('DSH 进本地队列 · Claude/Codex/Kimi 直接 CLI 投递'):'输入进本地队列 · 可复制投递';
+  $('hint').textContent=ch.mode==='cmd'?('自动投递：'+ch.detail):ch.mode==='cli'?('DSH 进本地队列 · Claude/Codex/Kimi/ZCode 直接 CLI 投递'):'输入进本地队列 · 可复制投递';
   const qs=(snap.inputs||[]).filter(i=>i.status&&i.status!=='delivered');
   $('queue').innerHTML=qs.map(i=>{
     const label={queued:'待投递',pending:'投递中',failed:'失败'}[i.status]||i.status;
@@ -422,6 +486,8 @@ $('sess-filter').addEventListener('click',e=>{const b=e.target.closest('[data-fi
 $('variant-filter').addEventListener('click',e=>{const b=e.target.closest('[data-variant]');if(!b)return;window.__VARIANT__=b.getAttribute('data-variant')||'';if(window.__SNAP__)render(window.__SNAP__)});
 $('view-sessions').onclick=function(){window.__VIEW__='sessions';if(window.__SNAP__)render(window.__SNAP__)};
 $('view-status').onclick=function(){window.__VIEW__='status';if(window.__SNAP__)render(window.__SNAP__)};
+$('view-usage').onclick=function(){window.__VIEW__='usage';if(window.__SNAP__)render(window.__SNAP__)};
+$('usage-body').addEventListener('click',e=>{const b=e.target&&e.target.closest?e.target.closest('[data-urange]'):null;if(!b)return;window.__USAGE_RANGE__=b.getAttribute('data-urange')||'all';if(window.__SNAP__)render(window.__SNAP__)});
 $('agent-tabs').addEventListener('click',e=>{const t=e.target.closest('[data-agent]');if(!t)return;window.__AGENT__=t.getAttribute('data-agent');if(window.__SNAP__)render(window.__SNAP__)});
 $('projects').addEventListener('click',e=>{const t=e.target.closest('[data-proj]');if(!t)return;window.__PROJECT__=t.getAttribute('data-proj')||'';if(window.__SNAP__)render(window.__SNAP__)});
 $('toggle-history').onclick=function(){window.__SHOW_HISTORY__=!window.__SHOW_HISTORY__;if(window.__SNAP__)render(window.__SNAP__)};
@@ -433,9 +499,9 @@ $('new-session').onclick=async function(){
   const cliSrc=(caps.cliChannels||[]).map(x=>x.source);
   const p=projList.find(x=>x.key===(window.__PROJECT__||''));
   let src=window.__AGENT__||'';
-  if(!src&&p&&p.sources){src=(p.sources.indexOf('dsh')>=0&&caps.plugin&&caps.plugin.available)?'dsh':['claude-code','codex','kimi-code'].filter(s=>p.sources.indexOf(s)>=0&&cliSrc.indexOf(s)>=0)[0]||(cliSrc[0]||'dsh')}
+  if(!src&&p&&p.sources){src=(p.sources.indexOf('dsh')>=0&&caps.plugin&&caps.plugin.available)?'dsh':['claude-code','codex','kimi-code','zcode'].filter(s=>p.sources.indexOf(s)>=0&&cliSrc.indexOf(s)>=0)[0]||(cliSrc[0]||'dsh')}
   if(!src)src='dsh';
-  // 形态标注：DSH=桌面端插件进程内创建；claude/codex/kimi 只支持经各自 CLI（终端窗口）新建——桌面端无官方新建通道
+  // 形态标注：DSH=桌面端插件进程内创建；claude/codex/kimi/zcode 只支持经各自 CLI（终端窗口）新建——桌面端无官方新建通道
   const surf=src==='dsh'?'DSH·桌面（插件）':(String(src).toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI')+(cliSrc.indexOf(src)>=0?'·CLI（终端窗口）':''));
   const j=await api('/api/new',{cwd:p?p.cwd:'',source:src});
   $('note').textContent='新建会话（'+surf+'）：'+(j.ok?(j.via||'已创建')+'；目录将在几秒内出现':((j.detail&&String(j.detail).slice(0,90))||(j.reason&&String(j.reason).slice(0,90))||j.error||'未知'));

@@ -1,6 +1,7 @@
-# 21 · 多 Agent 接入总体计划（v3，2026-10-06）
+# 21 · 多 Agent 接入总体计划（v3.1，2026-10-07）
 
 > 目标：**Agent 总控（AgentPet）统一控制本机多个 agent 软件，并控制部署在远端服务器上的 AgentOS 实例**——本地与远端并列显示状态、会话，并支持输入投递（观察 → 目录 → 控制）。
+> **v3.1 变更（2026-10-07，用户指定）**：**ZCode 提入首批并当日落地（M-L ✅）**——sqlite 只读观察 + 包内 CLI 控制；上游登录态限制（account:* provider 无头续接失败）已定位并成文（§2 M-L / 40-adapters §3.12）。观察源从四源扩为五源。
 > **v3 变更（2026-10-06，用户方向确认）**：
 > ① **首批接入范围锁定**：DSH（已完成）+ Claude Code + Codex + **Kimi Code（M-H 从 P1 提入首批）**；当前只更新计划，不启动开发。
 > ② **终局架构定性（§6 新增）**：AgentPet = 总控；**本地域**直接控制各 agent 软件，**远端域**通过 AgentOS（自研执行体，每台服务器一个实例）控制多台远端服务器；M-J 重构为「本地观察 → 远端观察 → 远端控制」三步轨道。
@@ -39,6 +40,7 @@
 | 9 | **Nowdex** | 1.1.7 | Codex 用量监控（org.randynamic.nowdex，RevenueCat 订阅制） | `/Applications/Nowdex.app`（含 CodexUsage 许可文件） | 读 `~/.codex` 用量 | **D 不接入**：竞品参照——证明「用量/配额展示」是真实付费需求 → 产品 backlog |
 | 10 | **Claude.app / ChatGPT.app** | —（均运行中） | 聊天桌面 App | `/Applications` | 无本机可读会话 API | **E 排除**（无观察通道，见 §1.3） |
 | 11 | **影刀 RPA** | — | RPA 自动化 | `/Applications/影刀.app` | 私有 | **E 排除**（超出「编码 agent 工作框」边界，Phase 3 再议） |
+| 12 | **ZCode** | App 3.14.4 / CLI 0.16.9（随包分发） | 桌面 App（GLM 系编码 Agent，**本会话同款**，运行中） | `/Applications/ZCode.app`；`~/.zcode/` | `~/.zcode/cli/db/db.sqlite`（WAL：session/message/part，本机 94 会话/18 项目） | **A 首批 ✅**（M-L，2026-10-07 用户指定接入；sqlite 只读 + 包内 CLI 控制） |
 
 ### 1.2 接入分级定义（v3 微调）
 
@@ -146,6 +148,14 @@
 
 - 读 CC Switch 当前激活的供应商配置（其改写 `~/.claude/settings.json`，具体锚点 spike 确认），在 CLAUDE-CODE 会话行 metaLine 追加供应商标签（官方 API / 中转名）。
 - **价值**：多供应商用户看事件时能区分「这条走的是哪家」，也为 token 用量统计（Nowdex 验证过的需求）铺路。
+
+### M-L · ZCode 接入（首批 ✅ 2026-10-07 落地，用户当日指定）
+
+- **观察（A+ 路径，全量只读）**：`~/.zcode/cli/db/db.sqlite`（WAL）经 `node:sqlite` readOnly 连接——`scanZcodeCatalog()`（session 表目录 + 最近 N 行粗状态，本机 18 项目 / 39 主会话 / 56 子代理 SQL 层排除，~90ms）+ `followZcodeLogs()`（message/part 按 time_updated 水位轮询，`(tbl,id)→data` 指纹去重捕获 tool running→completed 的行内 UPDATE；对正在运行的会话实测实时可见）。无审批流（permission 表为项目配置），observes 如实缺席 approval.*。
+- **控制（包内 CLI `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs`）**：投递 `--resume <id> --mode build --prompt`（显式 build 压掉无头默认 yolo）；新建/打开 = Terminal 窗口。**必须补注入** `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`（App 包 config，按 bin 位置推导）与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`（`~/.zcode/v2/provider_config.json`），否则 Model creation failed。
+- **上游限制（实测）**：桌面登录态未共享给独立 CLI（`~/.zcode/credentials.json` 不存在）→ 无头续接 `account:*` provider 的会话必失败；cli-control 以 2.5s 快速失败检测如实回报 failed。终端 `zcode login` 一次可解除（OAuth，留给用户）。
+- **验收**：`multi-source-check.mjs` ML1–ML10（静态）+ `--live` ML11（探测会话真实投递 → session.time_updated 增长闭环）全过；`test-window.mjs` ZCODE tab/卡片/过滤断言全过。
+- 详见 [40-adapters.md §3.12](./40-adapters.md)。
 
 ---
 
