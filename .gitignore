@@ -11,5 +11,9 @@ target/
 .agent-pet/
 *.pet.jsonl.zstd
 
+# local plugin state (mimosa audit / video-agent-kit)
+.mimosa/
+.video_agent/
+
 # keep fixture recordings that are meant to be committed
 !fixtures/*.pet.jsonl
