@@ -27,7 +27,7 @@ import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapt
 import { scanKimiCatalog, followKimiLogs, SOURCE as KM_SOURCE } from '../adapters/kimi-code-adapter.mjs';
 import { scanZcodeCatalog, followZcodeLogs, SOURCE as ZC_SOURCE } from '../adapters/zcode-adapter.mjs';
 import { scanAllUsage, serializeUsageScan, usageCalendar } from '../adapters/usage-collect.mjs';
-import { CLI_TARGETS, availableCliChannels, deliverControl, newCliSession, openCliSession } from '../adapters/cli-control.mjs';
+import { CLI_TARGETS, availableCliChannels, deliverControl, deliverCreateViaCli, newCliSession, openCliSession } from '../adapters/cli-control.mjs';
 import net from 'node:net';
 import crypto from 'node:crypto';
 
@@ -191,7 +191,17 @@ function readInputFile() {
     const out = [];
     for (const l of fs.readFileSync(INPUT_LOG, 'utf8').split('\n')) {
       if (!l.trim()) continue;
-      try { const o = JSON.parse(l); out.push({ id: o.id, text: o.text, at: o.at, status: o.status, detail: o.detail, sessionId: o.sessionId ?? null }); } catch { /* 坏行跳过 */ }
+      // targetKey = 按会话分队列的组键：sess:<id>（既有会话）| new:<source>:<cwd>（待新建）。
+      // 旧条目（2026-10-08 之前无 targetKey/source 字段）在此迁移，老队列文件无需手工处理。
+      try {
+        const o = JSON.parse(l);
+        out.push({
+          id: o.id, text: o.text, at: o.at, status: o.status, detail: o.detail,
+          sessionId: o.sessionId ?? null,
+          source: o.source ?? null,
+          targetKey: o.targetKey ?? (o.sessionId ? 'sess:' + o.sessionId : 'new:dsh:-'),
+        });
+      } catch { /* 坏行跳过 */ }
     }
     return out;
   } catch { return []; }
@@ -763,16 +773,43 @@ function resolveTarget(sessionId) {
   if (found.kind === 'subagent') return { error: '「' + (found.title || found.sessionId.slice(0, 12)) + '」是子代理会话，不能作为投递目标' };
   return { id: found.sessionId, label: found.title, source: found.source || 'dsh' };
 }
-async function deliverInput(text, targetId, targetSource) {
+async function deliverInput(text, targetId, targetSource, targetKey = null, model = '') {
   // id 必须唯一：同毫秒两次发送若共用 id，删除/重发会误伤另一条
-  const item = { id: 'in-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex'), text, at: Date.now(), status: 'pending', detail: '', sessionId: targetId || null };
+  const item = {
+    id: 'in-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex'),
+    text, at: Date.now(), status: 'pending', detail: '',
+    sessionId: targetId || null,
+    source: targetSource || null,
+    targetKey: targetKey || (targetId && !String(targetId).startsWith('new:') ? 'sess:' + targetId : String(targetId || 'new:dsh:-')),
+  };
+  // ⓪' 投递即新建：目标 new:<source>:<cwd>——会话还不存在，首条消息交给 CLI 的无头新建形态
+  //（claude -p / codex exec / kimi -p / zcode --prompt），回合落盘后观察跟随器自动看到新会话。
+  if (typeof targetId === 'string' && targetId.startsWith('new:')) {
+    const parts = targetId.split(':');
+    const nSource = parts[1] || '';
+    const nCwd = parts.slice(2).join(':') || '';
+    item.targetKey = targetId;
+    item.sessionId = null;
+    item.source = nSource || null;
+    if (CLI_TARGETS[nSource]) {
+      const r = await deliverCreateViaCli(nSource, nCwd, text, model);
+      if (r.ok) { item.status = 'delivered'; item.detail = 'via ' + r.via; }
+      else if (r.error === 'cli-not-found') { item.status = 'queued'; item.detail = '已入队（' + r.detail + '）：CLI 可用后自动重试投递即新建'; }
+      else { item.status = 'failed'; item.detail = '无头新建失败：' + (r.detail || r.error); }
+    } else {
+      item.status = 'queued'; item.detail = '新建目标暂无 CLI 通道，已入队';
+    }
+    state.inputs.push(item); persistInput(item); broadcast(); return item;
+  }
   // ⓪ CLI 后端（M-D/M-E/M-H 控制层）：tmux 优先 → 无头续会话兜底；回合写入会话文件后观察跟随器自动看到
   if (targetSource && CLI_TARGETS[targetSource]) {
     const sess = (() => {
       const live = state.sessions.get(targetId);
-      if (live) return { sessionId: targetId, cwd: live.cwd };
+      // catalog 元数据（provider/model）必须带上：zcode 的 account:* 预检靠它提前如实失败，
+      // 否则会真的 spawn 一个必败进程再吐 "Model creation failed"（2026-10-08 用户实测踩坑）
       const found = resolveSessionAny(String(targetId));
-      return found ? { sessionId: found.sessionId, cwd: found.cwd ?? found.project?.cwd } : { sessionId: targetId };
+      if (live) return { sessionId: targetId, cwd: live.cwd, provider: found?.provider ?? null };
+      return found ? { sessionId: found.sessionId, cwd: found.cwd ?? found.project?.cwd, provider: found.provider ?? null } : { sessionId: targetId };
     })();
     const r = await deliverControl(targetSource, sess, text);
     if (r.ok) { item.status = 'delivered'; item.detail = 'via ' + r.via; }
@@ -836,6 +873,19 @@ function removeInputs(pred) {
   if (keep.length !== before.length) { try { writeInputFile(keep); } catch { /* ignore */ } }
   state.inputs = keep;
   return before.length - keep.length;
+}
+
+/** 自动冲刷「投递即新建」排队项：CLI 不在 PATH 时入队的 new:<source>:<cwd> 条目，
+ *  每 20s 重试一次；送达即从队列移除（与手动重发同语义）。 */
+async function flushNewQueues() {
+  const pending = readInputFile().filter(i => i.status === 'queued' && typeof i.targetKey === 'string' && i.targetKey.startsWith('new:'));
+  if (!pending.length) return;
+  let changed = false;
+  for (const orig of pending) {
+    const fresh = await deliverInput(orig.text, orig.targetKey, orig.source, orig.targetKey);
+    if (fresh.status === 'delivered') { removeInputs(i => i.id === orig.id); changed = true; }
+  }
+  if (changed) broadcast();
 }
 
 // ---------- HTTP ----------
@@ -984,7 +1034,7 @@ const server = http.createServer(async (req, res) => {
       const cwd = String(payload0.cwd || '');
       // ⓪ CLI 后端（M-D/M-E/M-H 控制层）：tmux 在跑开 window，否则 Terminal 新窗口（可见、可交互）
       if (payload0.source && CLI_TARGETS[payload0.source]) {
-        const r = await newCliSession(payload0.source, cwd);
+        const r = await newCliSession(payload0.source, cwd, String(payload0.model || ''));
         res.writeHead(r.ok ? 200 : 502, { 'content-type': 'application/json' });
         res.end(JSON.stringify(Object.assign({ ok: r.ok, via: r.ok ? r.via : undefined, error: r.error, detail: r.detail }, r.ok ? { note: '已在终端打开新会话；目录将在几秒内出现' } : {})));
         return;
@@ -1067,13 +1117,14 @@ const server = http.createServer(async (req, res) => {
     });
     req.on('end', async () => {
       if (oversized) return;
-      let text = '', askedTarget = '';
-      try { const b = JSON.parse(body); text = String(b.text || ''); askedTarget = String(b.sessionId || '').trim(); } catch { text = String(body).trim(); }
+      let text = '', askedTarget = '', askedModel = '';
+      try { const b = JSON.parse(body); text = String(b.text || ''); askedTarget = String(b.sessionId || '').trim(); askedModel = String(b.model || '').trim(); } catch { text = String(body).trim(); }
       text = text.trim();
       if (!text) { res.writeHead(400); res.end(JSON.stringify({ ok: false, error: 'empty' })); return; }
-      const t = resolveTarget(askedTarget || null);
+      // new:<source>:<cwd> = 投递即新建（会话尚不存在），绕过「必须是已知主会话」的校验
+      const t = askedTarget.startsWith('new:') ? { id: askedTarget } : resolveTarget(askedTarget || null);
       if (t.error) { res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'unknown-session', detail: t.error })); return; }
-      const item = await deliverInput(text.slice(0, 2000), t.id, t.source);
+      const item = await deliverInput(text.slice(0, 2000), t.id, t.source, null, askedModel);
       // ok=真正送达；queued(202)=已入队无通道；failed(502)=投递失败。不再一律 ok:true（qa A-6）
       const code = item.status === 'delivered' ? 200 : item.status === 'queued' ? 202 : 502;
       res.writeHead(code, { 'content-type': 'application/json' });
@@ -1102,7 +1153,10 @@ const server = http.createServer(async (req, res) => {
     const id = decodeURIComponent(mResend[1]);
     const orig = readInputFile().find(i => i.id === id);
     if (!orig) { res.writeHead(404, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'not-found' })); return; }
-    const fresh = await deliverInput(orig.text, orig.sessionId || null);
+    // 修复（2026-10-08）：重发必须带原条目的 source/targetKey——此前只传 sessionId，
+    // CLI 失败项重发会被误路由到 DSH 插件/本地队列，永远到不了原目标。
+    const isnewKey = typeof orig.targetKey === 'string' && orig.targetKey.startsWith('new:');
+    const fresh = await deliverInput(orig.text, isnewKey ? orig.targetKey : (orig.sessionId || null), orig.source || undefined, orig.targetKey);
     const removedOriginal = fresh.status === 'delivered' ? removeInputs(i => i.id === id) > 0 : false;
     broadcast();
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -1128,5 +1182,6 @@ server.listen(PORT, '127.0.0.1', () => {
   setInterval(refreshAgentStatus, 3000);   // 软件四态（ps + mtime 探测，实测 ~40ms）
   refreshUsage();                          // Token 用量：首轮全量后 60s 增量轮询（usage-collect 文件级缓存）
   setInterval(refreshUsage, 60_000);
+  setInterval(flushNewQueues, 20_000);     // 投递即新建的排队项：CLI 恢复可用后自动重试
 });
 export { snapshot, deliverInput };

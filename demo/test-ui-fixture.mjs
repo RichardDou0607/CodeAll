@@ -29,7 +29,7 @@ return {
   inputs: [
     { id: 'in-ok', text: '这条已送达，不应出现', status: 'delivered', at: now - 60000 },
     { id: 'in-q', text: '把进度总结成三行', status: 'queued', at: now },
-    { id: 'in-f', text: '失败的投递', status: 'failed', at: now - 30000 },
+    { id: 'in-f', text: '失败的投递', status: 'failed', at: now - 30000, sessionId: 'session-2', source: 'claude-code', targetKey: 'sess:session-2' },
   ],
   inputChannel: { mode: 'cli', detail: 'x' },
   lastEvent: { type: 'tool.call', ts: now, sessionId: 'session-1' },

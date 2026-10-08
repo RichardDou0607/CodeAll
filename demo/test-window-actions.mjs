@@ -95,6 +95,37 @@ response = {
 await getEl('new-form').dispatch('submit');
 check('新建 CLI 会话发送来源和目录字段', lastRequest().path === '/api/state' && requests.some(r => r.path === '/api/new' && parseBody(r).source === 'codex' && parseBody(r).cwd === '/tmp/agentpet-action-test'));
 
+// 模型选择：CLI 源显示模型字段，所选模型随 /api/new payload 传递；ZCode 无启动参数则隐藏并提示 TUI 内切换。
+await getEl('new-session').dispatch('click');
+getEl('new-source').value = 'codex';
+await getEl('new-source').dispatch('change');
+check('CLI 新建显示模型选择字段', !getEl('new-model-field').hidden);
+getEl('new-model').value = 'gpt-6-astra';
+await getEl('new-form').dispatch('submit');
+check('新建 CLI 会话携带所选模型', requests.some(r => r.path === '/api/new' && parseBody(r).model === 'gpt-6-astra'));
+await getEl('new-session').dispatch('click');
+getEl('new-source').value = 'zcode';
+await getEl('new-source').dispatch('change');
+check('ZCode 新建隐藏模型字段并提示 TUI 内切换', getEl('new-model-field').hidden && !getEl('new-model-note').hidden && getEl('new-model-note').textContent.includes('/model'));
+
+// 首条消息 → 投递即新建：/api/input + new:<source>:<cwd> 目标 + 模型一并传递（不经 /api/new）。
+await getEl('new-session').dispatch('click');
+getEl('new-source').value = 'codex';
+await getEl('new-source').dispatch('change');
+getEl('new-cwd').value = '/tmp/agentpet-create-test';
+getEl('new-model').value = 'gpt-6-astra';
+getEl('new-first').value = '只回复 ok';
+response = { ok: true, json: async () => { const path = lastRequest()?.path; if (path === '/api/state') return snap; return { ok: true, item: { status: 'delivered', detail: 'via codex 无头新建' } }; } };
+await getEl('new-form').dispatch('submit');
+check('首条消息走投递即新建（new: 目标 + 模型随行）', requests.some(r => r.path === '/api/input' && parseBody(r).sessionId === 'new:codex:/tmp/agentpet-create-test' && parseBody(r).model === 'gpt-6-astra' && parseBody(r).text === '只回复 ok'));
+
+// 队列按会话分组：待投递项归「新建」组、失败项归其会话组，每组带按组清空按钮。
+// （DOM 沙箱 querySelectorAll 是空桩，用 innerHTML 断言）
+await new Promise(r => setTimeout(r, 30));   // 等 createSession 异步链（api → refreshCatalog → render）落地
+const qhtml = String(sandbox.document.getElementById('queue').innerHTML);
+check('队列按会话分组渲染（两组 + 各带按组清空按钮）', (qhtml.match(/class="qgroup"/g) || []).length === 2 && (qhtml.match(/data-clear-group/g) || []).length === 2);
+check('分组标题可辨（既有会话组 api-fix + 待新建组）', qhtml.includes('api-fix') && qhtml.includes('new:dsh:-'));
+
 // 主题选择持久化，并能响应系统主题变化。
 await themes[1].dispatch('click');
 check('亮色主题切换并持久化', preferences.get('agent-pet-theme') === 'light' && sandbox.document.documentElement.dataset.theme === 'light');

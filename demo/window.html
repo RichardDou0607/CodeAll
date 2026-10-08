@@ -232,6 +232,9 @@ footer{flex:none;max-height:38vh;overflow:auto;border-top:1px solid var(--line);
 .queue-toggle{display:flex;align-items:center;gap:5px;border:0;background:none;color:var(--dim);padding:2px 0;font-size:10px}
 .queue-toggle .icon{width:13px;height:13px}
 #queue{max-height:86px;overflow:auto;margin-top:5px}
+.qgroup{border:1px solid var(--line);border-radius:5px;margin-bottom:5px;padding:3px 6px 1px}
+.qgroup-h{display:flex;align-items:center;gap:6px;font-size:9px;color:var(--dim);padding:2px 0}
+.qgroup-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qitem{display:flex;gap:8px;align-items:center;font-size:10px;padding:3px 0;border-top:1px solid var(--line)}
 .qt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt)}
 .qs{flex:none;font-size:9px}
@@ -458,8 +461,11 @@ dialog::backdrop{background:#0008}
     <label class="field"><span>Agent 软件</span><select id="new-source" required></select></label>
     <label class="field"><span>工作目录</span><input id="new-cwd" list="project-paths" placeholder="使用 Agent 默认目录" autocomplete="off"></label>
     <datalist id="project-paths"></datalist>
+    <label class="field" id="new-model-field"><span>模型（可选）</span><input id="new-model" list="model-options" placeholder="留空 = 沿用默认" autocomplete="off"></label>
+    <datalist id="model-options"></datalist>
+    <div class="capability-note" id="new-model-note" hidden></div>
+    <label class="field" id="new-first-field"><span>首条消息（可选）</span><textarea id="new-first" rows="2" placeholder="留空 = 打开终端新会话；填写 = 不开终端，以此消息直接无头创建会话"></textarea></label>
     <div id="new-dsh-fields" hidden>
-      <label class="field"><span>模型（可选）</span><input id="new-model" placeholder="沿用 DSH 默认模型"></label>
       <label class="field"><span>思考程度（可选）</span><select id="new-reasoning"><option value="">沿用默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="max">max</option></select></label>
     </div>
     <div class="capability-note" id="new-channel"></div>
@@ -1084,13 +1090,25 @@ function render(snap){
   $('hint').title=$('hint').textContent;
   $('input').placeholder=tgtHit&&!sourceCan(tgtHit.source||'dsh','Input',caps)&&ch.mode!=='cmd'?'输入消息，加入本地队列…':'输入消息…';
   const qs=(snap.inputs||[]).filter(i=>i.status&&i.status!=='delivered');
-  $('queue').innerHTML=qs.map(i=>{
-    const label={queued:'待投递',pending:'待投递',failed:'失败'}[i.status]||'待投递';
-    const detail=[i.detail,i.sessionId?'目标 '+i.sessionId:'',i.via].filter(Boolean).join(' · ');
-    return '<div class="qitem"><span class="qs '+(i.status==='failed'?'failed':'queued')+'" title="'+esc(detail)+'">'+label+'</span><span class="qt" title="'+esc(i.text)+'">'+esc(i.text)+'</span>'
-      +'<button class="icon-btn qc" data-copy="'+esc(i.text)+'" title="复制消息" aria-label="复制消息">'+icon('copy')+'</button>'
-      +((i.status==='queued'||i.status==='failed')?'<button class="icon-btn qc" data-resend="'+esc(i.id)+'" title="向原目标重发" aria-label="向原目标重发">'+icon('refresh-cw')+'</button>':'')
-      +'<button class="icon-btn qc" data-del="'+esc(i.id)+'" title="删除队列项" aria-label="删除队列项">'+icon('x')+'</button></div>';
+  // 按会话分队列：targetKey = sess:<id>（既有会话）| new:<source>:<cwd>（投递即新建）
+  const qgroups=new Map();
+  for(const i of qs){const k=i.targetKey||(i.sessionId?'sess:'+i.sessionId:'new:dsh:-');if(!qgroups.has(k))qgroups.set(k,[]);qgroups.get(k).push(i)}
+  const qGroupLabel=k=>{
+    if(k.startsWith('new:')){const p=k.split(':');return '新建 '+srcLabel({source:p[1]||'dsh'})+' · '+(p.slice(2).join(':')||'默认目录')}
+    const sid=k.slice(5);const hit=allSessions.find(s=>sidOf(s)===sid||String(sidOf(s)||'').startsWith(sid));
+    return hit?(srcLabel(hit)+' · '+(hit.label||hit.title||String(sid).slice(0,14))):('会话 '+String(sid).slice(0,14))
+  };
+  $('queue').innerHTML=[...qgroups.entries()].map(([k,list])=>{
+    const items=list.map(i=>{
+      const label={queued:'待投递',pending:'待投递',failed:'失败'}[i.status]||'待投递';
+      const detail=[i.detail,i.sessionId?'目标 '+i.sessionId:'',i.via].filter(Boolean).join(' · ');
+      return '<div class="qitem"><span class="qs '+(i.status==='failed'?'failed':'queued')+'" title="'+esc(detail)+'">'+label+'</span><span class="qt" title="'+esc(i.text)+'">'+esc(i.text)+'</span>'
+        +'<button class="icon-btn qc" data-copy="'+esc(i.text)+'" title="复制消息" aria-label="复制消息">'+icon('copy')+'</button>'
+        +((i.status==='queued'||i.status==='failed')?'<button class="icon-btn qc" data-resend="'+esc(i.id)+'" title="向原目标重发" aria-label="向原目标重发">'+icon('refresh-cw')+'</button>':'')
+        +'<button class="icon-btn qc" data-del="'+esc(i.id)+'" title="删除队列项" aria-label="删除队列项">'+icon('x')+'</button></div>';
+    }).join('');
+    return '<div class="qgroup"><div class="qgroup-h"><span class="qgroup-t" title="'+esc(k)+'">'+esc(qGroupLabel(k))+'</span><span>×'+list.length+'</span>'
+      +'<button class="icon-btn qc" data-clear-group="'+esc(k)+'" title="清空该会话队列" aria-label="清空该会话队列">'+icon('trash-2')+'</button></div>'+items+'</div>';
   }).join('');
   $('queue-count').textContent='队列 '+qs.length;
   $('queue-clear').disabled=!qs.length;
@@ -1227,6 +1245,16 @@ function updateNewChannel(){
   const source=$('new-source').value||'dsh',caps=(window.__SNAP__||{}).capabilities||{};
   const available=sourceCan(source,'Create',caps);
   $('new-dsh-fields').hidden=source!=='dsh';
+  // 模型选择：DSH（插件直传）+ 三家 CLI（claude --model / codex -m / kimi -m，本机 --help 实测）；
+  // ZCode 无启动模型参数（TUI 内 /model 切换），字段隐藏并给出提示
+  const modelSupported=source==='dsh'||source==='claude-code'||source==='codex'||source==='kimi-code';
+  $('new-model-field').hidden=!modelSupported;
+  $('new-first-field').hidden=source==='dsh';   // 首条消息=投递即新建，仅 CLI 后端（DSH 插件新建无消息通道）
+  $('new-model-note').hidden=source!=='zcode';
+  if(source==='zcode')$('new-model-note').textContent='ZCode 不支持启动时指定模型：会话打开后在 TUI 里用 /model 切换。';
+  $('new-model').placeholder=source==='dsh'?'沿用 DSH 默认模型':'留空 = '+srcLabel({source})+' 默认 / 上次模型';
+  const seen=[];for(const p of (((window.__SNAP__||{}).catalog||{}).projects)||[])for(const s of (p.sessions||[]))if(s&&s.source===source&&s.model&&!seen.includes(s.model))seen.push(s.model);
+  $('model-options').innerHTML=seen.slice(0,12).map(m=>'<option value="'+esc(m)+'"></option>').join('');
   $('new-submit').disabled=!available||!!window.__NEW_BUSY__;
   $('new-channel').textContent=available
     ?(source==='dsh'?'在 DSH 桌面端插件进程内创建。':source==='zcode'?'在终端经 ZCode 桌面 App 内置的 zcode 程序创建（ZCode 无独立 CLI 产品）。':'经 '+srcLabel({source})+' CLI 在终端创建，桌面端没有官方新建通道。')
@@ -1244,6 +1272,7 @@ function showNewDialog(){
   $('new-cwd').value=p?.cwd||'';
   $('project-paths').innerHTML=projList.filter(p=>p.cwd&&!p.dead).map(p=>'<option value="'+esc(p.cwd)+'">'+esc(p.name)+'</option>').join('');
   $('new-error').hidden=true;
+  $('new-first').value='';
   updateNewChannel();$('new-dialog').showModal();$('new-source').focus();
 }
 async function createSession(e){
@@ -1253,7 +1282,22 @@ async function createSession(e){
   if(!sourceCan(source,'Create')){updateNewChannel();return}
   if(cwd&&!cwd.startsWith('/')&&!/^[A-Za-z]:[\\/]/.test(cwd)&&!cwd.startsWith('\\\\')){$('new-error').textContent='工作目录必须是绝对路径。';$('new-error').hidden=false;return}
   const payload={cwd,source};
-  if(source==='dsh'){if($('new-model').value.trim())payload.model=$('new-model').value.trim();if($('new-reasoning').value)payload.reasoningEffort=$('new-reasoning').value}
+  if($('new-model').value.trim()&&source!=='zcode')payload.model=$('new-model').value.trim();
+  if(source==='dsh'&&$('new-reasoning').value)payload.reasoningEffort=$('new-reasoning').value;
+  // 首条消息（CLI 后端）→ 投递即新建：不开终端，消息直接交给 CLI 的无头新建形态
+  const first=$('new-first').value.trim();
+  if(source!=='dsh'&&first){
+    window.__NEW_BUSY__=true;updateNewChannel();$('new-error').hidden=true;
+    try{
+      const j=await api('/api/input',{text:first.slice(0,2000),sessionId:'new:'+source+':'+cwd,model:payload.model||undefined});
+      if(!j.ok)throw new Error((j.item&&j.item.detail)||j.error||'未送达');
+      $('new-dialog').close();
+      notice('投递即新建 · '+srcLabel({source})+' · '+((j.item&&j.item.detail)||'已启动')+'，会话将在几秒内出现。');
+      await refreshCatalog(false);
+    }catch(err){$('new-error').textContent='投递即新建失败：'+err.message;$('new-error').hidden=false}
+    finally{window.__NEW_BUSY__=false;updateNewChannel()}
+    return;
+  }
   window.__NEW_BUSY__=true;updateNewChannel();$('new-error').hidden=true;
   try{
     const j=await api('/api/new',payload);
@@ -1350,8 +1394,19 @@ async function copyText(text){
   const el=document.createElement('textarea');el.value=text;el.style.position='fixed';el.style.opacity='0';document.body.appendChild(el);el.select();
   try{if(!document.execCommand('copy'))throw new Error('剪贴板不可用')}finally{el.remove()}
 }
-// 队列操作（只对未完成项：复制/重发/删除）
+// 队列操作（只对未完成项：复制/重发/删除/按会话清空）
 $('queue').addEventListener('click',async e=>{
+  const cg=e.target.closest('[data-clear-group]');
+  if(cg){
+    const k=cg.getAttribute('data-clear-group');
+    const items=((window.__SNAP__||{}).inputs||[]).filter(i=>i.status&&i.status!=='delivered'&&(i.targetKey||(i.sessionId?'sess:'+i.sessionId:'new:dsh:-'))===k);
+    if(!items.length)return;
+    try{
+      for(const i of items)await api('/api/input/'+encodeURIComponent(i.id),undefined,'DELETE');
+      notice('已清空该会话的队列（'+items.length+' 条）。');
+    }catch(err){notice('清空失败：'+err.message,'error')}
+    return;
+  }
   const c=e.target.closest('[data-copy]');
   if(c){try{await copyText(c.getAttribute('data-copy'));notice('消息已复制。')}catch(err){notice('复制失败：'+err.message,'error')}return}
   const del=e.target.closest('[data-del]');

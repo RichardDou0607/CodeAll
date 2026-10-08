@@ -1,6 +1,6 @@
 # v0.1.0 后续构建任务（Post-Release Build Plan）
 
-> 制定日期：2026-10-08（用户定向）。定位：**CodeAll v0.1.0 首发之后的产品续作计划**，不替代 [20-roadmap](./20-roadmap.md)（原始两阶段计划）与 [21-multi-agent-adoption-plan.md](./21-multi-agent-adoption-plan.md)（多 Agent 接入，§6 双域模型仍是远端架构的真相源）；本文把五条新工作流落成可排期的任务，遵循 v0.1.0 确立的收敛原则——**能力落地才进软件列表，宣传不跑在实现前面**。
+> 制定日期：2026-10-08（用户定向）；**版本节奏重排：2026-10-08（用户定向）——v0.2 = Windows/Linux 跨平台（W3 提前），v0.3 = Cursor / OpenCode / Qoder 等软件接入（W2），v0.4 = 厂商 Coding Plan 监控（W1），W4 后移 v0.5 起**。定位：**CodeAll v0.1.0 首发之后的产品续作计划**，不替代 [20-roadmap](./20-roadmap.md)（原始两阶段计划）与 [21-multi-agent-adoption-plan.md](./21-multi-agent-adoption-plan.md)（多 Agent 接入，§6 双域模型仍是远端架构的真相源）；本文把五条新工作流落成可排期的任务，遵循 v0.1.0 确立的收敛原则——**能力落地才进软件列表，宣传不跑在实现前面**。
 >
 > 估算口径：单人全职折算人日；[U] = 未验证，需 spike 先行。
 
@@ -8,10 +8,10 @@
 
 | 工作流 | 主题 | 关键产出 | 建议目标版本 |
 |---|---|---|---|
-| W1 BILL | **Coding Plan 计费展示** | 计费页：官方 API + 本地规则估算双路 | v0.2 起，跨 v0.4 |
-| W2 AGT | **更多 Agent 软件** | ACP 通道、OpenCode、Qoder、Cursor | v0.2–v0.3 |
-| W3 PLAT | **Windows / Linux 适配** | 平台抽象层 + 双平台安装包 | v0.3–v0.4 |
-| W4 RMT | **远端：原生AI操作系统 / AgentOS** | 本地→远端观察→远端控制三步（沿用 M-J） | v0.2(J1) / v0.4(J2) / v0.5(J3) |
+| W1 BILL | **Coding Plan 计费展示** | 计费页：官方 API + 本地规则估算双路 | **v0.4**（BILL-4 多账号报表 v0.5） |
+| W2 AGT | **更多 Agent 软件** | ACP 通道、OpenCode、Qoder、Cursor | **v0.3** |
+| W3 PLAT | **Windows / Linux 适配** | 平台抽象层 + 双平台安装包 | **v0.2** |
+| W4 RMT | **远端：原生AI操作系统 / AgentOS** | 本地→远端观察→远端控制三步（沿用 M-J） | v0.5(J1/J2) / v1.0(J3) |
 | W5 MOB | **手机端** | PWA → 原生壳 + 推送 + 外网中继 | v0.5–v1.0 |
 
 依赖关系：`W2-ACP → W2-OpenCode`；`W3-平台抽象 → 全部新适配器的 Windows/Linux 行`；`W4-J3 → W5-MOB4(外网中继)`；`W1 基本独立（只吃 usage-collect 既有真值）`。
@@ -108,11 +108,13 @@
 
 | 版本 | 内容 | 累计新增人日 |
 |---|---|---|
-| **v0.2** | BILL-1/2（计费骨架 + DeepSeek 官方 API）+ AGT-1/2（ACP + OpenCode）+ RMT-1（本地 AgentOS） | ~15–22 |
-| **v0.3** | PLAT-1/2（平台抽象 + Windows）+ AGT-4（Cursor）+ AGT-3 spike（Qoder） | ~14–22 |
-| **v0.4** | AGT-3（Qoder 适配）+ PLAT-3（Linux）+ BILL-3（额度窗口预警）+ RMT-2（远端观察）+ PLAT-4（CI，视建仓时机） | ~15–22 |
-| **v0.5** | RMT-3（远端控制）+ MOB-1/2（PWA + 加固）+ BILL-4（多账号报表） | ~12–18 |
+| **v0.2** | PLAT-1/2/3（平台抽象 + Windows + Linux 全功能 + 安装包）+ PLAT-4（CI，视建仓时机） | ~15–24 |
+| **v0.3** | AGT-1/2（ACP + OpenCode）+ AGT-4（Cursor hooks 观察）+ AGT-3 spike 与适配（Qoder） | ~14–22 |
+| **v0.4** | BILL-1/2（计费骨架 + DeepSeek 官方 API）+ BILL-3（额度窗口预警） | ~10–16 |
+| **v0.5** | RMT-1/2（本地 AgentOS + 远端观察）+ RMT-3（远端控制）+ MOB-1/2（PWA + 加固）+ BILL-4（多账号报表） | ~15–24 |
 | **v1.0** | MOB-3/4（原生壳 + 推送 + 外网中继）+ RMT-4（原生桥接，视上游）+ SDK v1.0 冻结（对齐 20-roadmap W14 锚点） | ~10–16 |
+
+> 上表为 2026-10-08 重排后的节奏：跨平台提前到 v0.2（W3 平台抽象先行，恰好解除后续全部新适配器的 Windows/Linux 依赖），更多软件集中在 v0.3，Coding Plan 监控集中在 v0.4；W4 远端整体后移至 v0.5 起，为前三版让出带宽。
 
 ## 风险登记（新增）
 

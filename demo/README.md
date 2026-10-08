@@ -73,7 +73,9 @@ curl -X POST http://127.0.0.1:7799/api/input \
 - 列出全部项目与**主会话**（含模型/思考程度/状态/更新时间；子代理不混入列表）、按项目筛选；
 - **点击任一会话行选中为投递目标**（实时/历史均可，再点一次恢复自动；composer 顶部显示当前目标）；
 - `POST /api/open` 定位/恢复会话（`sessionController.resolveAgent`，前缀匹配 ✅）；
-- `POST /api/new` 新建会话（`sessionController.create` ✅）；
+- `POST /api/new` 新建会话（`sessionController.create` ✅）；CLI 后端可带 `model` 字段——claude `--model` / codex `-m` / kimi `-m` 启动即生效（2026-10-08 本机 `--help` 实测；ZCode 无启动参数，TUI 内 `/model` 切换，UI 提示并忽略该字段）；
+- **投递即新建（2026-10-08）**：`POST /api/input` 支持目标 `new:<source>:<cwd>`——会话尚不存在时，首条消息直接交给 CLI 无头新建形态（claude `-p` / codex `exec` / kimi `-p` / zcode `--prompt`），回合落盘后目录自动出现新会话（实测 kimi：`new:kimi-code:/tmp/...` → 会话秒级可见）；CLI 缺失时入队，20s 周期自动重试；
+- **按会话分队列（2026-10-08）**：队列条目带 `targetKey`（`sess:<id>` | `new:<source>:<cwd>`）与 `source`，UI 按 targetKey 分组展示（组标题 + 按组清空）；重发携带原条目 source/targetKey（修复此前重发丢源、被误路由到 DSH 的问题）；旧队列文件读取时自动迁移；
 - `POST /api/input {"text","sessionId"?}` 直接送达（`agents.get/resume + followup` ✅，落盘可查）。
 
 **投递链路说明**：desktop profile 进程内直调 `sessionController.prompt` 会丢 cancellation signal（DSH 侧问题，已实测），插件按 **agents 优先、prompt 回退** 的顺序投递；插件自身 socket 有 inode 对照 + 5s 自愈重绑（HMR 重载不再产生「活着却连不上」的孤儿）。插件**代码**更新需重启 DSH（宿主进程内模块缓存）；`cordis.patch.yml` 变更只重新 apply。

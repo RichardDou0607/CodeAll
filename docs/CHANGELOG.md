@@ -1,6 +1,75 @@
 # 变更日志（文档与契约）
 
 ## 2026-10-08
+### ZCode 消息投递切换为 app-server 信息管道（用户定向：不经上游登录，管道直发）
+
+- **可行性结论**：`zcode app-server`（ZCode Protocol，stdio NDJSON，`{id, method, params}` 信封、无握手）是桌面 App ↔ 引擎的官方进程间通道。`session/resume` 时服务器反向请求 `session/requestRuntimePreferences`（应答固定三键即可）；`session/send` 接受**逐条 `modelSelection` 覆盖**（严格 schema `{providerId, modelId, options.reasoningLevel}`）——account 会话的回合由个人 Key provider（本机实测 moonshot-kimi/kimi-k3）执行，全程不经 Z.AI 登录态。副作用（实测）：覆盖会被引擎原地持久化为会话保存的选择，且 account:* 无法从外部恢复（Provider Registry 不含登录态 provider）——管道投递后 App 内默认模型即管道 provider，App 内 /model 可手动切回。
+- **落地**：`cli-control.mjs` 新增 `deliverViaZcodePipe` + `pickZcodePipeModel`（env `PET_ZCODE_PIPE_MODEL` > 会话库最近非 account provider；只读 session_entry 元数据，不碰凭证）。account 会话投递顺序改为 **管道 → UI 粘贴（回落）**，各自可经 `PET_ZCODE_PIPE=0` / `PET_ZCODE_UI_DELIVER=0` 关闭。新增自检子命令 `--pipe-zcode <sessionId> [text]`。
+- **生命周期红线（两次实测踩坑）**：回合由 app-server 进程内引擎执行，进程须保活到回合终态（终态信号：`session/event` 的 `turn.completed`/`turn.failed`（需 `session/subscribe {deliveryKind:"desktop-continuous"}`）+ `computer-use/operation-event` 的 `turn-completed` 兜底）；提前断开 = `model_request_cancelled`。delivered 语义 = accepted + 8s 快速失败窗口；之后后台保活（30min 硬上限），日志落 `~/.agent-pet/cli-control/zcode-pipe-*.log`。
+- **UI 粘贴通道同步加固**：权限错误识别覆盖「(1002)/不允许发送按键/辅助功能」（此前只认英文 assistive/25211，中文系统下漏判）；检出权限缺失自动打开「系统设置 → 隐私与安全性 → 辅助功能」；投递前备份、完成后恢复用户剪贴板（pbpaste/pbcopy，尽力而为）。
+- **验证**：`--pipe-zcode` 直发真实 account 会话 → accepted → 事件流确认 `providerId=moonshot-kimi` 发起模型请求 → 回合落盘（docs/40 §3.12 已更新）。
+
+### ZCode account 会话 UI 粘贴投递通道（用户定向：消息应直接进 App）
+
+- **深挖收尾**：三件套注入（active revision-30 目录 + bundled + personal）后无头续接 account 会话仍 `Select a model before continuing`——active 目录已加载（输出 `ZCode Built-in skipped (not-due)`）但 provider 注册门仍只在 App 进程内；App 无端口/应用级 socket，深链仅 `workspace/open` 与 `oauth/callback`。
+- **新通道**：`cli-control.mjs` `deliverViaZcodeUi`——workspace 深链带出目标项目 → pbcopy 装消息 → 激活 ZCode → System Events cmd+V + 回车；account 会话投递自动走此通道（`PET_ZCODE_UI_DELIVER=0` 关闭回落如实失败）。osascript 15s 超时覆盖首次辅助功能授权弹窗；权限缺失返回 `accessibility-permission` + 指引。
+- **实测**：首次试投因目标会话正在生成（composer 非可发送态）未落单；授权 + 会话空闲后，用户经 UI 自测 A/B/C 三条消息全部以真实 user 角色落进目标会话（DB 实证 5:42/5:44），各触发 assistant 回合——**UI 粘贴通道端到端成立**，观察闭环（zcode-adapter 跟随）同样捕获。粘贴在 App 当前聚焦窗口进行，外部无法核验聚焦会话（诚实边界：目标会话窗口需在 ZCode 内打开且空闲）。
+- 已同步 App 包并重启（7799）。
+
+
+### ZCode account 无头投递终局定位：login 不解锁，改走深链打开（用户完成 login 后复测）
+
+- **复测**：用户经 `--login-zcode`（带全 Provider Config env）完成 Z.AI OAuth，`~/.zcode/v2/credentials.json` 刷新（2115→3468 字节，16:38）；但无头 `--resume` account 会话仍失败，CLI 日志 cause 仍为 `Select a model before continuing`——**10-07「login 后可续接」结论在 App 3.14.4 / CLI 0.16.9 失效**，account provider 仅桌面 App 进程内注入这一结论坐实（凭证可解 ≠ provider 可注册）。
+- **改动**：`cli-control.mjs` account 预检文案改为如实说明（login 亦不解除）+ 指引深链；`openCliSession` 对 zcode account 会话改走 `open zcode://workspace/open?path=<cwd>` 深链（直达桌面 App 该项目，App 内点击会话继续；此前 Terminal resume 对 account 同样卡死）。深链面为实测仅有 workspace/open 与 oauth/callback，无会话级路由。
+- **上线**：同步进 App 包并重启；`--login-zcode` 子命令保留（后续上游恢复 login 语义时仍可用）。
+- **边界**：builtin / 个人 Key 会话的无头投递不受影响（本日已实测）；account 会话投递待上游提供进程外注册路径（列入上游依赖风险）。
+
+### ZCode 登录自助子命令 + App 包内服务热更上线（用户报障：裸跑 zcode login 报「无法定位 Provider Config」）
+
+- **现象**：指引用户终端跑 `zcode login`，报「无法定位 CLI ZCode Built-in Provider Config：…/glm/provider/zcode-builtin.json, /config/…」——独立引擎的搜索路径不含真实位置（`Resources/config/provider/`），必须由适配器注入两个 `ZCODE_*_PROVIDER_CONFIG_FILE` 环境变量（docs/40 §3.12 既有结论，此前只写进了适配器、没写进用户指引，属指引缺陷）。
+- **修复**：`cli-control.mjs` 新增 `--login-zcode` 自助子命令（解析 bin → 注入全量 env → 交互式 `login`，浏览器授权）；`account:*` 预检的报错改为指向该子命令并注明裸跑会失败。
+- **上线**：本次会话累计的服务端修复（分队列/投递即新建/重发带源/account 预检/预检 provider 管道修复/新建选模型）已按打包清单热更进 `/Applications/CodeAll.app/Contents/Resources/app/`（demo 四件 + 9 个 adapters）并重启 App——release 构建不嵌仓库路径，reload/重启不会自动用上仓库代码，须先同步包内文件；上线后在真实 7799 验证：新 UI 字段在、本会话（account）投递返回完整中文说明且不再产生必败进程（日志 14→14）。
+
+### ZCode account 预检在真实路径未生效修复（用户报障：指定本会话投递仍报 Model creation failed）
+
+- **根因**：上一轮加的 `account:*` 预检依赖 `session.provider`，但 `framed.mjs` `deliverInput` 构造会话对象时两个分支（live 事件行 / catalog 行）都只带 `sessionId`+`cwd`，**provider 被丢弃**——预检永远拿不到，照旧 spawn 必败进程。（用户运行的 7799 服务同时还是打包 App 内的旧 cli-control，两层叠加。）
+- **修复**：`deliverInput` 统一经 `resolveSessionAny` 取 catalog 元数据，`sess` 带 `provider` 传给 `deliverControl`；live 分支同样回查 catalog。
+- **验证**：临时 7798 服务 `POST /api/input {"sessionId":"sess_a19c05a0…"}`（本会话，account:bigmodel-individual-coding-plan）→ HTTP 502 + detail 为完整中文说明（上游限制 + `zcode login` 解锁指引），**zcode 投递日志数 13→13（不再产生必败进程）**；item 正确携带 source/targetKey；test-window-actions 20/20、test-window exit 0。测试后临时服务与共享队列文件已恢复。
+
+### 投递队列重构：按会话分队列 + 投递即新建（用户定向）
+
+- **修复（重发丢源）**：`/api/input/:id/resend` 此前只传 `sessionId` 不传 source——CLI 失败项重发会被误路由到 DSH 插件/本地队列，永远到不了原目标；现携带原条目 `source`/`targetKey` 重发。
+- **按会话分队列**：条目新增 `targetKey`（`sess:<id>` 既有会话 | `new:<source>:<cwd>` 待新建）与 `source` 字段，旧 `input-queue.jsonl` 读取时自动迁移；UI 队列按 targetKey 分组渲染（组标题含来源/目录/会话名 + 计数 + **按组清空**按钮；单条复制/重发/删除与全局清空保留）。
+- **投递即新建**：`POST /api/input` 支持目标 `new:<source>:<cwd>`（会话尚不存在时不再报 unknown-session）——首条消息交给 CLI 无头新建形态：`claude -p` / `codex exec`（非 git 目录自动 `--skip-git-repo-check`）/ `kimi -p` / `zcode --mode build --prompt`，模型参数随行（claude `--model` / codex `-m` / kimi `-m`）；`cli-control` 抽出共享 `headlessRun`（detached spawn + 2.5s 快速失败 + 0600 日志），新增 `createArgs`/`deliverCreateViaCli`。CLI 不在 PATH 时入队，服务每 20s 自动重试冲刷（送达即出队）。
+- **UI**：新建对话框新增「首条消息（可选）」——CLI 后端填写后不开终端，直接以此消息无头创建会话；留空走原 Terminal 新窗口。
+- **验证**：test-window-actions 20/20（新增：首条消息走 new: 目标 + 模型随行 / 队列两组分组渲染 / 分组标题可辨）；test-window / test-html / test-ui-dom / test-mini / test-usage-calendar exit 0；**真实端到端**：临时 7798 端口 `POST /api/input {sessionId:"new:kimi-code:/tmp/codeall-create-test"}` → 返回 delivered（via kimi 无头新建），15s 内目录出现新会话 `session_5bb6e344…`（模型回复 "ok"，状态 done）——投递即新建 + 观察闭环实证；测试后临时服务已停、共享队列文件已恢复。
+
+### 新建会话支持选择模型与项目（用户定向：新建子窗口选择模型和项目）
+
+- **背景**：此前 CLI 后端新建会话完全不传模型——由各 CLI 自身默认/上次选择决定（claude 记住 `/model`、codex 用 config.toml、kimi 用 default_model）；只有 DSH（插件通道）支持 model+reasoning。对话框已有项目目录输入（datalist 列出已知项目），本次补齐模型。
+- **改动**：`cli-control.mjs` CLI_TARGETS 新增 `modelArgs`（claude `--model`、codex `-m`、kimi `-m`，均 `--help` 实测）；`newCliSession(source, cwd, model)` 透传启动模型；ZCode 无启动参数（TUI 内 `/model`），忽略该字段。`framed.mjs /api/new` 透传 `model`。`window.html` 新建对话框：模型字段从 DSH 专属改为 DSH+三家 CLI 通用（候选 = 本机快照中该源真实出现过的模型，datalist，最多 12 个，留空 = 默认）；ZCode 隐藏字段并提示「打开后 TUI 里 /model 切换」。
+- **验证**：test-window-actions 新增 3 项（CLI 模型字段可见 / payload 携带 model / ZCode 隐藏+提示），17/17 过；test-html / test-ui-dom / test-window exit 0；真实链路经 detached tmux 验证——`newCliSession('kimi-code', '/tmp', 'kimi-k3')` 实际启动命令为 `kimi -m kimi-k3`（tmux pane_start_command 实证），测试后 tmux 已清理。注意：正在运行的 7799 服务是打包 App 内旧代码，需重新打包或跑仓库版后生效。
+
+### ZCode 投递失败根因定位 + 五源投递通道实测（用户报障：向活跃 ZCode 会话投递显示失败）
+
+- **现象**：向 ZCode 活跃会话（`account:bigmodel-individual-coding-plan` provider）投递，2.5s 快速失败窗内回报 `Model creation failed`。
+- **根因（修正）**：非登录态文件缺失——`~/.zcode/v2/credentials.json` 全部字段可用引擎回退密钥解开（含 coding-plan api-key）；CLI 日志 `turn.failed` 显示 `cause="Select a model before continuing"`：account provider 仅由桌面 App 进程内注入的 model adapter 注册（App 引擎 `hasInjectedModelAdapter=true`，独立引擎 `=false`），无头 `--resume` 恢复不了模型选择。与用户是否删除独立 CLI 无关（`resolveCliBin` 一直按设计使用 App 包内引擎）。
+- **修复**：`cli-control.mjs` `deliverViaCli` 新增预检——zcode 会话 `provider` 为 `account:*` 时立即返回 `zcode-account-provider`（附解锁指引：终端 `zcode login` / 桌面 App 内继续）；builtin / 个人 Key 会话路径不变。
+- **五源实测（真实投递 + 转录/CLI 输出双验证）**：Claude Code ✅（自检会话回复 "ok"）；Kimi Code ✅（同）；ZCode builtin ✅（探测会话回复 "ok"）；ZCode account:* ❌（上游限制，已预检）；Codex 机制 ✅（消息已写入 rollout、会话正确续接）但上游 403 `user quota is not enough`（quickrouter.ai 中转配额耗尽，账号侧问题，非本产品缺陷；重试 ×5 拖过 2.5s 窗导致先报 ok 后失败，属已知异步边界）。
+- **回归**：test-window-actions 14/14、multi-source-check 59/59 全过；docs/40 §3.12 根因段已更新。
+
+### 宣传片重制：品牌主张 + 六种转场 + 弹性动画 + 节奏收紧（用户定向）
+
+- **文案**：品牌主张「一个电脑，一个世界 / 在这里创造你的世界 / 一切皆可编码」植入开篇与结尾（结尾标题 + 眉标「CODEALL · 你的 AGENT 总控」），强化「你的 Agent 总控」定位；`发布文案.md` 三平台文案同步。
+- **动画**：`render.mjs` 重写——镜头间六种转场轮换（推挤 / 斜切彩带 / 条带 / 翻转 / 圆形扩散 / 弹跳缩放，路线图入口斜切、终章弹跳缩放定点覆盖）；场景内改弹性动画（标题回弹入场、截图卡片弹性缩放 + 呼吸浮动 + 微旋、Agent 图标弹跳、迷你条悬浮漂移、路线图步骤下落回弹、文案卡上浮 + accent 下划线扫入、进度条段完成脉冲）。转场经离屏双缓冲合成。
+- **节奏**：镜头时长收紧——开篇 3 小节、功能镜 2 小节（4 秒）、路线图 4+3 小节、结尾 3 小节；完整版 104s→**74s**，精简版 50s→**44s**。文案卡配时改为转场结束后出场、退场间隙加大（`audio.mjs`）。
+- **验证**：三版重编码 verify 全过（1:14 / 1:14 / 0:44，-13.4~-14 LUFS，峰值 ≤ -1.0 dBFS，无黑帧）；六种转场逐帧像素级检查通过（彩带斜率、条带接缝、翻页中缝、圆形扩散边界、双帧推挤分区）；布局溢出 0 错误。
+
+### 路线图版本节奏重排（用户定向：v0.2 跨平台 → v0.3 更多软件 → v0.4 Coding Plan 监控）
+
+- **决定**：**v0.2 = Windows / Linux 跨平台适配**（W3 PLAT 整体提前）；**v0.3 = 接入 Cursor、OpenCode、Qoder 等软件**（W2 AGT 集中交付）；**v0.4 = 厂商 Coding Plan 监控**（W1 BILL 核心里程碑集中：额度 / 用量 / 预警）。W4 RMT 后移至 **v0.5 起**（J1/J2 → v0.5，J3 → v1.0），为前三版让出单人带宽；W5 MOB 维持 v0.5–v1.0；v0.5/v1.0 面向远端与手机端的定位不变。
+- **改动**（五处同步）：`README.md` §四工作流表「首个里程碑」列与「版本节奏」行（标注重排日期）；`docs/22-post-release-roadmap.md` 头注重排记录、§0 总览表「建议目标版本」列、「排期建议」表（里程碑 ID 不变，按新版本重新编组，人日区间按原分项折算）；`promo/alpha-0.1.0/story.mjs` 完整版与精简版路线图镜头及文案卡；`promo/alpha-0.1.0/发布文案.md`、`功能覆盖.md`、`README.md` 事实边界同步。
+- **验证**：宣传片三版重新编码，verify 全过（1:44 / 1:44 / 0:50，h264 30fps，-13.5 LUFS，峰值 ≤ -1.0 dBFS，无黑帧）；布局溢出检查 0 错误；`package.mjs` 分镜与清单哈希已刷新。
 
 ### v0.1.0 首次发布定稿：软件列表收敛为五源，移除 AgentOS / OpenCode
 

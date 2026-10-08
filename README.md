@@ -103,12 +103,12 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 
 | 工作流 | 主题 | 首个里程碑 |
 |---|---|---|
-| **W1 BILL** | 各厂商 Coding Plan 计费展示：官方 API（DeepSeek balance 先行）+ 本地规则估算双路，额度环 / 窗口倒计时 / 预警 / 多账号 | BILL-1 计划配置模型 + 计费页（v0.2） |
-| **W2 AGT** | OpenCode（ACP 通道，恢复注册行）、Qoder（spike 先行）、Cursor（hooks 观察）、Copilot CLI（可选） | AGT-1 ACP 统一通道（v0.2） |
-| **W3 PLAT** | Windows / Linux 适配：平台抽象层（路径/进程/版本/终端）→ 双平台全功能 + 安装包 + CI 矩阵 | PLAT-1 平台抽象（v0.3） |
-| **W4 RMT** | 远端能力：本地 AgentOS 观察 → SSH 远端观察（`agentos@<host>` 主机分组）→ 远端控制（子命令白名单，凭证零存储）；对接「原生AI操作系统」 | RMT-1 本地 AgentOS（v0.2） |
+| **W1 BILL** | 各厂商 Coding Plan 计费展示：官方 API（DeepSeek balance 先行）+ 本地规则估算双路，额度环 / 窗口倒计时 / 预警 / 多账号 | BILL-1 计划配置模型 + 计费页（v0.4） |
+| **W2 AGT** | OpenCode（ACP 通道，恢复注册行）、Qoder（spike 先行）、Cursor（hooks 观察）、Copilot CLI（可选） | AGT-1 ACP 统一通道（v0.3） |
+| **W3 PLAT** | Windows / Linux 适配：平台抽象层（路径/进程/版本/终端）→ 双平台全功能 + 安装包 + CI 矩阵 | PLAT-1 平台抽象（v0.2） |
+| **W4 RMT** | 远端能力：本地 AgentOS 观察 → SSH 远端观察（`agentos@<host>` 主机分组）→ 远端控制（子命令白名单，凭证零存储）；对接「原生AI操作系统」 | RMT-1 本地 AgentOS（v0.5） |
 | **W5 MOB** | 手机端：移动 PWA（二维码配对）→ 原生壳 + 审批/额度推送 → 经自管 AgentOS 主机外网中继 | MOB-1 PWA（v0.5） |
 
-版本节奏（单人折算）：**v0.2** 计费骨架 + ACP/OpenCode + 本地 AgentOS → **v0.3** Windows + Cursor → **v0.4** Linux + Qoder + 远端观察 + 额度预警 → **v0.5** 远端控制 + PWA → **v1.0** 原生手机壳 + 外网中继 + 适配器 SDK 冻结。
+版本节奏（单人折算，2026-10-08 重排）：**v0.2** Windows + Linux 跨平台适配 → **v0.3** Cursor / OpenCode / Qoder 等软件接入 → **v0.4** 厂商 Coding Plan 监控（额度 / 用量 / 预警）→ **v0.5** 远端控制 + 本地 AgentOS + PWA → **v1.0** 原生手机壳 + 外网中继 + 适配器 SDK 冻结。
 
 原则不变：**能力落地才进软件列表**（v0.1.0 首发 AgentOS/OpenCode 即按此移除，接入后回归注册表）。
