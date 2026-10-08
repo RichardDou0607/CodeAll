@@ -85,9 +85,9 @@ curl -X POST http://127.0.0.1:7799/api/input \
 ```bash
 node demo/frame.mjs                  # 终端实时工作框（跟随真实 DSH 会话）
 node demo/frame.mjs --once           # 打一帧（截图/CI）
-node demo/frame.mjs --replay fixtures/session-replay.pet.jsonl --speed 8   # 离线回放
-node demo/record-replay.mjs          # 真实会话 → fixtures/session-replay.pet.jsonl
-open demo/frame.html                 # 自包含可视化回放（548 条真实事件 + 17 条合成多会话事件）
+node demo/frame.mjs --replay fixtures/contract-sample.pet.jsonl --speed 8   # 离线回放（合成契约样本）
+node demo/record-replay.mjs          # 真实会话 → fixtures/session-replay.pet.jsonl（只留本地，已 gitignore）
+node demo/build-html.mjs && open demo/frame.html   # 自包含可视化回放（全部为合成事件：契约样本 + 多会话演示）
 ```
 
 ## 诚实边界

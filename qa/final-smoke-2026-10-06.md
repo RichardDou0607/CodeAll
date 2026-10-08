@@ -13,7 +13,7 @@
 | schema/validate-pet-event.mjs --self-test | ✅ |
 | scripts/replay-check.mjs | ✅ |
 | adapters/cli-control.mjs --selftest | ✅ 3 CLI 通道 + Terminal 机制 |
-| scripts/check-fixtures.mjs | ⚠️ 既有失败（session-replay 乱序断言，改动前基线即失败，与本轮无关） |
+| scripts/check-fixtures.mjs | ⚠️ 既有失败（session-replay 乱序断言，改动前基线即失败，与本轮无关；该 fixture 已于 2026-10-08 因隐私移除，现为合成样本全绿） |
 
 ## B. 真实投递闭环（--live）
 

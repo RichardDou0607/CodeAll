@@ -31,6 +31,13 @@
 - **README 重写**：从规划态改为产品态——已实现能力四域表（观察/控制/用量/外壳 + 安全红线，全部 v0.1.0 实测）、快速开始（断言计数更新为当前基线 85/14/12/63/16）、运维口径（服务重启规则 + Spotlight 直开时 PET_INPUT_CMD 不接线的已知缺口）、文档索引补 22/53/CHANGELOG、后续计划摘要表。修正过时叙述（「Tauri 外壳尚未实现」→ 已实现并安装）。
 - 本轮仅文档，无代码改动；未提交（待用户审阅）。
 
+### 隐私清理：移除真实会话录制，演示数据全部合成（用户定向）
+
+- **删除**：`fixtures/session-replay.pet.jsonl`（2026-10-05 录制的 548 条真实 DSH 会话事件）与 `demo/frame.html`（内嵌同一录制的自包含回放页）——两文件从 git 全历史清除并强推远端。
+- **替代**：`demo/build-html.mjs` 改用合成契约样本 `fixtures/contract-sample.pet.jsonl` 作为输入（并修掉 cwd 相对路径依赖）；`frame.html` 转为**不入库的生成产物**（`node demo/build-html.mjs`），`test-html.mjs` 缺失时自动构建；`.gitignore` 新增 `fixtures/session-replay*.pet.jsonl` 与 `demo/frame.html`——今后真实录制只留本地，杜绝再次入库。
+- **验证**：test-html 8 项全过（57 条事件全为合成来源）；check-fixtures **首次全绿**（既有 52 项 session-replay 乱序基线随文件移除而消失）；README / demo/README / qa 记录同步更新（离线回放命令指向 contract-sample）。
+- 边界说明：文档中的会话 ID 级引用（docs/00/35/40 的示例 ID 与本地路径、_reference 用法示例）不含对话内容，予以保留。
+
 ## 2026-10-07
 
 ### ZCode 接入（M-L，五源；用户当日指定「把 ZCode 也接入并完整回归」）

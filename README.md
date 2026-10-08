@@ -65,7 +65,7 @@ apps/shell/run.sh --install           # 首次：构建并装进 /Applications�
 node demo/framed.mjs --port 7799    # 本地服务：五源观察 + CLI 控制通道 + SSE（外壳未起时可手动）
 open http://127.0.0.1:7799/           # 迷你条；/window.html = App 界面（浏览器可同源访问）
 
-# 回归与验收（当前基线全绿；check-fixtures 为既有 session-replay 基线，待重录）
+# 回归与验收（当前基线全绿）
 node demo/test-window.mjs             # App 界面渲染自检（85 项断言）
 node demo/test-window-actions.mjs     # 交互行为回归（14 项）
 node demo/test-mini.mjs               # 迷你条渲染自检（12 项）

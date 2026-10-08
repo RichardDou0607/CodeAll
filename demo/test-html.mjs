@@ -5,8 +5,14 @@
  */
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { spawnSync } from 'node:child_process';
 
-const html = fs.readFileSync(new URL('./frame.html', import.meta.url), 'utf8');
+const frameUrl = new URL('./frame.html', import.meta.url);
+if (!fs.existsSync(frameUrl)) {          // frame.html 为生成产物（不入库）：缺失时从合成样本自动构建
+  const r = spawnSync(process.execPath, [new URL('./build-html.mjs', import.meta.url).pathname], { stdio: 'inherit' });
+  if (r.status !== 0) { console.error('❌ demo/frame.html 不存在且自动生成失败（node demo/build-html.mjs）'); process.exit(1); }
+}
+const html = fs.readFileSync(frameUrl, 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 const ids = ['frame', 'log', 'strip', 'pos', 'stats', 'play', 'step', 'speed', 'restart'];
 const store = new Map();

@@ -20,3 +20,7 @@ apps/shell/src-tauri/resources/
 
 # keep fixture recordings that are meant to be committed
 !fixtures/*.pet.jsonl
+
+# 真实会话录制只留本地（隐私口径）；frame.html 为生成产物（node demo/build-html.mjs）
+fixtures/session-replay*.pet.jsonl
+demo/frame.html

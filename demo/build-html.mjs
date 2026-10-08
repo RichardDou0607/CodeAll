@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 /**
- * demo/build-html.mjs — 生成自包含可视化演示 demo/frame.html
- * 输入：fixtures/session-replay.pet.jsonl（真实录制）+ 合成的多会话事件（演示 5 行 + 折叠 +N）
+ * demo/build-html.mjs — 生成自包含可视化演示 demo/frame.html（生成产物，不入库）
+ * 输入：fixtures/contract-sample.pet.jsonl（合成契约样本）+ 合成的多会话事件（演示 5 行 + 折叠 +N）。
+ * 隐私口径：真实会话录制一律只留在本地（fixtures/session-replay*.pet.jsonl 已 gitignore），演示数据全部合成。
  */
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const replay = fs.readFileSync('fixtures/session-replay.pet.jsonl', 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const replay = fs.readFileSync(path.join(ROOT, 'fixtures', 'contract-sample.pet.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 const base = replay[0].ts;
 const events = replay.map(e => ({ ...e, t: e.ts - base }));
 const synth = [];
