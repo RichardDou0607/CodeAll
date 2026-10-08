@@ -7,6 +7,9 @@ target/
 .DS_Store
 *.log
 
+# bundled service staging (apps/shell/src-tauri/resources/app — 含复制的 node 二进制，构建时生成)
+apps/shell/src-tauri/resources/
+
 # local runtime data (never commit)
 .agent-pet/
 *.pet.jsonl.zstd

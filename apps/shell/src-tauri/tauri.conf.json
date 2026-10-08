@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.agentpet.shell",
   "build": {
-    "frontendDist": "../webui"
+    "frontendDist": "../webui",
+    "beforeBuildCommand": "node tools/bundle-service.mjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -51,8 +52,12 @@
   "bundle": {
     "active": true,
     "targets": [
-      "app"
+      "app",
+      "dmg"
     ],
+    "resources": {
+      "resources/app/": "app/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

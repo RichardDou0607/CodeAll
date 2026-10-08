@@ -16,6 +16,21 @@
 - **修复**：`lib.rs` 新增 `set_floating_space_behavior()`（objc2-app-kit 直调，与背景拖拽同一模式），对 main 窗口设置 `CanJoinAllSpaces | FullScreenAuxiliary`——常驻所有 Space 且可与全屏窗口并存；`shell_window_diag` 增加 `spaceBehavior*` 读回字段。置顶（📌）语义不变：未置顶被全屏窗口盖住但桌面常在，置顶则浮于全屏之上。
 - **验证**：debug 构建实机拉起日志 `FLOATING_SPACE_BEHAVIOR ok=true`（canJoinAllSpaces+fullScreenAuxiliary 均生效）；详见 docs/53 §14。
 
+### 独立分发打包：服务 + Node 运行时进 .app，GitHub 发布 v0.1.0-alpha（用户定向：可下载直装、仅 Apple Silicon、零额外依赖）
+
+- **问题**：原安装包按编译期路径找源码仓库、要求系统 Node——换机即失效，不满足「下载即用」。
+- **方案**：`apps/shell/tools/bundle-service.mjs`（tauri `beforeBuildCommand`）把服务子集暂存进 `src-tauri/resources/app/`（demo 服务四件 + assets、9 个 adapters、投递工具、dsh-pet 插件、**node 二进制**），经 `bundle.resources` 收进 `CodeAll.app/Contents/Resources/app/`；node 为 universal 时 `lipo -thin arm64` 裁剪（签名校验失败自动回退 fat）。`lib.rs` 加 `bundled_app_root()`：仓库根解析序 = 环境变量 → 编译期路径（开发）→ **打包内 Resources/app** → 向上找；node 解析同理。`framed.mjs` 启动时把自身 node 目录前置进 PATH——打包态下 cli-control 拉起的 shebang 脚本（zcode.cjs 等）无需系统 Node。bundle targets 增 `dmg`。
+- **产物**：CodeAll.app 239MB（裁剪后 ~130MB 级）/ DMG 78MB（裁剪后约 40MB 级），arm64 专用，ad-hoc 签名（发布说明附 `xattr -cr` 指引）。
+- **验证**：装进 /Applications 后临时移走源码仓库实测独立运行（服务由打包内 node 从 Resources 拉起，五源观察/目录/用量正常）——细节见下；回归全绿。
+- **发布**：版本定性为 **alpha 测试版**（用户指定）；tag 由 v0.1.0 重定为 v0.1.0-alpha（原 tag 未发布过，仅本地移动），GitHub Release 附 DMG。
+
+### v0.1.0 后续构建任务规划 + README 重写（用户定向：计费展示 / 更多 Agent / 跨平台 / 远端 / 手机端）
+
+
+- **新增 `docs/22-post-release-roadmap.md`**：五条工作流落成可排期任务——W1 BILL（Coding Plan 计费展示：官方 API + 本地规则估算双路，DeepSeek balance 接口文档确证先行，消费版计划普遍无公开 API 是架构前提）、W2 AGT（ACP 统一通道 → OpenCode 恢复注册行 → Qoder spike 先行 → Cursor hooks 观察 → Copilot 可选）、W3 PLAT（平台抽象层 → Windows/Linux 全功能 + CI）、W4 RMT（沿 docs/21 §6：本地 AgentOS → SSH 远端观察主机分组 → 远端控制白名单，对接原生AI操作系统）、W5 MOB（PWA 二维码配对 → 原生壳推送 → 经自管 AgentOS 外网中继）；含版本节奏（v0.2→v1.0）、人日估算、风险登记与回归要求。
+- **README 重写**：从规划态改为产品态——已实现能力四域表（观察/控制/用量/外壳 + 安全红线，全部 v0.1.0 实测）、快速开始（断言计数更新为当前基线 85/14/12/63/16）、运维口径（服务重启规则 + Spotlight 直开时 PET_INPUT_CMD 不接线的已知缺口）、文档索引补 22/53/CHANGELOG、后续计划摘要表。修正过时叙述（「Tauri 外壳尚未实现」→ 已实现并安装）。
+- 本轮仅文档，无代码改动；未提交（待用户审阅）。
+
 ## 2026-10-07
 
 ### ZCode 接入（M-L，五源；用户当日指定「把 ZCode 也接入并完整回归」）

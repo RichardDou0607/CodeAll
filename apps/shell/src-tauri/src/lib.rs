@@ -141,7 +141,16 @@ fn parse_port() -> u16 {
     DEFAULT_PORT
 }
 
-/// 仓库根目录：1) 环境变量 2) 编译期路径 3) 从可执行文件向上找 demo/framed.mjs
+/// .app 打包内自带的服务目录（Contents/Resources/app，布局 = 仓库根子集）。
+/// 存在 = 独立分发的安装包，无需源码仓库与系统 Node。
+fn bundled_app_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let contents = exe.parent()?.parent()?; // Contents/MacOS/x → Contents
+    let root = contents.join("Resources").join("app");
+    root.join("demo").join("framed.mjs").exists().then_some(root)
+}
+
+/// 仓库根目录：1) 环境变量 2) 编译期路径（开发）3) 打包内 Resources/app（独立分发）4) 从可执行文件向上找
 fn resolve_repo_root() -> PathBuf {
     if let Ok(p) = std::env::var("AGENT_PET_ROOT") {
         let pb = PathBuf::from(p);
@@ -155,6 +164,9 @@ fn resolve_repo_root() -> PathBuf {
             return root.to_path_buf();
         }
     }
+    if let Some(bundled) = bundled_app_root() {
+        return bundled;
+    }
     if let Ok(exe) = std::env::current_exe() {
         let mut cur = exe.parent().map(Path::to_path_buf);
         while let Some(dir) = cur {
@@ -167,12 +179,18 @@ fn resolve_repo_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// node 可执行文件：环境变量 → 常见绝对路径 → PATH
+/// node 可执行文件：环境变量 → 打包内 Resources/app/bin/node → 常见绝对路径 → PATH
 fn resolve_node() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("AGENT_PET_NODE") {
         let pb = PathBuf::from(p);
         if pb.exists() {
             return Some(pb);
+        }
+    }
+    if let Some(bundled) = bundled_app_root() {
+        let p = bundled.join("bin").join("node");
+        if p.exists() {
+            return Some(p);
         }
     }
     for c in ["/usr/local/bin/node", "/opt/homebrew/bin/node", "/usr/bin/node"] {

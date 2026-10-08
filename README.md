@@ -1,105 +1,114 @@
-# Agent 工作框 / 桌宠（Agent Desktop Pet）
+# CodeAll（Agent 工作框 / 桌宠）
 
-> 一个常驻桌面的**工作框 / Agent 总控**：统一**观察与控制**本机各个 AI Agent（DeepSeek Harness、Claude Code、Codex、Kimi Code…），并经 AgentOS 控制多台远端服务器（终局方向，[docs/21 §6](./docs/21-multi-agent-adoption-plan.md)）；宠物形象是框内的**可选**陪伴元素。
-> 规划文档集状态：**DRAFT（2026-10-05）**，由 Agent Teams 并行产出（1 位 Lead + 6 名队友，各自独立写作用域）。所有事实标注了来源：本机实测 / 官方文档 URL，未验证项显式标注。
+> 一个常驻桌面的**工作框 / Agent 总控**：统一**观察与控制**本机各个 AI Agent（DeepSeek Harness、Claude Code、Codex、Kimi Code、ZCode），统计各厂商 Coding Plan 的 Token 用量，并经 AgentOS 连接远端服务器与「原生AI操作系统」（终局方向，[docs/21 §6](./docs/21-multi-agent-adoption-plan.md)）；宠物形象是框内的**可选**陪伴元素。
+>
+> 当前版本：**v0.1.0-alpha（2026-10-08，alpha 测试版）**——功能可用但仍在快速迭代，接口与数据格式可能调整。后续计划见 [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md)。
 
-## 一、两阶段目标
+## 〇、下载安装（macOS · Apple Silicon）
 
-| 阶段 | 周期 | 目标 | 判定标准 |
-|---|---|---|---|
-| **Phase 1** | W1–W8 | **DeepSeek 工作框 demo**：真实 DSH 会话驱动工作框状态变化，可 5 分钟演示 | [70-team-and-metrics.md](./docs/70-team-and-metrics.md) Gate 1 |
-| **Phase 2** | W9–W20 | **多 Agent 工作框**：Claude Code / Codex / Kimi Code / ACP 等适配器 + 适配器 SDK + 皮肤/商业化 + 分发 | [70-team-and-metrics.md](./docs/70-team-and-metrics.md) Gate 2 |
-| **Phase 3（方向）** | W21+ | **远端 AgentOS 舰队**：总控经 AgentOS（每台远端服务器一个实例）同时观察与控制多台远端服务器 | [21-multi-agent-adoption-plan.md §6](./docs/21-multi-agent-adoption-plan.md)（方向已定，验收待细化） |
-
-## 二、已确认的关键决策（2026-10-05）
-
-1. **产品形态**：默认 = **悬浮卡片**，首行固定显示「状态 + 当前动作 + 计时 + 未决审批」，其下**每个会话一行**；**宠物形象默认关闭**，可选开启。
-2. **技术栈**：**Tauri v2**（.app 4.0 MB、空闲 `phys_footprint` 57.1 MB、透明+置顶+点击穿透+socket→JSONL→状态全链路本机跑通）；备选纯 Swift+AppKit（Windows 归零）；Electron 作为备选 B。
-3. **事件契约**：`docs/00-interface-contract.md` **v1.2 冻结**（16 个 type 字符串 / 16 行、Hub 独占状态机与计时、Phase 1 只读、控制帧 ctl、瞬态/持久错误）。
-4. **DSH 事件获取**：主路径 = Cordis 本地插件（进程内 <1 ms，patch 热重载已实测，**需用户授权改一行配置**）；**兜底 = 会话日志多帧 zstd 增量 tail（p50 247 ms，零侵入，已交付脚本）** → 路线图按「兜底先跑通」安排，不阻塞。
-5. **内存验收口径**：`phys_footprint` 合计（RSS 仅作参考）。
-6. **分发**：优先 DMG 直分发（`macOSPrivateApi` 与 App Store 审核存在冲突，见风险登记册 R-12）。
-
-## 三、现在就有的可运行演示（2026-10-07）
-
-> 完整演示说明与「诚实边界」见 [demo/README.md](./demo/README.md)。**已跑通的是数据链路（真实 DSH 会话 → 规范事件 → 状态机 → 工作框卡片/悬浮窗）与悬浮窗输入队列；Tauri 真·桌面外壳与常驻 Hub 守护进程尚未实现**（路线图 M0–M3）。**多源观察已上线（M-A/M-B/M-C/M-H/M-L）：Claude Code 转录、Codex rollout、ZCode sqlite（WAL 只读并发）接入，与 DSH 会话同窗并列；Kimi Code 走 A 路径（state.json + wire.jsonl 事件流）。**
+从 [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) 下载 `CodeAll_0.1.0_aarch64.dmg`，拖入 /Applications 即用：**安装包自带本地服务与 Node 运行时，不依赖源码仓库，也无需先装 Node 或其它任何依赖**（各家 Agent 软件本体当然需要各自安装并登录）。
 
 ```bash
-# ★ 双形态操作界面（2026-10-06 改版，两窗口并存）：
-#   迷你条（/ 默认入口）——动态单行：始终显示当前最优先/最新的会话（其余隐藏，⟳ 轮换），整条可拖拽
-#   App 窗口（/window.html）——与迷你条并存（如 Codex 本体与 pet）：原生红黄绿窗口控制，
-#   顶部切 agent 软件 · 左侧切项目 · 底部控会话；队列只留未完成项；⤢ 唤出 / 红✕ 收起（不退出）
-apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后直接打开「CodeAll」即可
-node demo/framed.mjs --port 7799    # 本地服务：五源观察（DSH/Claude/Codex/Kimi/ZCode）+ CLI 控制通道 + SSE
-open http://127.0.0.1:7799/         # 迷你悬浮条（demo/mini.html）；/window.html = App 界面
-node demo/test-window.mjs           # App 界面渲染自检（59 项断言）
-node demo/test-mini.mjs             # 迷你条渲染自检（11 项断言）
-node adapters/session-catalog.mjs   # DSH 会话目录（~20ms）
-node adapters/claude-code-adapter.mjs    # Claude Code 会话目录（本机 11 项目 / 48 会话，~18ms）
-node adapters/codex-adapter.mjs          # Codex 会话目录（13 主会话 / 19 子代理自动排除，~19ms）
-node adapters/kimi-code-adapter.mjs      # Kimi Code 会话目录（A 路径：state.json + wire 事件流，~4ms；--status 看四态数据）
-node adapters/zcode-adapter.mjs          # ZCode 会话目录（sqlite 只读：session/message/part，~90ms；--follow 实时跟随）
-node adapters/local-agents.mjs      # 软件四态探测：已连接 / 已打开·未连接 / 未打开 / 未下载（~40ms）
-node adapters/cli-control.mjs --selftest # 控制通道自检：claude/codex/kimi/zcode 投递·新建·打开（Terminal 机制验证）
-node scripts/multi-source-check.mjs # 多源适配验收（48 项静态 + --live 4 项真实投递闭环，共 52 项）
+# 首次打开：当前为 alpha 测试版、未做开发者证书签名，macOS 会拦截一次——任选其一：
+xattr -cr /Applications/CodeAll.app     # 方式一：终端执行后正常打开
+# 方式二：在「应用程序」里右键 CodeAll → 打开 → 再点「打开」
+```
+
+观察五源会话、用量统计开箱即用；向会话投递/新建/打开走 CLI 通道（需要对应 Agent 的 CLI 可用）；DSH 自动投递属进阶功能（需挂载插件，见 demo/README）。开发模式（从源码运行）见下节。
+
+## 一、已实现的能力（v0.1.0，全部本机实测）
+
+### 观察（只读，零侵入，不碰凭证）
+
+| 能力 | 说明 |
+|---|---|
+| **五源会话同窗** | DSH（workspace 注册表）/ Claude Code（转录 JSONL）/ Codex（rollout）/ Kimi Code（state.json + wire 事件流）/ ZCode（sqlite WAL 只读并发）——统一目录、状态、标题、模型、思考档 |
+| **软件四态面板** | 每个软件一行：未下载 → 未打开 → 已打开·未连接 → 打开·已连接；CLI 与桌面端**拆行**（进程按路径特征分家），带版本、进程数、会话计数、活跃度 |
+| **会话三档视图** | 活跃 / 完成 / 隐藏（1 小时无活动自动归档，手动隐藏可叠加且有「手动」徽标与一键恢复）；子代理会话自动排除、计数不掺水 |
+| **会话形态标注** | CLI / 桌面端 / IDE 三形态端到端标注（会话级 + 软件行级），形态筛选联动项目侧栏 |
+| **实时事件流** | 回合边界、工具调用/结果、审批请求（Kimi 原生审批对、Claude/Codex 等价映射）→ 悬浮条与 App 界面秒级可见 |
+
+### 控制（显式不越权）
+
+| 能力 | 说明 |
+|---|---|
+| **CLI 投递通道 ×4** | Claude Code / Codex / Kimi Code / ZCode：向既有会话无头投递（ZCode 显式 `--mode build` 压掉无头默认 yolo）；2.5s 快速失败检测，不谎报「已投递」 |
+| **新建 / 打开会话** | tmux window 或 Terminal 新窗口打开对应 CLI（`--resume` / `-S`）；新建落指定项目目录 |
+| **输入队列** | 本地队列（`~/.agent-pet/input-queue.jsonl`，0600、自动轮转）只留未完成项，可复制/重发/删除/清空 |
+| **DSH 投递（需授权）** | 挂载 dsh-pet 插件（只增不删配置）+ `PET_INPUT_CMD` 接线后自动送达；未挂载时只入队列、绝不绕凭证 |
+
+### 用量与计费地基
+
+| 能力 | 说明 |
+|---|---|
+| **五源 Token 计数** | Agent × 模型 × 自然日 × 形态 精确累计（60s 慢缓存 + 文件级增量，1.1GB 转录不进热路径）；子代理消耗归入父会话 |
+| **缓存命中率** | 每源/每模型命中率（input 语义按厂商分家：Anthropic 不含 cache / OpenAI 含），与官方 UI 对过账（ZCode「今日消耗」基准） |
+| **时间窗 + 日历** | 当日/7 日/30 日切换；用量日历热力与逐日明细；会话行内 tok in/out |
+
+### 桌面外壳（Tauri v2）
+
+| 能力 | 说明 |
+|---|---|
+| **双窗口并存** | 迷你条（透明、可拖拽、动态单行轮换）+ App 窗口（原生红黄绿控制）同时常驻；⤢ 唤出 / ✕ 收起不退出 |
+| **全屏并存** | 迷你条 `CanJoinAllSpaces + FullScreenAuxiliary`——App 进原生全屏后迷你条仍留在桌面（置顶 📌 时浮于全屏之上） |
+| **战术终端主题** | 亮/暗/跟随系统；CodeAll 品牌与五家原始软件图标 |
+| **一键安装** | `apps/shell/run.sh --install` 装进 /Applications，日常 Spotlight 一键启动，外壳自动拉起本地服务 |
+
+### 安全红线（贯穿实现）
+
+写接口全部带 token（`~/.agent-pet/token`，0600，页面自动注入）+ Host 校验；一切观察只读（写库探测被明确拒绝并断言）；无头投递不越权（build 档）；不读用户 prompt 原文（Kimi lastPrompt 不读）；队列与计划文件 0600。
+
+## 二、快速开始
+
+```bash
+apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后 Spotlight「CodeAll」即可
+node demo/framed.mjs --port 7799    # 本地服务：五源观察 + CLI 控制通道 + SSE（外壳未起时可手动）
+open http://127.0.0.1:7799/           # 迷你条；/window.html = App 界面（浏览器可同源访问）
+
+# 回归与验收（当前基线全绿；check-fixtures 为既有 session-replay 基线，待重录）
+node demo/test-window.mjs             # App 界面渲染自检（85 项断言）
+node demo/test-window-actions.mjs     # 交互行为回归（14 项）
+node demo/test-mini.mjs               # 迷你条渲染自检（12 项）
+node demo/test-usage-calendar.mjs     # 用量日历自检
+node scripts/multi-source-check.mjs --live  # 多源适配验收（63 项，--live 含四家真实投递闭环）
+node scripts/catalog-check.mjs        # 会话目录验收（16 项）
+node adapters/local-agents.mjs        # 软件四态探测（CLI 表格 / --json）
+node adapters/cli-control.mjs --selftest   # 控制通道自检（投递·新建·打开）
 
 # 其它演示
-node demo/frame.mjs                 # 终端实时工作框：跟随你正在跑的 DSH 会话（约 400ms 刷新）
-open demo/frame.html                # 浏览器可视化：自包含单文件，548 条真实事件 + 17 条合成多会话事件
-node demo/record-replay.mjs         # 录制真实会话 → fixtures/session-replay.pet.jsonl
-node demo/frame.mjs --replay fixtures/session-replay.pet.jsonl --speed 8   # 离线回放
-node demo/test-html.mjs             # 可视化页自检（8 项断言）
+node demo/frame.mjs                   # 终端实时工作框；--replay 可离线回放录制
+node scripts/check-fixtures.mjs       # 契约一致性（16/16 type、6 状态）
+node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 ```
 
-**悬浮窗输入说明**：默认只读 —— 输入进本地队列（`~/.agent-pet/input-queue.jsonl`，0600、超 200 条/1MB 自动轮转）并显示「待投递」，队列项可**复制 / 重发 / 删除 / 一键清空**；要自动送达 DSH，需要授权挂载一个只增不删的 DSH 插件（或设置 `PET_INPUT_CMD`），详见 [demo/README.md](./demo/README.md#-输入如何真正送达-dsh当前是本地队列)。本地服务（127.0.0.1）的**写接口需带 token**（`~/.agent-pet/token`，0600，页面自动注入；curl 见 demo/README），并有 Host 校验防线。
+**运维口径**：`demo/framed.mjs` 代码更新后**必须重启服务/应用**才生效（外壳只在端口无监听时拉起，页面自动刷新不覆盖 Node 进程内存）；从 Spotlight 直开 App 时 DSH 自动投递（`PET_INPUT_CMD`）不会接线，需经 `run.sh --restart-server` 或挂载插件后用 run.sh 启动——这是 [docs/22](./docs/22-post-release-roadmap.md) 待办之一。
 
-## 四、文档索引
+## 三、文档索引
 
-| 文件 | 内容 | 负责人 |
-|---|---|---|
-| [docs/00-interface-contract.md](./docs/00-interface-contract.md) | **规范事件契约 v1.2**（冻结）：事件/控制帧、16 个 type、状态机真值表、传输层、工作框保证 | Lead |
-| [docs/10-architecture.md](./docs/10-architecture.md) | 总体架构、ADR、模块拆分、工作框模块、NFR、与 DSH 的边界 | Lead |
-| [docs/20-roadmap.md](./docs/20-roadmap.md) | 两阶段里程碑（M0–M10）、关键路径、工作量估算、Demo 脚本 | roadmap-synth |
-| [docs/21-multi-agent-adoption-plan.md](./docs/21-multi-agent-adoption-plan.md) | **多 Agent 接入计划 v3**：首批锁定 DSH/Claude Code/Codex/Kimi Code；本机盘点 11 项；**总控双域模型**（本地多 agent 直控 + 远端 AgentOS 执行体，§6）；观察→目录→控制里程碑、排期与风险 | Lead |
-| [docs/30-implementation-stack.md](./docs/30-implementation-stack.md) | 技术栈对比与实测（Tauri/Swift/Electron）、骨架目录、适配器 SDK 形态 | pet-runtime-scout |
-| [docs/35-dsh-pet-bridge.md](./docs/35-dsh-pet-bridge.md) | DSH 事件获取 5 条路径实测（插件/日志 tail/hooks/SDK/ MCP）、映射表、上游需求 | dsh-bridge-researcher |
-| [docs/40-adapters.md](./docs/40-adapters.md) | 10 个后端的适配矩阵、P0/P1/P2 排序、观测能力与降级、漂移证据 | adapter-recon |
-| [docs/50-product-spec.md](./docs/50-product-spec.md) | 状态机细化、交互、资产管线与授权、角色与文案、商业化、验收清单 | product-experience |
-| [docs/51-work-frame-spec.md](./docs/51-work-frame-spec.md) | **工作框规格**：悬浮卡片/窄条/宠物三形态、信息层级、交互、验收 | product-experience |
-| [docs/55-interaction-design.md](./docs/55-interaction-design.md) | **人机交互总体方案 v1**：双面模型（常驻卡片 + 控制台）、软件四态×动作表、选择模型三规则、队列术语统一、键盘总表、空态矩阵、UX-A 验收 | Lead |
-| [docs/60-risk-register.md](./docs/60-risk-register.md) | 风险登记册（21 条）、合规与隐私、竞品、Pre-mortem | product-experience |
-| [docs/70-team-and-metrics.md](./docs/70-team-and-metrics.md) | 团队分工、Sprint 节奏、Gate 1/2 验收指标、度量 | Lead |
-| [docs/90-research-notes.md](./docs/90-research-notes.md) | 各队友的原始证据（命令、输出、来源 URL） | 全体 |
-| [docs/99-verification-report.md](./docs/99-verification-report.md) | 独立验收报告（契约审阅 + 跨文档交叉审阅 + 复现命令） | contract-verifier |
-
-## 五、可运行资产
-
-| 路径 | 说明 |
+| 文件 | 内容 |
 |---|---|
-| [demo/](./demo/README.md) | **演示**：悬浮窗（window.html + framed.mjs）、终端实时工作框、浏览器可视化（frame.html）、录制/回放与自检脚本 |
-| [fixtures/contract-sample.pet.jsonl](./fixtures/contract-sample.pet.jsonl) | 契约样本（37 事件 + 3 控制帧）：16 个 type 字符串、6 状态、审批超时、乱序、未知事件 |
-| [fixtures/session-replay.pet.jsonl](./fixtures/session-replay.pet.jsonl) | 真实 DSH 会话录制（548 条规范事件，2026-10-05 11:56–12:49） |
-| [scripts/check-fixtures.mjs](./scripts/check-fixtures.mjs) | 契约一致性自检（帧分类、必填字段、枚举、seq、requestId 配对、真值表回放） |
-| [scripts/replay-check.mjs](./scripts/replay-check.mjs) | 独立实现的状态机回放校验器（可用于 CI 门禁） |
-| [scripts/dsh-session-to-pet.mjs](./scripts/dsh-session-to-pet.mjs) | DSH 会话日志（多帧 zstd）→ 规范事件 |
-| [adapters/_reference/dsh-log-tail.mjs](./adapters/_reference/dsh-log-tail.mjs) | DSH 日志增量 tail 参考实现（含 hello/ack 握手、半帧处理） |
-| [adapters/_reference/hub-minimal.mjs](./adapters/_reference/hub-minimal.mjs) | **最小 Hub 原型**（约 90 行）：契约状态机 + 计数器，可直接跑 fixture 证明契约可实现 |
-| [schema/pet-event.schema.json](./schema/pet-event.schema.json) + [validate-pet-event.mjs](./schema/validate-pet-event.mjs) | 事件与控制帧 JSON Schema 与零依赖校验器 |
-| [spikes/](./spikes/README.md) | 三条技术栈的最小可运行验证（Swift/AppKit、Tauri v2、Electron）+ 独立核对工具 |
+| [docs/00-interface-contract.md](./docs/00-interface-contract.md) | **规范事件契约 v1.2**（冻结）：事件/控制帧、状态机真值表、传输层 |
+| [docs/10-architecture.md](./docs/10-architecture.md) | 总体架构、ADR、模块拆分、NFR |
+| [docs/20-roadmap.md](./docs/20-roadmap.md) | 原始两阶段里程碑（M0–M10）、关键路径、SDK 冻结锚点 |
+| [docs/21-multi-agent-adoption-plan.md](./docs/21-multi-agent-adoption-plan.md) | **多 Agent 接入计划 v3**：接入里程碑 M-A…M-U、§6 双域模型（本地直控 + 远端 AgentOS） |
+| [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md) | **v0.1.0 后续构建任务**：计费展示 / OpenCode·Qoder·Cursor / Windows·Linux / 远端 AgentOS / 手机端 |
+| [docs/40-adapters.md](./docs/40-adapters.md) | 后端适配矩阵（含 Cursor/Copilot/ACP 行）、观测能力与降级 |
+| [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | 产品规格、工作框三形态、人机交互总体方案 |
+| [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri 外壳实现（双窗口、Space 行为、内存口径） |
+| [docs/CHANGELOG.md](./docs/CHANGELOG.md) | 变更日志（按日、按特性，含验收记录） |
+| [demo/README.md](./demo/README.md) | 演示说明与「诚实边界」（输入如何送达 DSH 等） |
+| [spikes/](./spikes/README.md) | 技术栈验证（Swift/AppKit、Tauri v2、Electron） |
 
-```bash
-# 快速自检（无需安装依赖，全部在本机实测通过）
-node scripts/check-fixtures.mjs          # 契约一致性（16/16 type、6 状态、聚合终态）
-node scripts/replay-check.mjs --selftest # 状态机回放 + 负例（v1.2 分支）
-node schema/validate-pet-event.mjs fixtures/contract-sample.pet.jsonl
-node adapters/_reference/hub-minimal.mjs fixtures/contract-sample.pet.jsonl  # 最小 Hub 原型
-node scripts/dsh-session-to-pet.mjs ~/.dsh/sessions/**/session-*/session.v4.jsonl.zstd  # 真实 DSH 日志 → 规范事件
-```
+## 四、后续开发计划（摘要，详见 [docs/22](./docs/22-post-release-roadmap.md)）
 
-## 六、下一步（需人工确认/授权的三件事）
+| 工作流 | 主题 | 首个里程碑 |
+|---|---|---|
+| **W1 BILL** | 各厂商 Coding Plan 计费展示：官方 API（DeepSeek balance 先行）+ 本地规则估算双路，额度环 / 窗口倒计时 / 预警 / 多账号 | BILL-1 计划配置模型 + 计费页（v0.2） |
+| **W2 AGT** | OpenCode（ACP 通道，恢复注册行）、Qoder（spike 先行）、Cursor（hooks 观察）、Copilot CLI（可选） | AGT-1 ACP 统一通道（v0.2） |
+| **W3 PLAT** | Windows / Linux 适配：平台抽象层（路径/进程/版本/终端）→ 双平台全功能 + 安装包 + CI 矩阵 | PLAT-1 平台抽象（v0.3） |
+| **W4 RMT** | 远端能力：本地 AgentOS 观察 → SSH 远端观察（`agentos@<host>` 主机分组）→ 远端控制（子命令白名单，凭证零存储）；对接「原生AI操作系统」 | RMT-1 本地 AgentOS（v0.2） |
+| **W5 MOB** | 手机端：移动 PWA（二维码配对）→ 原生壳 + 审批/额度推送 → 经自管 AgentOS 主机外网中继 | MOB-1 PWA（v0.5） |
 
-1. **授权插件挂载**：在 `~/.dsh/profiles/desktop/cordis.patch.yml` 追加一行 `insert`（只增不删，HMR 热重载，不需重启 DSH）→ 事件延迟从 ~250 ms 降到 <1 ms。未授权时走日志 tail 兜底，功能不受影响。
-2. **Live2D / Spine 授权核验**（本机网络不可达，未核验）：决定是否会用到需授权的运行时；MVP 方案为分层帧动画，不依赖授权。
-3. **Windows 验证机器**：Phase 2 前需要一台 Win11 机器验证透明 + 置顶 + 点击穿透 + 命名管道（`\\.\pipe\agent-pet-<source>`）。
+版本节奏（单人折算）：**v0.2** 计费骨架 + ACP/OpenCode + 本地 AgentOS → **v0.3** Windows + Cursor → **v0.4** Linux + Qoder + 远端观察 + 额度预警 → **v0.5** 远端控制 + PWA → **v1.0** 原生手机壳 + 外网中继 + 适配器 SDK 冻结。
 
-> 构建残留（`spikes/*/target`、`node_modules`，约 1.3 GB）**已清理**（`.gitignore` 已覆盖）；需要复现 spike 时按 [spikes/README.md](./spikes/README.md) 的命令重新构建（Tauri 首次构建约 47 s、Electron 依赖下载约 42 s）。
+原则不变：**能力落地才进软件列表**（v0.1.0 首发 AgentOS/OpenCode 即按此移除，接入后回归注册表）。

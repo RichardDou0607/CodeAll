@@ -129,6 +129,9 @@ const INPUT_MAX_ITEMS = 200;      // 队列条目上限：超出丢弃最旧（�
 const INPUT_MAX_BYTES = 1 << 20;  // 1MB 硬上限（单条 ≤2000 字符，正常远达不到）
 const HTML_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ASSET_DIR = path.join(HTML_DIR, 'assets');
+// 子进程（cli-control 拉起的各家 CLI）继承本进程 PATH：把当前 node 所在目录前置——
+// App Resources 内置 node 的打包分发下，无系统 Node 也能运行 zcode.cjs 这类 shebang 脚本
+process.env.PATH = path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '');
 const BOOT_TS = Date.now();
 /** 页面构建号 = max(服务启动时间, 页面文件 mtime)：服务重启或 HTML 更新后，旧页面自行刷新（页面响应 no-store）。 */
 function pageBuild(file) { try { return Math.max(BOOT_TS, fs.statSync(file).mtimeMs); } catch { return BOOT_TS; } }
