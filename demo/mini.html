@@ -2,51 +2,92 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>AgentPet · 迷你条</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>CodeAll · 迷你条</title>
+<script data-theme-init>
+try {
+  const mode = localStorage.getItem('agent-pet-theme') || 'light';
+  document.documentElement.dataset.theme = mode === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : mode;
+} catch (_) { document.documentElement.dataset.theme = 'light'; }
+</script>
 <style>
-:root{--bg:#0b0e14;--line:#242c3a;--txt:#e6edf3;--dim:#8b98a9;--acc:#1f6feb}
-*{box-sizing:border-box}
+:root{color-scheme:dark;--bg:#191f21;--line:#303b3e;--txt:#dfebe8;--dim:#96aaa5;--acc:#7eded0;--idle:#96aaa5;--think:#94bcf4;--run:#7bd4b0;--wait:#f0c57a;--err:#f19096;--done:#b3b7e9;--selected:#203b35;--hover:#222e2e}
+:root[data-theme=light]{color-scheme:light;--bg:#fff;--line:#d7dfe2;--txt:#233431;--dim:#586d68;--acc:#147a68;--idle:#677a75;--think:#336aac;--run:#157451;--wait:#99671b;--err:#bb3847;--done:#6b60a7;--selected:#e0f0e9;--hover:#eef4f1}
+*{box-sizing:border-box;letter-spacing:0}
 html,body{margin:0;height:100%;background:transparent;overflow:hidden;color:var(--txt);
-  font:12px/1.4 -apple-system,"PingFang SC",system-ui,sans-serif;-webkit-user-select:none;user-select:none}
-#bar{height:100vh;display:flex;align-items:center;gap:7px;padding:0 9px;
-  background:rgba(16,20,28,.97);border:1px solid var(--line);border-radius:10px;
-  box-shadow:0 14px 34px rgba(0,0,0,.5);cursor:default}
-.dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 8px currentColor}
-#m-src{font-size:10px;color:#9db2cc;flex:0 0 auto;max-width:78px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#m-main{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;overflow:hidden}
-#m-title{font-size:12px;font-weight:600;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#m-sub{font-size:10.5px;color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#m-state{font-size:11px;font-weight:600;flex:0 0 auto}
-#m-tm{color:var(--dim);font-size:10px;flex:0 0 auto;width:34px;text-align:right}
-#m-pend{color:#e3b341;font-size:10px;flex:0 0 auto}
-button{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:7px;
-  font-size:10px;padding:3px 6px;cursor:pointer;flex:0 0 auto;line-height:1.2}
-button:hover{border-color:#3d4a60}
-#m-cycle{min-width:34px;text-align:center}
+  font:11px/1.4 "SFMono-Regular",Consolas,"PingFang SC",monospace;-webkit-user-select:none;user-select:none}
+svg.icon{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+#ui-symbols{position:absolute;width:0;height:0;overflow:hidden}
+#bar{height:100dvh;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--bg);border:1px solid var(--line);border-left:2px solid var(--acc);border-radius:5px;cursor:default}
+.dot{width:6px;height:6px;border-radius:50%;flex:none}
+#m-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;overflow:hidden}
+.m-head{display:flex;gap:6px;align-items:baseline;min-width:0}
+#m-src{font-size:8px;color:var(--acc);flex:none;max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#m-title{font-size:11px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#m-sub{font-size:9px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#m-state{font-size:10px;flex:none;white-space:nowrap}
+#m-tm{color:var(--dim);font-size:9px;flex:none;width:34px;text-align:right}
+#m-pend{color:var(--wait);font-size:9px;flex:none}
+#m-pend:empty{display:none}
+.m-tools{display:flex;gap:1px;flex:none}
+button{width:25px;height:26px;padding:0;display:inline-flex;align-items:center;justify-content:center;gap:4px;border:1px solid transparent;border-radius:3px;background:none;color:var(--dim);cursor:pointer;flex:none;font:10px/1 inherit}
+button:hover{background:var(--hover);color:var(--txt)}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+button:disabled{opacity:.4;cursor:not-allowed}
+button[aria-pressed=true]{color:var(--acc);background:var(--selected)}
+#m-cycle{width:33px}
+#m-cycle .icon{width:12px;height:12px}
+@media(max-width:430px){#m-tm{display:none}#m-src{max-width:53px}}
+@media(max-width:349px){#bar{gap:4px;padding:0 5px}button{width:23px}#m-cycle{width:31px}#m-src{max-width:43px}.m-head{gap:4px}#m-state{font-size:9px}}
 </style>
 </head>
 <body>
+<!-- Lucide static 0.468.0 (ISC). License: demo/assets/lucide-LICENSE -->
+<svg id="ui-symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:none">
+<symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+  <path d="M21 3v5h-5" />
+  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+  <path d="M8 16H3v5" /></symbol>
+<symbol id="i-maximize-2" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9" />
+  <polyline points="9 21 3 21 3 15" />
+  <line x1="21" x2="14" y1="3" y2="10" />
+  <line x1="3" x2="10" y1="21" y2="14" /></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5" />
+  <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" /></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18" />
+  <path d="m6 6 12 12" /></symbol>
+</svg>
 <div id="bar" data-tauri-drag-region>
-  <span class="dot" id="m-dot" style="background:#8b98a9;color:#8b98a9"></span>
-  <span id="m-src" title="当前会话所属 agent 软件">—</span>
+  <span class="dot" id="m-dot" style="background:var(--idle)"></span>
   <span id="m-main" data-tauri-drag-region>
-    <span id="m-title">连接中…</span><span id="m-sub">…</span>
+    <span class="m-head"><span id="m-src" title="当前会话所属 Agent 软件">—</span><span id="m-title">连接中…</span></span><span id="m-sub">…</span>
   </span>
   <span id="m-state">—</span>
   <span id="m-pend"></span>
   <span id="m-tm">--</span>
-  <button id="m-cycle" title="轮换到下一个会话（其余会话隐藏，仅在此轮换）">⟳ 0</button>
-  <button id="m-expand" title="展开 App 界面（查看全部会话 / 项目 / 投递）">⤢</button>
-  <button id="m-pin" title="置顶迷你条">📌</button>
-  <button id="m-hide" title="隐藏迷你条（附属条；可从 App「◧ 迷你条」或托盘菜单唤回）">✕</button>
+  <span class="m-tools">
+    <button id="m-cycle" title="轮换到下一个会话" aria-label="轮换会话"><svg class="icon" aria-hidden="true"><use href="#i-refresh-cw"></use></svg><span id="m-count">0</span></button>
+    <button id="m-expand" title="展开主界面" aria-label="展开主界面"><svg class="icon" aria-hidden="true"><use href="#i-maximize-2"></use></svg></button>
+    <button id="m-pin" title="置顶迷你条" aria-label="置顶迷你条" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg></button>
+    <button id="m-hide" title="隐藏迷你条，可从主界面或托盘唤回" aria-label="隐藏迷你条"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button>
+  </span>
 </div>
 <script>
 window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
-const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错',error:'错误',waiting:'等你',done:'完成'};
-const COLOR={idle:'#8b98a9',thinking:'#4aa8ff',running:'#3fb950',working:'#3fb950','transient-error':'#e3b341',error:'#f85149',waiting:'#e3b341',done:'#bc8cff'};
+const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错',error:'错误',waiting:'等你',done:'完成',ended:'结束',unknown:'未知'};
+const COLOR={idle:'var(--idle)',thinking:'var(--think)',running:'var(--run)',working:'var(--run)','transient-error':'var(--wait)',error:'var(--err)',waiting:'var(--wait)',done:'var(--done)',ended:'var(--done)',unknown:'var(--idle)'};
 // 动态机制的优先级：等你确认 > 出错 > 运行 > 思考 > 完成；同级按状态变更时间取最新
 const RANK={waiting:0,'transient-error':1,error:2,running:3,working:3,thinking:4,done:5,idle:6};
 const $=id=>document.getElementById(id);
+function applyTheme(){
+  let mode='light';try{mode=localStorage.getItem('agent-pet-theme')||'light'}catch(_){}
+  document.documentElement.dataset.theme=mode==='light'||(mode==='system'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches)?'light':'dark';
+}
+applyTheme();
+window.addEventListener('storage',e=>{if(e.key==='agent-pet-theme')applyTheme()});
+window.addEventListener('focus',applyTheme);
+if(window.matchMedia)window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',applyTheme);
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function mmss(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 const VARIANT_LABEL={cli:'CLI',desktop:'桌面',ide:'IDE'};
@@ -58,22 +99,22 @@ function projNameOf(s,projList){
 }
 async function trySetSize(w,h){
   try{
-    const W=window.__TAURI__&&window.__TAURI__.window;
-    if(W&&W.getCurrentWindow&&W.LogicalSize){await W.getCurrentWindow().setSize(new W.LogicalSize(w,h));return}
-    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|set_size',{label:'main',size:{type:'Logical',width:w,height:h}})}
+    const T=window.__TAURI__,W=T&&T.window,L=T&&(T.dpi?.LogicalSize||W?.LogicalSize);
+    if(W&&W.getCurrentWindow&&L){await W.getCurrentWindow().setSize(new L(w,h));return}
+    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|set_size',{label:'main',value:{Logical:{width:w,height:h}}})}
   }catch(e){}
 }
 async function showApp(){
   try{
     const T=window.__TAURI__;
-    if(T&&T.window&&T.window.WebviewWindow&&T.window.WebviewWindow.getByLabel){const w=T.window.WebviewWindow.getByLabel('app');if(w){await w.show();await w.setFocus();return}}
+    if(T&&T.webviewWindow&&T.webviewWindow.WebviewWindow){const w=await T.webviewWindow.WebviewWindow.getByLabel('app');if(w){await w.show();await w.setFocus();return}}
     if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){
       await window.__TAURI_INTERNALS__.invoke('plugin:window|show',{label:'app'});
       await window.__TAURI_INTERNALS__.invoke('plugin:window|set_focus',{label:'app'});
       return;
     }
   }catch(e){}
-  window.open('/window.html','agentpet-app');
+  window.open('/window.html','codeall-app');
 }
 // 拖拽：整条可拖（按钮除外）。外壳注入脚本的 .titlebar 机制对新版式不适用，
 // 这里自己挂 mousedown → start_dragging（与外壳同一实现方式，远程源权限已放行）
@@ -96,11 +137,11 @@ async function showApp(){
 // 置顶（偏好持久化，与旧版行为一致）
 (function wirePin(){
   const b=$('m-pin');
-  function paint(on){b.style.opacity=on?'1':'.45';b.style.color=on?'#e3b341':'';b.title=on?'已置顶：悬浮在所有窗口之上（点击取消）':'置顶迷你条（默认关闭）'}
+  function paint(on){b.setAttribute('aria-pressed',String(on));b.title=on?'已置顶：悬浮在所有窗口之上（点击取消）':'置顶迷你条（默认关闭）'}
   let stored=false;
   try{stored=localStorage.getItem('agent-pet-pin')==='1'}catch(e){}
   paint(stored);
-  const setTop=v=>{try{const T=window.__TAURI__;if(T&&T.window){T.window.getCurrentWindow().setAlwaysOnTop(v);return}}catch(e){}try{window.__TAURI_INTERNALS__.invoke('plugin:window|set_always_on_top',{label:'main',value:v})}catch(e){}};
+  const setTop=async v=>{try{const T=window.__TAURI__;if(T&&T.window){await T.window.getCurrentWindow().setAlwaysOnTop(v);return}if(window.__TAURI_INTERNALS__?.invoke)await window.__TAURI_INTERNALS__.invoke('plugin:window|set_always_on_top',{label:'main',value:v})}catch(e){b.title='置顶操作失败：'+e.message}};
   if(stored)setTop(true);
   b.addEventListener('click',ev=>{ev.stopPropagation();
     let on=false;try{on=!(localStorage.getItem('agent-pet-pin')==='1');localStorage.setItem('agent-pet-pin',on?'1':'0')}catch(e){on=true}
@@ -131,30 +172,30 @@ function render(snap){
   const sel=pickSession(live);
   let state,act,tm,pend=0,col,src='—',title='全部空闲',sub='',tip='';
   if(sel){
-    state=STATE_LABEL[sel.state]||sel.state;col=COLOR[sel.state]||'#8b98a9';
+    state=STATE_LABEL[sel.state]||sel.state;col=COLOR[sel.state]||COLOR.idle;
     src=srcTag(sel);
     title=sel.label||sel.title||sel.id;
     const proj=projNameOf(sel,projList);
-    sub='· '+proj+(sel.model?' · '+sel.model:'');
+    sub=(proj||'未归入项目')+(sel.model?' · '+sel.model:'');
     tip=String(sel.cwd||'')||proj;
     tm=sel.state==='idle'?'--':sel.state==='done'?'完成':mmss(sel.elapsedMs||0);
     pend=sel.pending||0;
   }else{
-    state=STATE_LABEL[snap.agg]||snap.agg;col=COLOR[snap.agg]||'#8b98a9';
-    const c=snap.stateCounts||snap.counters||{};
+    state=STATE_LABEL[snap.agg||'idle']||snap.agg;col=COLOR[snap.agg]||COLOR.idle;
+    const c=snap.stateCounts||{};
     title='无进行中会话';
     sub='· '+(projList.length?projList.length+' 个项目':'…')+(c.errors?' · 出错 '+c.errors:'');
     tm='--';
   }
   $('m-dot').style.background=col;$('m-dot').style.color=col;
   $('m-src').textContent=src;$('m-src').title='agent 软件：'+src;
-  $('m-title').textContent=title;$('m-title').title=(tip?tip+'\n':'')+'点击 ⤢ 打开 App 查看全部 '+live.length+' 个会话';
-  $('m-sub').textContent=sub;
+  $('m-title').textContent=title;$('m-title').title=(tip?tip+'\n':'')+title;
+  $('m-sub').textContent=sub;$('m-sub').title=sub;
   $('m-state').textContent=state;$('m-state').style.color=col;
   $('m-tm').textContent=tm;
-  $('m-pend').textContent=pend?('⏳'+pend):'';
+  $('m-pend').textContent=pend?String(pend):'';$('m-pend').title=pend?'待办 '+pend:'';
   const cyc=$('m-cycle');
-  cyc.textContent='⟳ '+live.length;
+  $('m-count').textContent=String(live.length);
   cyc.disabled=!live.length;
   cyc.title=live.length?('切换会话（'+(lockSid?'已锁定手动选择':'自动跟随最新')+'，共 '+live.length+' 个，其余隐藏）'):'无会话';
   window.__RENDER_OUT__={state:state,src:src,title:String(title).slice(0,18),tm:tm,pend:pend,live:live.length,locked:!!lockSid};
@@ -182,7 +223,7 @@ $('m-hide').addEventListener('click',async ev=>{ev.stopPropagation();
 let es=null;
 function connect(){
   es=new EventSource('/api/stream');
-  es.onmessage=e=>{try{render(JSON.parse(e.data))}catch(err){}};
+  es.onmessage=e=>{try{render(JSON.parse(e.data))}catch(err){console.error('CodeAll mini render:',err)}};
   es.onerror=function(){$('m-sub').textContent='· 与本地服务断开，重连中…';es.close();setTimeout(connect,3000)};
 }
 connect();

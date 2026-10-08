@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# apps/shell/run.sh — Agent 悬浮窗桌面外壳（Tauri v2）一键运行
+# apps/shell/run.sh — CodeAll 桌面外壳（Tauri v2）一键运行
 #
 #   ./run.sh                  # 需要时自动构建，然后以 7799 端口启动外壳
 #   ./run.sh --port 7801      # 换端口；本地服务未监听时由外壳自动拉起 demo/framed.mjs
@@ -73,7 +73,7 @@ command -v node >/dev/null 2>&1 || die "未找到 node —— 本地服务 demo/
 command -v pnpm >/dev/null 2>&1 || die "未找到 pnpm"
 command -v cargo >/dev/null 2>&1 || die "未找到 cargo（已把 ~/.cargo/bin 加进 PATH；请先装 Rust 工具链）"
 
-APP="$SELF_DIR/src-tauri/target/release/bundle/macos/AgentPet.app"
+APP="$SELF_DIR/src-tauri/target/release/bundle/macos/CodeAll.app"
 BIN="$(ls "$APP/Contents/MacOS/"* 2>/dev/null | head -1)"   # 可执行文件名 = cargo bin 名
 
 if [ "$MODE" = dev ]; then
@@ -103,13 +103,13 @@ fi
 
 if [ "$MODE" = install ]; then
   DEST_DIR="/Applications"
-  say "安装到 $DEST_DIR/AgentPet.app"
-  rm -rf "$DEST_DIR/AgentPet.app"
-  cp -R "$APP" "$DEST_DIR/AgentPet.app" || die "复制 .app 失败"
-  say "完成 —— 以后从 启动台 / Spotlight 打开「AgentPet」即可，外壳会自动拉起本地服务"
+  say "安装到 $DEST_DIR/CodeAll.app"
+  rm -rf "$DEST_DIR/CodeAll.app"
+  cp -R "$APP" "$DEST_DIR/CodeAll.app" || die "复制 .app 失败"
+  say "完成 —— 以后从 启动台 / Spotlight 打开「CodeAll」即可，外壳会自动拉起本地服务"
   say "注意：仓库移动或重命名后需重新运行 apps/shell/run.sh --install（外壳按编译时路径定位仓库）"
-  say "现在就启动：open -a AgentPet"
-  open -a AgentPet
+  say "现在就启动：open -a CodeAll"
+  open -a CodeAll
   exit 0
 fi
 

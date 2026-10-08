@@ -3,198 +3,483 @@
 <head>
 <meta charset="utf-8">
 <meta name="agentpet-solid" content="1"><!-- 外壳注入脚本据此跳过透明化：本窗口用原生标题栏（红黄绿） -->
-<title>AgentPet · App</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>CodeAll · 战术终端</title>
+<script data-theme-init>
+try {
+  const mode = localStorage.getItem('agent-pet-theme') || 'light';
+  document.documentElement.dataset.theme = mode === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : mode;
+} catch (_) { document.documentElement.dataset.theme = 'light'; }
+</script>
 <style>
-:root{--bg:#0b0e14;--win:#12161f;--line:#242c3a;--txt:#e6edf3;--dim:#8b98a9;--idle:#8b98a9;--think:#4aa8ff;--run:#3fb950;--wait:#e3b341;--err:#f85149;--done:#bc8cff;--acc:#1f6feb}
-*{box-sizing:border-box}
-html,body{margin:0;height:100%;background:#0b0e14;color:var(--txt);font:13px/1.5 -apple-system,"PingFang SC",system-ui,sans-serif;overflow:hidden}
-#app{height:100vh;display:flex;flex-direction:column;background:linear-gradient(160deg,#141926,#0b0e14 60%)}
-/* ---- 顶部：agent 软件切换 + 聚合状态 ---- */
-header{flex:0 0 42px;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid var(--line);background:rgba(255,255,255,.02)}
-header .logo{font-weight:700;font-size:13px;letter-spacing:.02em}
-header .logo small{color:var(--dim);font-weight:400;font-size:10px;margin-left:4px}
-#agent-tabs{display:flex;gap:4px;flex:1;min-width:0;overflow-x:auto}
-#agent-tabs .tab{background:none;border:1px solid transparent;color:var(--dim);border-radius:8px;font-size:11px;padding:4px 10px;cursor:pointer;white-space:nowrap}
-#agent-tabs .tab:hover{color:var(--txt);border-color:var(--line)}
-#agent-tabs .tab.on{color:#fff;background:#1d2531;border-color:#34405499}
-.aggchip{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;flex:0 0 auto}
-.dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 8px currentColor}
-.chips{display:flex;gap:4px;flex:0 0 auto}
-.chip{font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 6px;white-space:nowrap}
-.hbtn{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:8px;font-size:11px;padding:4px 9px;cursor:pointer;flex:0 0 auto}
-#view-nav{display:flex;gap:4px;flex:0 0 auto;background:#0d1117;border:1px solid var(--line);border-radius:9px;padding:3px}
-#view-nav button{background:none;border:none;color:var(--dim);font-size:11px;padding:3px 10px;border-radius:6px;cursor:pointer}
-#view-nav button.on{color:#fff;background:#1d2531}
-/* ---- 软件状态独立页 ---- */
-#status-page{flex:1;min-height:0;overflow:auto;padding:16px 18px;display:none}
-#status-page.on{display:block}
-.sp-title{font-size:15px;font-weight:700;margin:0 0 2px}
-.sp-sub{font-size:11px;color:var(--dim);margin-bottom:14px}
-#status-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
-.scard{background:#12161f;border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
-.scard .sc-head{display:flex;align-items:center;gap:8px}
-.scard .sc-dot{width:9px;height:9px;border-radius:50%;box-shadow:0 0 8px currentColor;flex:0 0 auto}
-.scard .sc-name{font-size:13px;font-weight:700;flex:1}
-.scard .sc-badge{font-size:11px;font-weight:600;flex:0 0 auto}
-.scard .sc-row{font-size:11.5px;color:#c3ceda;display:flex;gap:6px}
-.scard .sc-row b{color:var(--txt);font-weight:600}
-.scard .sc-row .k{color:var(--dim);flex:0 0 auto}
-.scard .sc-note{font-size:10.5px;color:var(--dim)}
-.scard .sc-ev{font-size:10px;color:#5c6a7e;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* ---- 用量页（按 Agent × 模型计数） ---- */
-#usage-page{flex:1;min-height:0;overflow:auto;padding:16px 18px;display:none}
-#usage-page.on{display:block}
-.u-title{font-size:15px;font-weight:700;margin:0 0 2px}
-.u-sub{font-size:11px;color:var(--dim);margin-bottom:12px}
-.u-tot{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 6px 6px}
-.u-tot .chip{font-size:11px;color:#c3ceda}
-.utable{border-collapse:collapse;margin:0 0 4px 6px;font-size:11.5px;width:calc(100% - 12px)}
-.utable th,.utable td{text-align:right;padding:3px 10px;border-bottom:1px solid rgba(36,44,58,.5);white-space:nowrap}
-.utable th{color:var(--dim);font-weight:500;font-size:10.5px}
-.utable td:first-child,.utable th:first-child{text-align:left}
-.u-src-h{font-size:12px;font-weight:700;margin:14px 0 4px 6px}
-.u-note{font-size:10.5px;color:var(--dim);margin:10px 0 0 6px}
-.u-ranges{display:flex;gap:2px;margin:0 0 10px 6px}
-.u-ranges button{background:#0d1117;color:var(--dim);border:1px solid var(--line);border-radius:6px;font-size:11px;padding:3px 10px;cursor:pointer}
-.u-ranges button:hover{color:var(--txt)}
-.u-ranges button.on{color:#fff;background:#1d2531}
-/* ---- 主体：左项目 / 右会话 ---- */
+:root{color-scheme:dark;--bg:#111617;--win:#191f21;--surface:#202729;--line:#303b3e;--txt:#dfebe8;--dim:#96aaa5;--idle:#96aaa5;--think:#94bcf4;--run:#7bd4b0;--wait:#f0c57a;--err:#f19096;--done:#b3b7e9;--acc:#7eded0;--ink:#102b26;--selected:#203b35;--hover:#222e2e;--shadow:0 16px 60px #0005}
+:root[data-theme=light]{color-scheme:light;--bg:#f5f7f8;--win:#fff;--surface:#edf1f3;--line:#d7dfe2;--txt:#233431;--dim:#586d68;--idle:#677a75;--think:#336aac;--run:#157451;--wait:#99671b;--err:#bb3847;--done:#6b60a7;--acc:#147a68;--ink:#fff;--selected:#e0f0e9;--hover:#eef4f1;--shadow:0 16px 60px #213b3420}
+*{box-sizing:border-box;letter-spacing:0}
+[hidden]{display:none!important}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);font:12px/1.5 "SFMono-Regular",Consolas,"PingFang SC",monospace;overflow:hidden}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible,summary:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+button,a{touch-action:manipulation}
+svg.icon{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;vertical-align:middle}
+#ui-symbols{position:absolute;width:0;height:0;overflow:hidden}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+#app{height:100dvh;display:flex;flex-direction:column}
+header{flex:none;min-height:54px;display:flex;align-items:center;gap:14px;padding:9px 20px;border-bottom:2px solid var(--acc);background:var(--win)}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand-mark{display:block;width:32px;height:32px;object-fit:contain;border-radius:4px;flex:none}
+.brand-name{font-size:16px;font-weight:650;line-height:1.2}
+.brand-label{color:var(--dim);font-size:9px;margin-top:3px}
+.header-space{flex:1}
+.local{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:10px}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--run)}
+.aggchip{display:flex;align-items:center;gap:7px;font-size:11px}
+.theme-switch{display:flex;border:1px solid var(--line);border-radius:4px;padding:2px;gap:1px}
+.icon-btn{width:28px;height:28px;padding:0;display:inline-grid;place-items:center;border:1px solid transparent;border-radius:3px;color:var(--dim);background:transparent;flex:none}
+.icon-btn:hover{color:var(--txt);background:var(--hover)}
+.icon-btn[aria-pressed=true]{color:var(--acc);background:var(--selected)}
+.theme-switch .icon-btn{width:25px;height:25px}
+#view-nav{flex:none;display:flex;align-items:center;gap:24px;min-height:43px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--win)}
+#view-nav button{display:flex;align-items:center;gap:7px;min-height:43px;padding:0;border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--dim);font-size:12px}
+#view-nav button.on{color:var(--txt);border-bottom-color:var(--acc)}
+.nav-end{margin-left:auto;font-size:10px;color:var(--dim)}
 #main{flex:1;display:flex;min-height:0}
-aside{flex:0 0 188px;display:flex;flex-direction:column;border-right:1px solid var(--line);min-height:0}
-.side-h{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:8px 12px 4px;font-size:10px;color:var(--dim);letter-spacing:.08em}
-#projects{flex:1;overflow:auto;padding:2px 6px 6px}
-.pitem{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:8px;cursor:pointer;color:#c3ceda;font-size:12px}
-.pitem:hover{background:rgba(255,255,255,.04)}
-.pitem.on{background:rgba(31,111,235,.16);box-shadow:inset 2px 0 0 var(--acc);color:#fff}
+#project-sidebar{width:176px;flex:none;display:flex;flex-direction:column;background:var(--win);border-right:1px solid var(--line);min-height:0}
+.side-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:17px 13px 9px;font-size:10px;color:var(--dim)}
+#project-count{font-variant-numeric:tabular-nums}
+#projects{flex:1;overflow:auto;padding:0 6px 8px}
+.pitem{width:100%;min-height:38px;display:flex;align-items:center;gap:7px;padding:7px;border:0;border-left:2px solid transparent;border-radius:3px;background:none;text-align:left;color:var(--dim);font-size:11px}
+.pitem .icon{width:14px;height:14px}
+.pitem:hover{background:var(--hover);color:var(--txt)}
+.pitem.on{border-left-color:var(--acc);color:var(--txt);background:var(--selected)}
 .pitem .pname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pitem .pcnt{flex:0 0 auto;font-size:10px;color:var(--dim)}
+.pitem .pcnt{flex:none;font-size:10px;color:var(--dim)}
 .pitem .plive{color:var(--run)}
-.pitem.dim{opacity:.42}
-.pitem.dim:hover{opacity:.75}
-#agents{flex:0 0 auto;max-height:132px;overflow:auto;border-top:1px solid var(--line);padding:2px 0}
-.arow{display:flex;align-items:center;gap:7px;padding:4px 12px}
-.arow .adot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;box-shadow:0 0 6px currentColor}
-.arow .aname{flex:0 0 auto;font-size:11px;max-width:86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.arow .ameta{flex:1;min-width:0;color:var(--dim);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.arow .astate{flex:0 0 auto;font-size:10px}
-.astate.connected{color:var(--run)} .astate.open-unconnected{color:var(--wait)} .astate.closed{color:var(--idle)} .astate.not-installed{color:#5a6676}
+.pitem.dim{color:var(--dim)}
+.sidebar-foot{border-top:1px solid var(--line);padding:11px 13px;color:var(--dim);font-size:10px;display:flex;align-items:center;gap:7px}
 #content{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
-#toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line)}
-.btn{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:8px;font-size:11px;padding:4px 9px;cursor:pointer}
-.btn:disabled{opacity:.45;cursor:not-allowed}
-#sess-filter,#variant-filter{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
-#sess-filter .fbtn,#variant-filter .fbtn{border:none;border-radius:0;border-right:1px solid var(--line)}
-#sess-filter .fbtn:last-child,#variant-filter .fbtn:last-child{border-right:none}
-#sess-filter .fbtn.on,#variant-filter .fbtn.on{background:#1f6feb;color:#fff}
-.srow .unhide{flex:0 0 auto;font-size:10px;color:#9db2cc;cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:0 5px}
-.srow .hbadge{flex:0 0 auto;font-size:9px;color:#e3b341;border:1px solid #e3b34166;border-radius:4px;padding:0 3px}
-.srow .unhide:hover{color:#fff;border-color:#3d4a60}
-#toolbar .sp{flex:1}
-#sessions{flex:1;overflow:auto;padding:4px 0}
-.srow{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid rgba(36,44,58,.45);cursor:pointer}
-.srow:hover{background:rgba(255,255,255,.03)}
-.srow.sel{background:rgba(31,111,235,.14);box-shadow:inset 2px 0 0 var(--acc)}
-.srow .src{width:80px;font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 0 auto}
-.srow .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
-.srow .lbl{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.srow .meta{font-size:10.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.srow .st{font-size:11px;flex:0 0 auto}
-.srow .pend{font-size:10px;color:var(--wait);flex:0 0 auto}
-.srow .hx{flex:0 0 auto;font-size:10px;color:#5c6a7e;cursor:pointer;border:1px solid transparent;border-radius:5px;padding:0 3px}
-.srow .hx:hover{color:var(--txt);border-color:var(--line)}
-.srow .tm{width:44px;text-align:right;color:var(--dim);font-size:10px;flex:0 0 auto}
-.srow.hist .lbl{color:#c3ceda}
-.empty{padding:18px 12px;color:var(--dim);font-size:12px;text-align:center}
-/* ---- 底部：会话控制 ---- */
-footer{flex:0 0 auto;border-top:1px solid var(--line);padding:8px 12px 6px;background:rgba(255,255,255,.015)}
-.trow{font-size:10px;color:#9db2cc;margin-bottom:5px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.trow b{color:#e6edf3;font-weight:600}
-.composer{display:flex;gap:8px;align-items:flex-end}
-.composer textarea{flex:1;height:46px;resize:none;background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:9px;padding:8px 9px;font:12px/1.45 inherit;outline:none}
-.composer textarea:focus{border-color:#3d4a60}
-.crow{display:flex;align-items:center;gap:6px;margin-top:6px}
-.crow .hint{flex:1;font-size:10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.send{background:var(--acc);border:none;color:#fff;border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer}
-.send:disabled{opacity:.5}
-#queue{max-height:72px;overflow:auto;margin-top:6px;display:flex;flex-direction:column;gap:4px}
-.qitem{display:flex;gap:6px;align-items:baseline;font-size:11px;color:var(--dim)}
-.qitem .qt{flex:1;color:#a9b6c9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.qitem .qs{flex:0 0 auto;font-size:10px;border:1px solid var(--line);border-radius:6px;padding:0 4px}
-.qitem .qc{flex:0 0 auto;font-size:10px;color:#7f8ea3;cursor:pointer;text-decoration:underline}
-.qs.queued{color:var(--wait)} .qs.failed{color:var(--err)}
-.note{padding:5px 2px 0;font-size:10px;color:var(--dim)}
+.workspace-head{display:flex;align-items:center;gap:12px;padding:17px 20px 13px;flex:none}
+.workspace-title{flex:1;min-width:0}
+.eyebrow{font-size:9px;color:var(--dim);margin-bottom:3px}
+h1,.sp-title,.u-title{font-size:20px;font-weight:600;margin:0;line-height:1.35}
+#chips{display:flex;gap:13px;padding:0 20px 12px;flex-wrap:wrap;flex:none;min-height:28px;color:var(--dim)}
+.chip{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:10px;color:var(--dim)}
+.chip strong{font-size:14px;color:var(--txt);font-weight:500;font-variant-numeric:tabular-nums}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:30px;padding:5px 9px;border:1px solid var(--line);border-radius:3px;background:var(--win);font-size:11px;white-space:nowrap}
+.btn:hover:not(:disabled){background:var(--hover)}
+.primary{background:var(--acc);color:var(--ink);border-color:var(--acc);font-weight:600}
+.primary:hover:not(:disabled){background:var(--acc);filter:brightness(.95)}
+#agent-tabs{display:flex;gap:5px;padding:0 20px 11px;flex:none;flex-wrap:wrap}
+#agent-tabs .tab{display:flex;gap:5px;align-items:center;background:none;border:1px solid transparent;color:var(--dim);border-radius:3px;font-size:10px;padding:3px 7px}
+#agent-tabs .tab:hover{color:var(--txt);border-color:var(--line)}
+#agent-tabs .tab.on{color:var(--txt);background:var(--selected);border-color:var(--line)}
+#toolbar{flex:none;display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:8px 20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:var(--win)}
+#sess-filter,#variant-filter{display:flex;max-width:100%;gap:2px}
+.fbtn{min-height:26px;border:0;padding:4px 6px;font-size:10px;color:var(--dim);background:none}
+.fbtn.on{color:var(--txt);background:var(--selected)}
+#toggle-history{margin-left:auto}
+#toggle-history[aria-pressed=true]{color:var(--acc);border-color:var(--acc)}
+.search-row{flex:none;display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid var(--line)}
+.search-box{display:flex;align-items:center;gap:7px;min-width:100px;flex:1;color:var(--dim)}
+#search{width:100%;min-width:0;background:none;border:0;outline:none;font-size:11px}
+#search::placeholder{color:var(--dim)}
+#proj-hint{min-width:0;max-width:60%;text-align:right;font-size:9px;color:var(--dim)}
+#sessions{flex:1;min-height:0;overflow:auto}
+.srow{position:relative;display:flex;align-items:center;gap:9px;min-height:66px;padding:11px 15px 11px 19px;border-left:2px solid transparent;border-bottom:1px solid var(--line);cursor:pointer}
+.srow:hover{background:var(--hover)}
+.srow.sel{background:var(--selected);border-left-color:var(--acc)}
+.srow .src{width:66px;font-size:9px;color:var(--dim);flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.srow .lbl{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .meta{font-size:9px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srow .st{font-size:10px;flex:none}
+.srow .pend{font-size:9px;color:var(--wait);flex:none}
+.srow .tm{font-size:10px;width:42px;text-align:right;color:var(--dim);font-variant-numeric:tabular-nums;flex:none}
+.srow .row-actions{display:flex;gap:0;flex:none}
+.srow .row-actions .icon-btn{width:24px;height:24px}
+.srow .row-actions .icon{width:14px;height:14px}
+.srow .hbadge{font-size:9px;color:var(--wait)}
+.empty{padding:35px 16px;color:var(--dim);font-size:11px;text-align:center;overflow-wrap:anywhere}
+.empty .btn{margin-top:13px}
+#inspector{flex:none;width:214px;min-width:0;border-left:1px solid var(--line);background:var(--win);padding:17px 15px;overflow:auto}
+.inspector-head{display:flex;justify-content:space-between;align-items:center;color:var(--dim);font-size:10px}
+.inspector-name{font-size:14px;font-weight:500;line-height:1.6;margin:14px 0 6px;overflow-wrap:anywhere}
+.inspector-activity{color:var(--dim);font-size:10px;overflow-wrap:anywhere}
+.facts{display:grid;grid-template-columns:48px minmax(0,1fr);gap:9px 8px;font-size:10px;margin:20px 0}
+.facts dt{color:var(--dim)}
+.facts dd{margin:0;overflow-wrap:anywhere}
+.inspector-section{padding-top:15px;border-top:1px solid var(--line);margin-top:16px}
+.inspector-section .eyebrow{margin-bottom:9px}
+.path{overflow-wrap:anywhere;font-size:10px;color:var(--dim)}
+.channel{border-left:2px solid var(--acc);padding:7px 10px;background:var(--surface);font-size:10px;margin-top:15px;overflow-wrap:anywhere}
+#status-page,#usage-page{flex:1;min-height:0;overflow:auto;display:none;padding:22px 24px}
+#status-page.on,#usage-page.on{display:block}
+.page-head{display:flex;align-items:center;gap:15px;margin-bottom:8px}
+.page-head>div{flex:1}
+.sp-sub,.u-sub{font-size:10px;color:var(--dim);margin-bottom:20px;max-width:980px;line-height:1.8}
+#software-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:18px 26px;padding:4px 0 20px;margin-bottom:20px;border-bottom:1px solid var(--line)}
+.metric{min-width:0}.metric-label{font-size:9px;color:var(--dim)}.metric-value{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
+.chart-section{margin:0 0 25px}.chart-title{font-size:12px;font-weight:600;margin:0 0 5px}.chart-caption{font-size:9px;color:var(--dim);margin-bottom:13px}
+.chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:22px}
+.chart-panel{min-width:0;padding:13px 14px;border:1px solid var(--line);border-radius:4px;background:var(--win)}
+.chart-panel h3{font-size:10px;font-weight:600;margin:0 0 11px}
+.chart-list{display:flex;flex-direction:column;gap:10px}
+.chart-row{min-width:0}
+.chart-row-head{display:flex;align-items:center;gap:7px;min-width:0;margin-bottom:4px}
+.agent-logo{width:24px;height:24px;object-fit:contain;border-radius:5px;flex:none;background:var(--surface)}
+.chart-row .agent-logo{width:18px;height:18px;border-radius:4px}
+.chart-name{font-size:10px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chart-value{font-size:10px;font-variant-numeric:tabular-nums;color:var(--txt);white-space:nowrap}
+.chart-state{font-size:9px;color:var(--dim);white-space:nowrap}
+.chart-track{height:5px;border-radius:1px;background:var(--surface);overflow:hidden}
+.chart-fill{height:100%;min-width:0;background:var(--bar-color,var(--acc));transition:width .18s ease}
+.chart-empty{font-size:10px;color:var(--dim);padding:10px 0}
+#status-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:12px}
+.scard{background:var(--win);border:1px solid var(--line);border-radius:4px;padding:15px;display:flex;flex-direction:column;gap:9px;min-width:0}
+.sc-head{display:flex;align-items:center;gap:8px}
+.sc-dot{width:7px;height:7px;border-radius:50%;flex:none}
+.sc-head .agent-logo{width:28px;height:28px}
+.sc-name{font-size:12px;font-weight:600;flex:1;min-width:0;overflow-wrap:anywhere}
+.sc-badge{font-size:10px;flex:none}
+.sc-row{font-size:10px;color:var(--dim);display:flex;gap:6px;flex-wrap:wrap}
+.sc-row b{color:var(--txt);font-weight:500;overflow-wrap:anywhere}
+.sc-note{font-size:10px;color:var(--dim);line-height:1.8;overflow-wrap:anywhere}
+.sc-ev{font-size:9px;color:var(--dim);padding-top:8px;border-top:1px solid var(--line);overflow-wrap:anywhere}
+.sc-ev summary{cursor:pointer}
+.sc-actions{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:5px}
+.u-tot{display:flex;gap:24px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding:15px 0 21px;margin-bottom:20px}
+.u-tot .chip{font-size:12px;color:var(--txt)}
+.utable-wrap{width:100%;overflow:auto}
+.utable{border-collapse:collapse;font-size:11px;width:100%;margin-bottom:10px}
+.utable th,.utable td{text-align:right;padding:10px 9px;border-bottom:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
+.utable th{color:var(--dim);font-weight:400;font-size:10px;background:var(--surface)}
+.utable td:first-child,.utable th:first-child{text-align:left}
+.u-src-h{font-size:12px;font-weight:600;margin:24px 0 10px}
+.u-note{font-size:10px;color:var(--dim);margin-top:16px;line-height:1.8}
+.u-ranges{display:flex;gap:3px}
+.u-ranges button{border:1px solid var(--line);background:var(--win);color:var(--dim);border-radius:3px;padding:5px 12px;font-size:11px}
+.u-ranges button.on{color:var(--txt);background:var(--selected);border-color:var(--acc)}
+footer{flex:none;max-height:38vh;overflow:auto;border-top:1px solid var(--line);padding:10px 20px;background:var(--win)}
+.target-line{display:flex;gap:8px;align-items:center;margin-bottom:7px;color:var(--dim)}
+.target-icon{color:var(--acc);flex:none}
+.trow{font-size:10px;text-align:left;min-width:0;flex:1;border:0;background:none;padding:0;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow b{color:var(--txt);font-weight:500}
+#target-warning{display:flex;gap:8px;align-items:center;padding:6px 0 9px;color:var(--wait);font-size:10px}
+#target-warning-text{flex:1;overflow-wrap:anywhere}
+#target-warning .btn{min-height:24px;padding:2px 7px;color:var(--wait)}
+.composer{display:flex;gap:8px;align-items:flex-end;border:1px solid var(--line);border-radius:4px;background:var(--bg);padding:8px 9px 8px 12px}
+.composer:focus-within{border-color:var(--acc)}
+.composer textarea{flex:1;min-width:0;height:38px;max-height:90px;resize:vertical;background:none;border:0;padding:0;font-size:12px;line-height:1.7;outline:none}
+.composer textarea::placeholder{color:var(--dim)}
+.send{width:35px;height:35px;border:0;border-radius:3px;background:var(--acc);color:var(--ink);display:grid;place-items:center;flex:none}
+.crow{display:flex;align-items:center;gap:12px;margin-top:5px;min-height:24px}
+.crow .hint{flex:1;min-width:0;font-size:9px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.queue-toggle{display:flex;align-items:center;gap:5px;border:0;background:none;color:var(--dim);padding:2px 0;font-size:10px}
+.queue-toggle .icon{width:13px;height:13px}
+#queue{max-height:86px;overflow:auto;margin-top:5px}
+.qitem{display:flex;gap:8px;align-items:center;font-size:10px;padding:3px 0;border-top:1px solid var(--line)}
+.qt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt)}
+.qs{flex:none;font-size:9px}
+.qc{width:24px;height:24px}
+.qs.queued,.qs.pending{color:var(--wait)}
+.qs.failed{color:var(--err)}
+.statusbar{flex:none;min-height:24px;display:flex;align-items:center;gap:8px;padding:4px 20px;border-top:1px solid var(--line);color:var(--dim);font-size:9px}
+#note{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#connection{display:flex;gap:6px;align-items:center;white-space:nowrap}
+#connection[data-connected=false]{color:var(--wait)}
+#feedback{position:fixed;bottom:32px;right:16px;max-width:min(540px,calc(100% - 32px));border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:4px;box-shadow:var(--shadow);background:var(--win);padding:12px 15px;font-size:11px;overflow-wrap:anywhere;z-index:10}
+#feedback[data-kind=error]{border-left-color:var(--err)}
+#feedback[data-kind=warning]{border-left-color:var(--wait)}
+dialog{width:min(470px,calc(100% - 32px));max-height:85vh;overflow:auto;border:1px solid var(--line);border-top:2px solid var(--acc);border-radius:5px;padding:21px;background:var(--win);color:var(--txt);box-shadow:var(--shadow)}
+dialog::backdrop{background:#0008}
+.dialog-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.dialog-head h2{font-size:16px;font-weight:600;margin:0}
+.field{display:flex;flex-direction:column;gap:6px;margin:13px 0;font-size:11px}
+.field>span{color:var(--dim)}
+.field input,.field select{width:100%;min-width:0;border:1px solid var(--line);border-radius:3px;background:var(--bg);padding:8px 10px}
+.dialog-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}
+.capability-note{font-size:10px;color:var(--dim);line-height:1.8}
+.capability-note p{margin:5px 0;overflow-wrap:anywhere}
+#new-error{color:var(--err);font-size:11px;overflow-wrap:anywhere}
+@media(min-width:1350px){#project-sidebar{width:214px}#inspector{width:270px}.srow{min-height:73px;padding:14px 22px}.srow .lbl{font-size:13px}.srow .meta{font-size:10px}.srow .src{width:82px}#content .workspace-head{padding-top:22px;padding-bottom:18px}}
+@media(max-width:1090px){#inspector{display:none}#inspector[data-open=true]{display:block;position:fixed;right:0;top:98px;bottom:0;width:270px;z-index:5;box-shadow:var(--shadow)}}
+@media(max-width:759px){header{padding:8px 13px;gap:8px}.local{display:none}.brand-label{font-size:8px}.brand-name{font-size:14px}#view-nav{padding:0 13px;gap:20px}.nav-end{display:none}#project-sidebar{width:145px}.workspace-head{padding:14px 13px 10px}#toolbar{padding:7px 10px;gap:4px}#agent-tabs{padding:0 10px 8px;gap:2px}#chips{padding:0 13px 10px;gap:8px}.search-row{padding:7px 12px}#proj-hint{max-width:45%}.srow{padding:10px;gap:6px}.srow .src{width:47px;font-size:8px}.srow .tm{display:none}.srow .pend{position:absolute;right:65px;bottom:7px;font-size:8px}.srow .st{font-size:9px}footer{padding:9px 13px}.statusbar{padding:4px 13px}.scard{padding:12px}#status-page,#usage-page{padding:18px 15px}}
+@media(max-width:539px){header .aggchip{display:none}.theme-switch .icon-btn{width:24px}#project-sidebar{width:112px}.side-h{padding:12px 10px 8px}.pitem{gap:4px;padding:7px 4px;font-size:10px}.pitem .icon{display:none}.pitem .plive{display:none}.workspace-head{align-items:flex-start;gap:5px}.workspace-head .btn{font-size:10px;padding:4px 6px}.workspace-head .btn .icon{width:13px}.workspace-head h1{font-size:17px}.eyebrow{font-size:8px}#chips{gap:7px}.chip{font-size:9px}.chip strong{font-size:11px}#variant-filter{flex-wrap:wrap}.fbtn{font-size:9px;padding:3px 4px}#toggle-history{font-size:9px;min-height:24px;padding:3px 5px}.search-row{flex-wrap:wrap}.search-box{flex-basis:100%}#proj-hint{max-width:none;text-align:left;font-size:8px}.srow{gap:5px;flex-wrap:wrap;min-height:86px}.srow .src{width:auto;order:1}.srow .dot{order:0}.srow .mid{order:3;flex-basis:100%;padding-right:45px}.srow .st{order:2;margin-left:auto}.srow .row-actions{position:absolute;right:7px;bottom:8px}.srow .pend{right:12px;top:7px;bottom:auto}.srow:has(.pend) .st{margin-right:36px}.srow .lbl{font-size:11px}.srow .meta{font-size:8px}#status-cards{grid-template-columns:minmax(0,1fr)}.u-tot{gap:12px}.utable th,.utable td{padding:8px 6px;font-size:10px}#connection-label{display:none}.crow .hint{font-size:8px}#queue-clear{width:22px}}
+@media(prefers-reduced-motion:no-preference){button{transition:background-color .12s,color .12s}header .brand-mark{animation:boot .4s ease-out}@keyframes boot{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}}
 </style>
 </head>
 <body>
+<!-- Lucide static 0.468.0 (ISC). License: demo/assets/lucide-LICENSE -->
+<svg id="ui-symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:none">
+<symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5" />
+  <line x1="12" x2="20" y1="19" y2="19" /></symbol>
+<symbol id="i-radio" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" />
+  <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" />
+  <circle cx="12" cy="12" r="2" />
+  <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" />
+  <path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" /></symbol>
+<symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></symbol>
+<symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" />
+  <path d="M12 2v2" />
+  <path d="M12 20v2" />
+  <path d="m4.93 4.93 1.41 1.41" />
+  <path d="m17.66 17.66 1.41 1.41" />
+  <path d="M2 12h2" />
+  <path d="M20 12h2" />
+  <path d="m6.34 17.66-1.41 1.41" />
+  <path d="m19.07 4.93-1.41 1.41" /></symbol>
+<symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2" />
+  <line x1="8" x2="16" y1="21" y2="21" />
+  <line x1="12" x2="12" y1="17" y2="21" /></symbol>
+<symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+  <path d="M21 3v5h-5" />
+  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+  <path d="M8 16H3v5" /></symbol>
+<symbol id="i-panel-top" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2" />
+  <path d="M3 9h18" /></symbol>
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" />
+  <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" />
+  <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></symbol>
+<symbol id="i-chart-no-axes-column" viewBox="0 0 24 24"><line x1="18" x2="18" y1="20" y2="10" />
+  <line x1="12" x2="12" y1="20" y2="4" />
+  <line x1="6" x2="6" y1="20" y2="14" /></symbol>
+<symbol id="i-cpu" viewBox="0 0 24 24"><rect width="16" height="16" x="4" y="4" rx="2" />
+  <rect width="6" height="6" x="9" y="9" rx="1" />
+  <path d="M15 2v2" />
+  <path d="M15 20v2" />
+  <path d="M2 15h2" />
+  <path d="M2 9h2" />
+  <path d="M20 15h2" />
+  <path d="M20 9h2" />
+  <path d="M9 2v2" />
+  <path d="M9 20v2" /></symbol>
+<symbol id="i-hard-drive" viewBox="0 0 24 24"><line x1="22" x2="2" y1="12" y2="12" />
+  <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+  <line x1="6" x2="6.01" y1="16" y2="16" />
+  <line x1="10" x2="10.01" y1="16" y2="16" /></symbol>
+<symbol id="i-panel-right" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2" />
+  <path d="M15 3v18" /></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14" />
+  <path d="M12 5v14" /></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+  <path d="M3 3v5h5" />
+  <path d="M12 7v5l4 2" /></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" />
+  <path d="m21 21-4.3-4.3" /></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18" />
+  <path d="m6 6 12 12" /></symbol>
+<symbol id="i-crosshair" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" />
+  <line x1="22" x2="18" y1="12" y2="12" />
+  <line x1="6" x2="2" y1="12" y2="12" />
+  <line x1="12" x2="12" y1="6" y2="2" />
+  <line x1="12" x2="12" y1="22" y2="18" /></symbol>
+<symbol id="i-triangle-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+  <path d="M12 9v4" />
+  <path d="M12 17h.01" /></symbol>
+<symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7" />
+  <path d="M12 19V5" /></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M3 12h.01" />
+  <path d="M3 18h.01" />
+  <path d="M3 6h.01" />
+  <path d="M8 12h13" />
+  <path d="M8 18h13" />
+  <path d="M8 6h13" /></symbol>
+<symbol id="i-trash-2" viewBox="0 0 24 24"><path d="M3 6h18" />
+  <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+  <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+  <line x1="10" x2="10" y1="11" y2="17" />
+  <line x1="14" x2="14" y1="11" y2="17" /></symbol>
+<symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></symbol>
+<symbol id="i-folder-clock" viewBox="0 0 24 24"><circle cx="16" cy="16" r="6" />
+  <path d="M7 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2" />
+  <path d="M16 14v2l1 1" /></symbol>
+<symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M7 7h10v10" />
+  <path d="M7 17 17 7" /></symbol>
+<symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" />
+  <circle cx="12" cy="12" r="3" /></symbol>
+<symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" />
+  <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
+  <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" />
+  <path d="m2 2 20 20" /></symbol>
+<symbol id="i-filter-x" viewBox="0 0 24 24"><path d="M13.013 3H2l8 9.46V19l4 2v-8.54l.9-1.055" />
+  <path d="m22 3-5 5" />
+  <path d="m17 3 5 5" /></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+  <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></symbol>
+</svg>
 <div id="app">
   <header>
-    <span class="logo">AgentPet<small>总控</small></span>
-    <nav id="view-nav">
-      <button id="view-sessions" class="on" title="会话总览（实时 / 历史 / 投递）">会话</button>
-      <button id="view-usage" title="Token 用量（按 Agent × 模型计数；全量扫描 60s 增量缓存）">用量</button>
-      <button id="view-status" title="软件状态独立页（四态 / 通道 / CLI与桌面 / 证据）">软件</button>
-    </nav>
-    <nav id="agent-tabs"></nav>
+    <div class="brand"><img class="brand-mark" src="/assets/codeall-mark.svg" alt=""><div><div class="brand-name">CodeAll</div><div class="brand-label">TACTICAL TERMINAL</div></div></div>
+    <span class="header-space"></span>
+    <span class="local"><svg class="icon" aria-hidden="true"><use href="#i-radio"></use></svg> LOCAL</span>
     <span class="aggchip"><span class="dot" id="agg-dot"></span><span id="agg-text">连接中…</span></span>
-    <span class="chips" id="chips"></span>
-    <button class="hbtn" id="toggle-pet" title="显示 / 隐藏迷你条（附属单行悬浮条，隐藏后可从托盘菜单唤回）">◧ 迷你条</button>
+    <div class="theme-switch" role="group" aria-label="界面主题">
+      <button class="icon-btn" data-theme-mode="dark" title="深色主题" aria-label="深色主题"><svg class="icon" aria-hidden="true"><use href="#i-moon"></use></svg></button>
+      <button class="icon-btn" data-theme-mode="light" title="亮色主题" aria-label="亮色主题"><svg class="icon" aria-hidden="true"><use href="#i-sun"></use></svg></button>
+      <button class="icon-btn" data-theme-mode="system" title="跟随系统" aria-label="跟随系统"><svg class="icon" aria-hidden="true"><use href="#i-monitor"></use></svg></button>
+    </div>
+    <button class="icon-btn" id="refresh-data" title="刷新会话目录" aria-label="刷新会话目录"><svg class="icon" aria-hidden="true"><use href="#i-refresh-cw"></use></svg></button>
+    <button class="icon-btn" id="toggle-pet" title="显示 / 隐藏迷你条" aria-label="显示 / 隐藏迷你条"><svg class="icon" aria-hidden="true"><use href="#i-panel-top"></use></svg></button>
   </header>
+  <nav id="view-nav" aria-label="主导航">
+    <button id="view-sessions" class="on"><svg class="icon" aria-hidden="true"><use href="#i-layers"></use></svg>会话</button>
+    <button id="view-usage"><svg class="icon" aria-hidden="true"><use href="#i-chart-no-axes-column"></use></svg>用量</button>
+    <button id="view-status"><svg class="icon" aria-hidden="true"><use href="#i-cpu"></use></svg>软件</button>
+    <span class="nav-end">本地控制台 / 01</span>
+  </nav>
   <div id="main">
-    <aside>
-      <div class="side-h">项目</div>
+    <aside id="project-sidebar">
+      <div class="side-h">项目目录 <span id="project-count">—</span></div>
       <div id="projects"><div class="empty">读取中…</div></div>
+      <div class="sidebar-foot"><svg class="icon" aria-hidden="true"><use href="#i-hard-drive"></use></svg> LOCAL WORKSPACE</div>
     </aside>
     <section id="content">
+      <div class="workspace-head">
+        <div class="workspace-title"><div class="eyebrow">OPERATIONS / SESSIONS</div><h1>会话总览</h1></div>
+        <button class="icon-btn" id="toggle-inspector" title="会话详情" aria-label="会话详情"><svg class="icon" aria-hidden="true"><use href="#i-panel-right"></use></svg></button>
+        <button class="btn primary" id="new-session" disabled><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg>新建会话</button>
+      </div>
+      <div id="chips" aria-label="当前会话统计"></div>
+      <nav id="agent-tabs" aria-label="Agent 来源"></nav>
       <div id="toolbar">
-        <nav id="sess-filter" title="会话区视图切换">
+        <nav id="sess-filter" aria-label="会话状态">
           <button class="btn fbtn on" data-filter="all">活跃会话</button>
           <button class="btn fbtn" data-filter="done">完成会话</button>
           <button class="btn fbtn" data-filter="hidden">隐藏会话</button>
         </nav>
-        <nav id="variant-filter" title="会话形态切换：CLI（命令行版）/ 桌面端（App）/ IDE（编辑器插件）">
+        <nav id="variant-filter" aria-label="会话形态">
           <button class="btn fbtn on" data-variant="">全部形态</button>
           <button class="btn fbtn" data-variant="cli">CLI</button>
           <button class="btn fbtn" data-variant="desktop">桌面</button>
           <button class="btn fbtn" data-variant="ide">IDE</button>
         </nav>
-        <button class="btn" id="toggle-history" title="仅在「活跃会话」视图生效">历史会话</button>
-        <button class="btn" id="new-session" disabled>＋ 新建会话</button>
-        <span class="sp"></span>
+        <button class="btn" id="toggle-history" title="显示未被实时跟随的活跃会话" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-history"></use></svg>历史会话</button>
+      </div>
+      <div class="search-row">
+        <label class="search-box"><svg class="icon" aria-hidden="true"><use href="#i-search"></use></svg><input id="search" type="search" placeholder="搜索会话…" aria-label="搜索标题、项目、Agent 或会话 ID"></label>
         <span id="proj-hint" style="font-size:10px;color:var(--dim)"></span>
       </div>
       <div id="sessions"><div class="empty">正在读取会话状态…</div></div>
     </section>
+    <section id="inspector" aria-label="会话详情">
+      <div class="inspector-head">会话详情<button class="icon-btn" id="close-inspector" title="收起详情" aria-label="收起详情"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>
+      <div id="inspector-body"><div class="empty">未指定会话</div></div>
+    </section>
   </div>
   <section id="status-page">
-    <div class="sp-title">软件状态</div>
-    <div class="sp-sub">本机 agent 软件 · 四态（已连接 / 已打开 / 未打开 / 未下载）· 观察通道 · 命令行版与桌面版</div>
+    <div class="page-head"><div><div class="eyebrow">CONNECTIONS / SOFTWARE</div><h1 class="sp-title">软件状态</h1></div><button class="icon-btn" id="status-refresh" title="读取最新软件状态" aria-label="读取最新软件状态"><svg class="icon" aria-hidden="true"><use href="#i-refresh-cw"></use></svg></button></div>
+    <div class="sp-sub" id="software-summary">正在探测本机 Agent 软件…</div>
+    <div id="software-metrics"></div>
+    <section class="chart-section" aria-labelledby="software-chart-title">
+      <h2 id="software-chart-title" class="chart-title">Agent 运行概览</h2>
+      <div class="chart-caption">会话数来自实时目录与历史目录去重；Token 按各来源 in + out 统计。</div>
+      <div id="software-chart" class="chart-grid"></div>
+    </section>
     <div id="status-cards"></div>
   </section>
   <section id="usage-page">
-    <div class="u-title">Token 用量</div>
-    <div class="u-sub">按 Agent × 模型计数 · 子代理消耗计入 · in 是否含 cache 随源而异（Claude/DSH/Kimi 不含 / Codex·ZCode 含）· 对账 ZCode UI「今日消耗」= in+cache读+cache写+out · 明细见 /api/usage</div>
+    <div class="page-head"><div><div class="eyebrow">TELEMETRY / TOKEN USAGE</div><h1 class="u-title">Token 用量</h1></div><button class="icon-btn" id="usage-refresh" title="重新扫描用量" aria-label="重新扫描用量"><svg class="icon" aria-hidden="true"><use href="#i-refresh-cw"></use></svg></button></div>
+    <div class="u-sub">按 Agent × 模型计数，含子代理消耗。Claude / DSH / Kimi 的 in 不含缓存，Codex / ZCode 的 in 含缓存。ZCode 今日消耗 = in + cache读 + cache写 + out。</div>
     <div id="usage-body"><div class="empty">首次全量扫描中…</div></div>
   </section>
   <footer>
-    <div class="trow" id="target" title="点击恢复自动选择">投递目标：自动 · 最近活跃主会话（点击会话行可指定）</div>
+    <div class="target-line"><svg class="icon target-icon" aria-hidden="true"><use href="#i-crosshair"></use></svg><button class="trow" id="target" title="恢复自动投递目标">投递目标：自动 · 最近活跃主会话</button><button class="icon-btn" id="clear-target" title="解除指定目标" aria-label="解除指定目标" hidden><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>
+    <div id="target-warning" hidden><svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"></use></svg><span id="target-warning-text"></span><button class="btn" id="locate-target">定位目标</button></div>
     <div class="composer">
-      <textarea id="input" placeholder="给选中会话发消息…（Enter 发送 / Shift+Enter 换行）"></textarea>
-      <button class="send" id="send">发送</button>
+      <textarea id="input" maxlength="2000" placeholder="输入消息…" aria-label="发送给当前投递目标的消息"></textarea>
+      <button class="send" id="send" title="发送消息" aria-label="发送消息"><svg class="icon" aria-hidden="true"><use href="#i-arrow-up"></use></svg></button>
     </div>
-    <div class="crow"><span class="hint" id="hint">未连接</span><span class="chip" title="窗口失焦时按 ⌥⌘I 直接聚焦输入框">⌥⌘I 聚焦</span></div>
-    <div id="queue"></div>
-    <div class="note" id="note">数据只读自本机会话日志；输入经所选后端的官方通道送达。</div>
+    <div class="crow"><span class="hint" id="hint">未连接</span><button class="queue-toggle" id="queue-toggle" aria-expanded="false" title="展开投递队列"><svg class="icon" aria-hidden="true"><use href="#i-list"></use></svg><span id="queue-count">队列 0</span></button><button class="icon-btn" id="queue-clear" title="清空队列" aria-label="清空队列" disabled><svg class="icon" aria-hidden="true"><use href="#i-trash-2"></use></svg></button></div>
+    <div id="queue" hidden></div>
   </footer>
+  <div class="statusbar"><span id="connection" data-connected="false"><span class="dot" id="connection-dot"></span><span id="connection-label">连接中</span></span><span id="note">读取本地状态…</span></div>
 </div>
+<div id="feedback" role="status" aria-live="polite" hidden></div>
+<dialog id="new-dialog" aria-labelledby="new-title">
+  <form id="new-form">
+    <div class="dialog-head"><h2 id="new-title">新建会话</h2><button class="icon-btn" id="new-close" type="button" title="关闭" aria-label="关闭新建会话"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>
+    <label class="field"><span>Agent 软件</span><select id="new-source" required></select></label>
+    <label class="field"><span>工作目录</span><input id="new-cwd" list="project-paths" placeholder="使用 Agent 默认目录" autocomplete="off"></label>
+    <datalist id="project-paths"></datalist>
+    <div id="new-dsh-fields" hidden>
+      <label class="field"><span>模型（可选）</span><input id="new-model" placeholder="沿用 DSH 默认模型"></label>
+      <label class="field"><span>思考程度（可选）</span><select id="new-reasoning"><option value="">沿用默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="max">max</option></select></label>
+    </div>
+    <div class="capability-note" id="new-channel"></div>
+    <details class="capability-note"><summary>通道状态</summary><div id="new-capabilities"></div></details>
+    <p id="new-error" role="alert" hidden></p>
+    <div class="dialog-actions"><button class="btn" id="new-cancel" type="button">取消</button><button class="btn primary" id="new-submit" type="submit">创建会话</button></div>
+  </form>
+</dialog>
 <script>
 window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
 const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错（自动恢复）',error:'连接错误',waiting:'等待你',done:'已完成',ended:'已结束',unknown:'未知'};
-const COLOR={idle:'#8b98a9',thinking:'#4aa8ff',running:'#3fb950',working:'#3fb950','transient-error':'#e3b341',error:'#f85149',waiting:'#e3b341',done:'#bc8cff',ended:'#bc8cff',unknown:'#8b98a9'};
+const COLOR={idle:'var(--idle)',thinking:'var(--think)',running:'var(--run)',working:'var(--run)','transient-error':'var(--wait)',error:'var(--err)',waiting:'var(--wait)',done:'var(--done)',ended:'var(--done)',unknown:'var(--idle)'};
 const AGENT_STATUS_LABEL={connected:'已连接','open-unconnected':'已打开 · 未连接',closed:'未打开','not-installed':'未下载'};
-const AGENT_STATUS_COLOR={connected:'#3fb950','open-unconnected':'#e3b341',closed:'#8b98a9','not-installed':'#5a6676'};
+const AGENT_STATUS_COLOR={connected:'var(--run)','open-unconnected':'var(--wait)',closed:'var(--idle)','not-installed':'var(--dim)'};
 const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI'],['zcode','ZCODE']];
+const SOURCE_META={
+  dsh:{name:'DeepSeek Harness',logo:'/assets/agents/deepseek.png',color:'#159b76'},
+  'claude-code':{name:'Claude Code',logo:'/assets/agents/claude.png',color:'#d46e4b'},
+  codex:{name:'Codex',logo:'/assets/agents/codex.png',color:'#6478e8'},
+  'kimi-code':{name:'Kimi Code',logo:'/assets/agents/kimi.png',color:'#3889e9'},
+  zcode:{name:'ZCode',logo:'/assets/agents/zcode.png',color:'#46505a'},
+  agentos:{name:'AgentOS',logo:'/assets/codeall-mark.svg',color:'#be6ab6'},
+  opencode:{name:'OpenCode',logo:'/assets/codeall-mark.svg',color:'#d39a3c'}
+};
+const SOURCE_ORDER=['dsh','claude-code','codex','kimi-code','zcode','agentos','opencode'];
 const $=id=>document.getElementById(id);
+function icon(name){return '<svg class="icon" aria-hidden="true"><use href="#i-'+name+'"></use></svg>'}
 function esc(s){return String(s).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]))}
+function sourceMeta(source){return SOURCE_META[source]||{name:String(source||'Agent'),logo:'/assets/codeall-mark.svg',color:'#147a68'}}
+function agentLogo(source,className='agent-logo'){
+  const meta=sourceMeta(source);
+  return '<img class="'+className+'" src="'+meta.logo+'" alt="" loading="lazy" onerror="this.onerror=null;this.src=\'/assets/codeall-mark.svg\'">';
+}
+function readPreference(key,fallback){try{return localStorage.getItem(key)||fallback}catch(_){return fallback}}
+function writePreference(key,value){try{localStorage.setItem(key,value)}catch(_){}}
+function applyTheme(mode){
+  window.__THEME_MODE__=['light','dark','system'].includes(mode)?mode:'light';
+  let light=mode==='light';
+  if(mode==='system')light=!!(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches);
+  document.documentElement.dataset.theme=light?'light':'dark';
+  document.querySelectorAll('[data-theme-mode]').forEach(b=>b.setAttribute('aria-pressed',String(b.getAttribute('data-theme-mode')===window.__THEME_MODE__)));
+}
+function setTheme(mode){writePreference('agent-pet-theme',mode);applyTheme(mode)}
+applyTheme(readPreference('agent-pet-theme','light'));
+document.querySelectorAll('[data-theme-mode]').forEach(b=>b.addEventListener('click',()=>setTheme(b.getAttribute('data-theme-mode'))));
+window.addEventListener('storage',e=>{if(e.key==='agent-pet-theme')applyTheme(readPreference('agent-pet-theme','light'))});
+if(window.matchMedia)window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=>{if(window.__THEME_MODE__==='system')applyTheme('system')});
+let noticeTimer;
+function notice(text,kind='info'){
+  const el=$('feedback');
+  el.textContent=text;el.dataset.kind=kind;el.hidden=false;
+  clearTimeout(noticeTimer);
+  noticeTimer=setTimeout(()=>{el.hidden=true},kind==='error'?7000:4000);
+}
+function sourceCan(source,action,caps=(window.__SNAP__||{}).capabilities||{}){
+  if(!caps['can'+action])return false;
+  if(source!=='dsh')return (caps.cliChannels||[]).some(c=>c.source===source);
+  const p=caps.plugin||{},info=p.info||{};
+  return !!p.available&&!!((info.capabilities||{})['can'+action]??info['can'+action]);
+}
+function channelLabel(s,caps){
+  const source=s?s.source||'dsh':'';
+  if(!source)return (window.__SNAP__||{}).inputChannel?.detail||'由后端选择最近活跃主会话';
+  return sourceCan(source,'Input',caps)
+    ? (source==='dsh'?'DSH 插件直投':srcLabel({source})+' · CLI 投递'+(s.variant==='desktop'?'（桌面会话经 CLI 续接）':''))
+    : ((window.__SNAP__||{}).inputChannel?.mode==='cmd'?'自定义命令投递':'本地队列 · 无可用直投通道');
+}
+function saveDraft(){writePreference('agent-pet-draft',$('input').value.slice(0,2000))}
+$('input').value=readPreference('agent-pet-draft','').slice(0,2000);
+function updateSendButton(){
+  $('send').disabled=!!window.__SENDING__||!!window.__TARGET_MISSING__||!$('input').value.trim();
+}
+$('input').addEventListener('input',()=>{saveDraft();updateSendButton()});
+updateSendButton();
 function mmss(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}
 function relTime(ms,now){if(!ms)return '';const s=Math.max(0,Math.floor((now-ms)/1000));if(s<60)return s+' 秒前';if(s<3600)return Math.floor(s/60)+' 分钟前';if(s<86400)return Math.floor(s/3600)+' 小时前';return Math.floor(s/86400)+' 天前'}
 const VARIANT_LABEL={cli:'CLI',desktop:'桌面',ide:'IDE'};
@@ -205,31 +490,53 @@ function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.
 const USAGE_RANGES=[['all','全部'],['today','当日'],['d7','7 日内'],['d30','30 日内']];
 function uTable(rows,withSources){
   if(!rows||!rows.length)return '<div class="empty" style="text-align:left;margin-left:6px">（该时间窗内无用量）</div>';
-  let h='<table class="utable"><tr><th>模型</th>'+(withSources?'<th>来源</th>':'')+'<th>in</th><th>cache读</th><th>out</th><th>命中率</th><th>请求</th></tr>';
-  for(const m of rows){h+='<tr><td>'+esc(m.model)+'</td>'+(withSources?'<td style="color:var(--dim)">'+esc((m.sources||[]).map(x=>srcLabel({source:x})).join(' '))+'</td>':'')+'<td>'+fmtTok(m.input)+'</td><td>'+fmtTok(m.cacheRead)+'</td><td>'+fmtTok(m.output)+'</td><td>'+pct(m.hitRate)+'</td><td>'+fmtTok(m.requests)+'</td></tr>'}
-  return h+'</table>';
+  let h='<div class="utable-wrap"><table class="utable"><tr><th>模型</th>'+(withSources?'<th>来源</th>':'')+'<th>in</th><th>cache读</th><th>cache写</th><th>out</th><th>命中率</th><th>请求</th></tr>';
+  for(const m of rows){h+='<tr><td>'+esc(m.model)+'</td>'+(withSources?'<td style="color:var(--dim)">'+esc((m.sources||[]).map(x=>srcLabel({source:x})).join(' '))+'</td>':'')+'<td>'+fmtTok(m.input)+'</td><td>'+fmtTok(m.cacheRead)+'</td><td>'+fmtTok(m.cacheWrite)+'</td><td>'+fmtTok(m.output)+'</td><td>'+pct(m.hitRate)+'</td><td>'+fmtTok(m.requests)+'</td></tr>'}
+  return h+'</table></div>';
+}
+function chartRows(items,key,labelFn,valueFn,formatFn,maxValue){
+  const max=Math.max(0,...items.map(valueFn));
+  if(!items.length)return '<div class="chart-empty">暂无来源数据</div>';
+  return '<div class="chart-list">'+items.map(item=>{
+    const value=Math.max(0,Number(valueFn(item))||0),meta=sourceMeta(key(item));
+    const width=max?Math.max(value?2:0,value/max*100):0;
+    return '<div class="chart-row" data-source-chart="'+esc(key(item))+'"><div class="chart-row-head">'+agentLogo(key(item))+'<span class="chart-name" title="'+esc(meta.name)+'">'+esc(labelFn(item))+'</span><span class="chart-value">'+esc(formatFn(value))+'</span></div><div class="chart-track"><div class="chart-fill" style="width:'+width.toFixed(2)+'%;--bar-color:'+meta.color+'"></div></div></div>';
+  }).join('')+'</div>';
+}
+function usageSourceChart(view){
+  const entries=SOURCE_ORDER.map(source=>({source,data:(view.bySource||{})[source]||null}))
+    .filter(x=>x.data);
+  if(!entries.length)return '<div class="chart-empty">当前时间范围没有 Agent 用量数据。</div>';
+  const tokenCount=x=>Number(x.data?.totals?.input||0)+Number(x.data?.totals?.output||0);
+  const requestCount=x=>Number(x.data?.totals?.requests||0);
+  return '<div class="chart-grid">'
+    +'<section class="chart-panel"><h3>请求数</h3>'+chartRows(entries,x=>x.source,x=>sourceMeta(x.source).name,requestCount,fmtTok)+'</section>'
+    +'<section class="chart-panel"><h3>Token · in + out</h3>'+chartRows(entries,x=>x.source,x=>sourceMeta(x.source).name,tokenCount,fmtTok)+'</section>'
+    +'</div>';
 }
 function usageHtml(us,now){
   if(!us||us.pending)return '<div class="empty" style="text-align:left;margin-left:6px">首次全量扫描中…（本机 1.1GB 转录约需数秒，完成后自动出现）</div>';
   const range=window.__USAGE_RANGE__||'all';
-  const view=(range==='all'||!(us.ranges||{})[range])?us:us.ranges[range];
+  const view=range==='all'?us:(us.ranges||{})[range];
   const rl={today:'当日',d7:'7 日内',d30:'30 日内'}[range];
-  let h='<div class="u-ranges">'+USAGE_RANGES.map(([k,l])=>'<button data-urange="'+k+'"'+(range===k?' class="on"':'')+'>'+l+'</button>').join('')+'</div>';
+  let h='<div class="u-ranges" role="group" aria-label="用量时间范围">'+USAGE_RANGES.map(([k,l])=>'<button data-urange="'+k+'" aria-pressed="'+(range===k)+'"'+(range===k?' class="on"':'')+'>'+l+'</button>').join('')+'</div>';
+  if(!view)return h+'<div class="empty">当前时间窗数据暂不可用，等待下一次扫描。</div>';
   const t=view.totals||{};
-  h+='<div class="u-tot"><span class="chip">in '+fmtTok(t.input)+'</span><span class="chip">out '+fmtTok(t.output)+'</span><span class="chip">cache读 '+fmtTok(t.cacheRead)+'</span><span class="chip">命中率 '+pct(t.hitRate)+'</span><span class="chip">请求 '+fmtTok(t.requests)+'</span>'+(us.refreshing?'<span class="chip">扫描中…</span>':'')+(rl?'<span class="chip">'+rl+'</span>':'')+'</div>';
+  h+='<div class="u-tot"><span class="chip">in '+fmtTok(t.input)+'</span><span class="chip">out '+fmtTok(t.output)+'</span><span class="chip">cache读 '+fmtTok(t.cacheRead)+'</span><span class="chip">cache写 '+fmtTok(t.cacheWrite)+'</span><span class="chip">命中率 '+pct(t.hitRate)+'</span><span class="chip">请求 '+fmtTok(t.requests)+'</span>'+(us.refreshing?'<span class="chip">扫描中…</span>':'')+(rl?'<span class="chip">'+rl+'</span>':'')+'</div>';
   // 各 Agent 消耗量：claude/codex/kimi 按 CLI/桌面/IDE 形态拆行（与会话目录/软件状态页同口径）；dsh/zcode 单行
   const SRC_ORDER=['dsh','claude-code','codex','kimi-code','zcode'];
   const SRC_SPLIT={ 'claude-code':1, codex:1, 'kimi-code':1 };
-  h+='<div class="u-src-h">各 Agent 消耗量'+(rl?'（'+rl+'）':'')+'</div><table class="utable"><tr><th>Agent</th><th>in</th><th>cache读</th><th>out</th><th>命中率</th><th>请求</th><th>模型数</th></tr>';
+  h+='<section class="chart-section" aria-label="Agent 用量图表"><h2 class="chart-title">来源对比</h2><div class="chart-caption">图表按选定时间范围聚合；Token 以 in + out 计，缓存分项见下方明细。</div>'+usageSourceChart(view)+'</section>';
+  h+='<div class="u-src-h">各 Agent 消耗量'+(rl?'（'+rl+'）':'')+'</div><div class="utable-wrap"><table class="utable"><tr><th>Agent</th><th>in</th><th>cache读</th><th>cache写</th><th>out</th><th>命中率</th><th>请求</th><th>模型数</th></tr>';
   for(const src of SRC_ORDER){
     const d=view.bySource&&view.bySource[src];if(!d)continue;
     const vs=(SRC_SPLIT[src]&&d.variants&&d.variants.length)?d.variants:[{variant:null,totals:d.totals}];
     for(const v of vs){
       const t2=v.totals||{};
-      h+='<tr><td>'+esc(srcLabel({source:src,variant:v.variant}))+'</td><td>'+fmtTok(t2.input)+'</td><td>'+fmtTok(t2.cacheRead)+'</td><td>'+fmtTok(t2.output)+'</td><td>'+pct(t2.hitRate)+'</td><td>'+fmtTok(t2.requests)+'</td><td style="color:var(--dim)">'+(v.variant?'—':((d.models||[]).length+(d.partial?' · ⚠部分':'')))+'</td></tr>';
+      h+='<tr><td>'+esc(srcLabel({source:src,variant:v.variant}))+'</td><td>'+fmtTok(t2.input)+'</td><td>'+fmtTok(t2.cacheRead)+'</td><td>'+fmtTok(t2.cacheWrite)+'</td><td>'+fmtTok(t2.output)+'</td><td>'+pct(t2.hitRate)+'</td><td>'+fmtTok(t2.requests)+'</td><td style="color:var(--dim)">'+(v.variant?'—':((d.models||[]).length+(d.partial?' · 部分':'')))+'</td></tr>';
     }
   }
-  h+='</table>';
+  h+='</table></div>';
   h+='<div class="u-src-h">全部来源 · 同名模型合并'+(rl?'（'+rl+'）':'')+'</div>'+uTable(view.byModel||[],true);
   for(const src of SRC_ORDER){
     const d=view.bySource&&view.bySource[src];if(!d)continue;
@@ -252,14 +559,17 @@ function render(snap){
   const now=snap.ts||Date.now();
   // ---- 顶部：agent tabs + 聚合 ----
   const tabsEl=$('agent-tabs');
-  const tabsHtml=AGENT_TABS.map(([v,l])=>'<button class="tab'+((window.__AGENT__||'')===v?' on':'')+'" data-agent="'+v+'">'+l+'</button>').join('');
+  const tabsHtml=AGENT_TABS.map(([v,l])=>'<button class="tab'+((window.__AGENT__||'')===v?' on':'')+'" aria-pressed="'+((window.__AGENT__||'')===v)+'" data-agent="'+v+'">'+l+'</button>').join('');
   if(tabsEl.__petLastHtml!==tabsHtml){tabsEl.innerHTML=tabsHtml;tabsEl.__petLastHtml=tabsHtml}
   const agg=snap.agg||'idle';
-  $('agg-dot').style.background=COLOR[agg]||'#8b98a9';$('agg-dot').style.color=COLOR[agg]||'#8b98a9';
-  $('agg-text').textContent=STATE_LABEL[agg]||agg;$('agg-text').style.color=COLOR[agg]||'#8b98a9';
+  $('agg-dot').style.background=COLOR[agg]||COLOR.idle;$('agg-dot').style.color=COLOR[agg]||COLOR.idle;
+  $('agg-text').textContent=STATE_LABEL[agg]||agg;$('agg-text').style.color=COLOR[agg]||COLOR.idle;
   // 顶部 chips = 当前状态计数（stateCounts，每快照重算）；counters 是累计事件数（只增不减），不能当“当前在跑”展示
-  const c=snap.stateCounts||snap.counters||{};
-  $('chips').innerHTML=[['思考中',c.thinking],['运行',c.running],['等待',c.waiting],['出错',c.errors],['完成',c.done]].map(kv=>kv[1]?'<span class="chip">'+kv[0]+' '+kv[1]+'</span>':'').join('');
+  const c=snap.stateCounts||{};
+  $('chips').innerHTML=[['思考中',c.thinking],['运行',c.running],['等待',c.waiting],['出错',c.errors],['完成',c.done]].map(kv=>'<span class="chip"><strong>'+Number(kv[1]||0)+'</strong>'+kv[0]+'</span>').join('');
+  $('connection').dataset.connected=String(window.__CONNECTED__!==false);
+  $('connection-dot').style.background=window.__CONNECTED__===false?'var(--wait)':'var(--run)';
+  $('connection-label').textContent=window.__CONNECTED__===false?'连接中断 · 数据已冻结':'实时连接';
   // ---- 过滤口径：agent tab（顶部）+ 项目（左侧）----
   const agentSel=window.__AGENT__||'';
   const projListAll=(snap.catalog&&snap.catalog.projects)||[];
@@ -269,8 +579,9 @@ function render(snap){
   if(pid&&projListAll.length&&!curProj){window.__PROJECT__=''}   // 当前 agent 下无此项目 → 回「全部」
   const inProj=(s)=>!curProj?true:(s.projectKey!==undefined?s.projectKey===curProj.key:(s.cwd?curProj.cwd===s.cwd:false));
   // ---- 左侧：项目 ----
-  const projHtml='<div class="pitem'+(pid?'':' on')+'" data-proj="">全部项目<span class="pcnt">'+projList.length+'</span></div>'
-    +projList.map(p=>'<div class="pitem'+(p.key===pid?' on':'')+((p.dead||p.scratch)?' dim':'')+'" data-proj="'+esc(p.key)+'" title="'+esc(p.cwd||'')+(p.dead?'（目录已删除）':p.scratch?'（临时目录）':'')+'"><span class="pname">'+esc(p.name)+'</span><span class="pcnt">'+(p.liveCount?'<span class="plive">'+p.liveCount+' 进行</span> · ':'')+p.sessionCount+'</span></div>').join('');
+  const projHtml='<button class="pitem'+(curProj?'':' on')+'" data-proj="" aria-pressed="'+!curProj+'">'+icon('layers')+'<span class="pname">全部项目</span><span class="pcnt">'+projList.length+'</span></button>'
+    +projList.map(p=>'<button class="pitem'+(p.key===pid?' on':'')+((p.dead||p.scratch)?' dim':'')+'" aria-pressed="'+(p.key===pid)+'" data-proj="'+esc(p.key)+'" title="'+esc(p.cwd||'')+(p.dead?'（目录已删除）':p.scratch?'（临时目录）':'')+'">'+icon(p.scratch?'folder-clock':'folder')+'<span class="pname">'+esc(p.name)+'</span><span class="pcnt">'+(p.liveCount?'<span class="plive">'+Number(p.liveCount)+' 进行</span> · ':'')+Number(p.sessionCount||0)+'</span></button>').join('');
+  $('project-count').textContent=String(projList.length).padStart(2,'0');
   const projEl=$('projects');
   if(projEl.__petLastHtml!==projHtml){projEl.innerHTML=projHtml;projEl.__petLastHtml=projHtml}
   // ---- 软件状态独立页（视图=view-status 时展示，不与会话页重叠） ----
@@ -281,11 +592,49 @@ function render(snap){
   const sessPane=$('toolbar');
   if(sessPane)sessPane.style.visibility=view==='sessions'?'visible':'hidden';
   const agentsList=(snap.agents||[]);
+  const connected=agentsList.filter(a=>a.status==='connected').length;
+  $('software-summary').textContent=agentsList.length+' 个软件入口 · '+connected+' 已连接 · '+agentsList.filter(a=>a.status==='open-unconnected').length+' 已打开但未连接';
+  const sessionMap=new Map();
+  for(const s of (snap.sessions||[]).concat((snap.catalog&&snap.catalog.history)||[])){
+    if(s.kind==='subagent')continue;
+    const id=s.id||s.sessionId;
+    if(!id)continue;
+    sessionMap.set(id,s);
+  }
+  const sessionCounts={};
+  for(const s of sessionMap.values())sessionCounts[s.source||'dsh']=(sessionCounts[s.source||'dsh']||0)+1;
+  const bySource=(snap.usage&&snap.usage.bySource)||{};
+  const totalRequests=SOURCE_ORDER.reduce((sum,source)=>sum+Number(bySource[source]?.totals?.requests||0),0);
+  const totalTokens=SOURCE_ORDER.reduce((sum,source)=>sum+Number(bySource[source]?.totals?.input||0)+Number(bySource[source]?.totals?.output||0),0);
+  $('software-metrics').innerHTML=[
+    ['主会话',fmtTok(sessionMap.size)],
+    ['已连接入口',fmtTok(connected)],
+    ['请求',snap.usage?.pending?'扫描中':fmtTok(totalRequests)],
+    ['Token · in + out',snap.usage?.pending?'扫描中':fmtTok(totalTokens)]
+  ].map(([label,value])=>'<div class="metric"><div class="metric-label">'+label+'</div><div class="metric-value">'+value+'</div></div>').join('');
+  const sourceSet=new Set(SOURCE_ORDER);
+  for(const a of agentsList)sourceSet.add(a.base||a.source||a.id);
+  const chartSources=[...sourceSet].filter(source=>source&&(
+    SOURCE_ORDER.includes(source)||sessionCounts[source]||bySource[source]||
+    agentsList.some(a=>(a.base||a.source||a.id)===source)
+  ));
+  const maxSessions=Math.max(0,...chartSources.map(source=>sessionCounts[source]||0));
+  const sessionChart=chartSources.map(source=>{
+    const meta=sourceMeta(source),count=sessionCounts[source]||0,usage=bySource[source]?.totals||{};
+    const tokenCount=Number(usage.input||0)+Number(usage.output||0);
+    const statusItems=agentsList.filter(a=>(a.base||a.source||a.id)===source);
+    const status=statusItems.some(a=>a.status==='connected')?'connected':statusItems.some(a=>a.status==='open-unconnected')?'open-unconnected':statusItems.some(a=>a.status==='closed')?'closed':'not-installed';
+    const sessionWidth=maxSessions?Math.max(count?2:0,count/maxSessions*100):0;
+    const tokenMax=Math.max(0,...chartSources.map(x=>Number(bySource[x]?.totals?.input||0)+Number(bySource[x]?.totals?.output||0)));
+    const tokenWidth=tokenMax?Math.max(tokenCount?2:0,tokenCount/tokenMax*100):0;
+    return '<div class="chart-row" data-source-chart="'+esc(source)+'"><div class="chart-row-head">'+agentLogo(source)+'<span class="chart-name" title="'+esc(meta.name)+'">'+esc(meta.name)+'</span><span class="chart-state">'+(AGENT_STATUS_LABEL[status]||status)+'</span><span class="chart-value">'+count+'</span></div><div class="chart-track" title="目录会话 '+count+'"><div class="chart-fill" style="width:'+sessionWidth.toFixed(2)+'%;--bar-color:'+meta.color+'"></div></div><div class="chart-track" title="Token · in + out '+fmtTok(tokenCount)+'" style="margin-top:3px"><div class="chart-fill" style="width:'+tokenWidth.toFixed(2)+'%;--bar-color:'+meta.color+'"></div></div></div>';
+  }).join('');
+  $('software-chart').innerHTML='<section class="chart-panel"><h3>目录会话 / Token</h3><div class="chart-caption">上条为主会话数，下条为 Token · in + out</div><div class="chart-list">'+(sessionChart||'<div class="chart-empty">暂无 Agent 数据</div>')+'</div></section>';
   const CH_LABEL={plugin:'插件通道',event:'事件流',log:'日志通道',observe:'观察通道（只读健康）'};
   const cardsHtml=!agentsList.length
     ?'<div class="empty">正在探测本机 agent 软件…</div>'
     :agentsList.map(a=>{
-      const st=a.status||'closed',col=AGENT_STATUS_COLOR[st]||'#8b98a9';
+      const st=a.status||'closed',col=AGENT_STATUS_COLOR[st]||COLOR.idle;
       const rows=[];
       rows.push('<div class="sc-row"><span class="k">版本</span><b>'+(a.version?'v'+esc(a.version):'—')+'</b><span class="k">· 通道</span><b>'+(st==='connected'&&a.connectionKind?(CH_LABEL[a.connectionKind]||a.connectionKind):'—')+'</b>'+(a.running&&a.processes?'<span class="k">· 进程</span><b>'+a.processes+'</b>':'')+'</div>');
       if(a.lastActivityMs){
@@ -295,15 +644,19 @@ function render(snap){
       if(a.variants){const parts=[];if(a.variants.cli)parts.push('CLI '+a.variants.cli);if(a.variants.desktop)parts.push('桌面 '+a.variants.desktop);if(a.variants.ide)parts.push('IDE '+a.variants.ide);if(parts.length)rows.push('<div class="sc-row"><span class="k">会话形态</span><b>'+parts.join(' · ')+' 会话</b></div>')}
       if(a.sessionCount!=null)rows.push('<div class="sc-row"><span class="k">会话总数</span><b>'+(a.sessionCountApproximate?'≈':'')+a.sessionCount+'</b></div>');
       if(a.note)rows.push('<div class="sc-note">'+esc(a.note)+'</div>');
-      if((a.evidence||[]).length)rows.push('<div class="sc-ev" title="'+esc(a.evidence.join('\n'))+'">'+esc(a.evidence.slice(0,3).join(' · '))+'</div>');
+      if((a.evidence||[]).length)rows.push('<details class="sc-ev"><summary>连接证据</summary>'+a.evidence.map(ev=>'<div>'+esc(ev)+'</div>').join('')+'</details>');
+      const src=a.base||a.source||a.id;
+      if(AGENT_TABS.some(([id])=>id&&id===src))rows.push('<div class="sc-actions"><button class="btn" data-software-source="'+esc(src)+'" data-software-variant="'+esc(a.variantTag||'')+'">'+icon('layers')+'查看会话</button></div>');
       return '<div class="scard" data-agent="'+esc(a.id)+'">'
-        +'<div class="sc-head"><span class="sc-dot" style="background:'+col+';color:'+col+'"></span><span class="sc-name">'+esc(a.name)+'</span><span class="sc-badge" style="color:'+col+'">'+(AGENT_STATUS_LABEL[st]||st)+'</span></div>'
+        +'<div class="sc-head">'+agentLogo(src)+'<span class="sc-dot" style="background:'+col+';color:'+col+'"></span><span class="sc-name">'+esc(a.name)+'</span><span class="sc-badge" style="color:'+col+'">'+(AGENT_STATUS_LABEL[st]||st)+'</span></div>'
         +rows.join('')+'</div>';
     }).join('');
   const cardsEl=$('status-cards');
   if(cardsEl.__petLastHtml!==cardsHtml){cardsEl.innerHTML=cardsHtml;cardsEl.__petLastHtml=cardsHtml}
   const vSel=$('view-sessions'),vSta=$('view-status'),vUsa=$('view-usage');
   vSel.className=view==='sessions'?'on':'';vSta.className=view==='status'?'on':'';vUsa.className=view==='usage'?'on':'';
+  for(const [el,key] of [[vSel,'sessions'],[vSta,'status'],[vUsa,'usage']])el.setAttribute('aria-current',view===key?'page':'false');
+  $('toggle-history').setAttribute('aria-pressed',String(window.__SHOW_HISTORY__===true));
   const usageBody=$('usage-body');
   if(view==='usage'){const uh=usageHtml(snap.usage,now);if(usageBody.__petLastHtml!==uh){usageBody.innerHTML=uh;usageBody.__petLastHtml=uh}}
   // ---- 会话三档分类（互斥、完备；每个会话恰好归入 活跃/完成/隐藏 之一）----
@@ -314,7 +667,7 @@ function render(snap){
   // ⑤ 其余（空闲/持久错误 超 1 小时无消息）→ 隐藏（未活跃）
   const ACTIVE_MS = 3600_000;    // 1 小时活跃窗口
   const DONE_GRACE_MS = 600_000; // 完成缓冲期 10 分钟
-  const PROGRESS_STATES = ['thinking', 'running', 'waiting', 'transient-error'];
+  const PROGRESS_STATES = ['thinking', 'running', 'working', 'waiting', 'transient-error'];
   // 返回 'all'（=活跃档，对应 all 视图键）/ 'done' / 'hidden' —— 与 filter 键同名，计数与过滤共用
   const classify = (s) => {
     const st = s.state;
@@ -323,7 +676,7 @@ function render(snap){
     if (st === 'done' || st === 'ended') return (now - (s.since ?? s.updatedAt ?? 0) <= DONE_GRACE_MS) ? 'all' : 'done';   // ended=正常结束（DSH 目录口径），与 done 同档
     return fresh ? 'all' : 'hidden';   // idle / error / unknown
   };
-  const SORT_RANK = { waiting: 0, 'transient-error': 1, running: 2, thinking: 3, done: 4, error: 5, idle: 6, unknown: 7 };
+  const SORT_RANK = { waiting: 0, error: 1, 'transient-error': 1, running: 2, working: 2, thinking: 3, done: 4, ended: 4, idle: 6, unknown: 7 };
   // ---- 手动隐藏（叠加在自动三档之上）----
   // 记录 {sessionId: hiddenAt}；被隐藏会话一旦有新活动（lastActiveMs/updatedAt > hiddenAt）自动解除
   if (!window.__HIDDEN__) { try { window.__HIDDEN__ = JSON.parse(localStorage.getItem('agent-pet-manual-hidden') || '{}') } catch (e) { window.__HIDDEN__ = {} } }
@@ -367,37 +720,49 @@ function render(snap){
   }
   // 活跃视图按优先级排序（等你确认最前，空闲殿后）
   showLive = [...showLive].sort((a, b) => (SORT_RANK[a.state] ?? 9) - (SORT_RANK[b.state] ?? 9) || (b.lastActiveMs ?? b.since ?? 0) - (a.lastActiveMs ?? a.since ?? 0));
-  const rows = showLive, hist = showHistRows;
+  const query=(window.__SEARCH__||'').trim().toLocaleLowerCase();
+  const searchOk=s=>!query||[s.label,s.title,s.id,s.sessionId,s.source,srcLabel(s),s.model,projNameOf(s,projListAll)].filter(Boolean).join(' ').toLocaleLowerCase().includes(query);
+  const rows = showLive.filter(searchOk), hist = showHistRows.filter(searchOk);
+  window.__VISIBLE_IDS__=rows.concat(hist).map(sidOf);
+  const allSessions=(snap.sessions||[]).concat(snap.catalog?.history||[]).filter(s=>s.kind!=='subagent');
+  window.__ALL_SESSIONS__=allSessions;
   const tgt = window.__TARGET__ || '';
-  let tgtHit = null;
-  for (const s of rows.concat(hist)) { if (s.id === tgt || s.sessionId === tgt) { tgtHit = s; break } }
-  if (tgt && !tgtHit) window.__TARGET__ = '';
+  const tgtHit = allSessions.find(s=>sidOf(s)===tgt)||null;
+  window.__TARGET_TIER__=tgtHit?tierOf(tgtHit):null;
+  if(tgtHit)window.__TARGET_META__=tgtHit;
+  window.__TARGET_MISSING__=!!tgt&&!tgtHit;
+  const caps=snap.capabilities||{};
+  const rowActions=s=>{
+    const id=sidOf(s),canOpen=sourceCan(s.source||'dsh','Open',caps);
+    return '<span class="row-actions"><button class="icon-btn" data-open="'+esc(id)+'" aria-label="打开 '+esc(s.label||s.title||id)+'" title="'+(canOpen?'打开 / 恢复会话':'打开通道不可用：DSH 需要插件，其余后端需要 CLI')+'"'+(canOpen?'':' disabled')+'>'+icon('arrow-up-right')+'</button>'
+      +(filter==='hidden'&&isManuallyHidden(s)?'<button class="icon-btn unhide" data-unhide="'+esc(id)+'" title="恢复显示该会话" aria-label="恢复显示该会话">'+icon('eye')+'</button>':'<button class="icon-btn hx" data-hide="'+esc(id)+'" title="隐藏会话，新活动时自动恢复" aria-label="隐藏会话">'+icon('eye-off')+'</button>')+'</span>';
+  };
   const mkLiveRow = (s) => {
-    const st = s.state, col = COLOR[st] || '#8b98a9';
+    const st = s.state, col = COLOR[st] || COLOR.idle;
     const sel = window.__TARGET__ === s.id;
     const proj = curProj ? '' : ' · ' + esc(projNameOf(s, projListAll));
     const sl = srcLabel(s);
-    return '<div class="srow' + (sel ? ' sel' : '') + '" data-session="' + esc(s.id) + '" title="点击选为投递目标"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src" title="' + esc(sl) + '">' + esc(sl) + '</span>'
+    return '<div class="srow' + (sel ? ' sel' : '') + '" data-session="' + esc(s.id) + '" role="button" tabindex="0" aria-pressed="'+sel+'" title="选择投递目标"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src" title="' + esc(sl) + '">' + esc(sl) + '</span>'
       + '<span class="mid"><span class="lbl">' + esc(s.label || s.title || s.id) + '</span><span class="meta">' + esc(metaLine(s)) + proj + '</span></span>'
-      + '<span class="st" style="color:' + col + '">' + (STATE_LABEL[st] || st) + '</span>'
+      + '<span class="st" style="color:' + col + '">' + esc(STATE_LABEL[st] || st) + '</span>'
       + (s.pending ? '<span class="pend">待办 ' + s.pending + '</span>' : '')
-      + (filter === 'hidden' && isManuallyHidden(s) ? '<span class="hbadge">手动</span><span class="unhide" data-unhide="' + esc(s.id) + '" title="恢复显示该会话">恢复</span>' : '<span class="hx" data-hide="' + esc(s.id) + '" title="手动隐藏该会话（有新活动时自动恢复显示）">✕</span>')
-      + '<span class="tm">' + (st === 'idle' ? '--' : st === 'done' ? '完成' : mmss(s.elapsedMs || 0)) + '</span></div>';
+      + (filter === 'hidden' && isManuallyHidden(s) ? '<span class="hbadge">手动</span>' : '')
+      + '<span class="tm">' + (st === 'idle' ? '--' : st === 'done' ? '完成' : mmss(s.elapsedMs || 0)) + '</span>'+rowActions(s)+'</div>';
   };
   const mkHistRow = (s) => {
-    const col = COLOR[s.state] || '#8b98a9';
+    const col = COLOR[s.state] || COLOR.idle;
     const sel = window.__TARGET__ === s.sessionId;
     const proj = curProj ? '' : ' · ' + esc(projNameOf(s, projListAll));
     const sl = srcLabel(s);
-    return '<div class="srow hist' + (sel ? ' sel' : '') + '" data-session="' + esc(s.sessionId) + '" title="点击选为投递目标并打开"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src" title="' + esc(sl) + '">' + esc(sl) + '</span>'
+    return '<div class="srow hist' + (sel ? ' sel' : '') + '" data-session="' + esc(s.sessionId) + '" role="button" tabindex="0" aria-pressed="'+sel+'" title="选择投递目标"><span class="dot" style="background:' + col + ';color:' + col + '"></span><span class="src" title="' + esc(sl) + '">' + esc(sl) + '</span>'
       + '<span class="mid"><span class="lbl">' + esc(s.title || String(s.sessionId).slice(0, 12)) + '</span><span class="meta">' + esc(metaLine(s)) + proj + ' · ' + new Date(s.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + '</span></span>'
-      + (filter === 'hidden' && isManuallyHidden(s) ? '<span class="hbadge">手动</span><span class="unhide" data-unhide="' + esc(s.sessionId) + '" title="恢复显示该会话">恢复</span>' : '<span class="hx" data-hide="' + esc(s.sessionId) + '" title="手动隐藏该会话（有新活动时自动恢复显示）">✕</span>')
-      + '<span class="st" style="color:' + col + '">' + (STATE_LABEL[s.state] || s.state) + '</span><span class="tm">打开</span></div>';
+      + (filter === 'hidden' && isManuallyHidden(s) ? '<span class="hbadge">手动</span>' : '')
+      + '<span class="st" style="color:' + col + '">' + esc(STATE_LABEL[s.state] || s.state) + '</span>'+rowActions(s)+'</div>';
   };
   let html = '';
-  const EMPTY_TEXT = { all: '暂无活跃会话（进行中 / 10 分钟内完成 / 1 小时内有过活动）', done: '没有已完成的会话（结束超 10 分钟的 ✓ 会话）', hidden: '没有隐藏会话（未活跃=空闲/出错超 1 小时无消息，自动判定；或用行内 ✕ 手动隐藏）' };
-  const emptyText = variantSel ? '当前口径下没有「' + VARIANT_LABEL[variantSel] + '」形态的会话' : (filter === 'all' && curProj) ? '该项目暂无会话' : EMPTY_TEXT[filter];
-  html += (rows.length || hist.length) ? rows.map(mkLiveRow).join('') : '<div class="empty">' + emptyText + '</div>';
+  const EMPTY_TEXT = { all: '暂无活跃会话', done: '暂无已完成会话', hidden: '暂无隐藏会话' };
+  const emptyText = query?'没有匹配「'+esc(query)+'」的会话':(variantSel ? '当前口径下没有「' + VARIANT_LABEL[variantSel] + '」形态的会话' : (filter === 'all' && curProj) ? '该项目暂无会话' : EMPTY_TEXT[filter]);
+  html += (rows.length || hist.length) ? rows.map(mkLiveRow).join('') : '<div class="empty">'+(agentSel?esc(srcLabel({source:agentSel}))+' · ':'')+(curProj?esc(curProj.name)+' · ':'')+emptyText+'<div><button class="btn" data-clear-filters>'+icon('filter-x')+'清除筛选</button></div></div>';
   if (filter !== 'all' || showHist || curProj) html += hist.map(mkHistRow).join('');
   const FILT_LABELS = [
     ['all', '活跃会话', '进行中（思考/运行/等你确认/瞬态错误，不限时间）＋ 完成且结束 ≤10 分钟 ＋ 空闲/出错但 1 小时内有消息；选中左侧项目时改为展示该项目全部会话'],
@@ -408,7 +773,7 @@ function render(snap){
   for (const s of liveV) counts[tierOf(s)]++;
   for (const s of histV) counts[tierOf(s)]++;
   const filtEl = $('sess-filter');
-  const filtHtml = FILT_LABELS.map(([v, l, tip]) => '<button class="btn fbtn' + (filter === v ? ' on' : '') + '" data-filter="' + v + '" title="' + esc(tip) + '">' + l + ' ' + counts[v] + '</button>').join('');
+  const filtHtml = FILT_LABELS.map(([v, l, tip]) => '<button class="btn fbtn' + (filter === v ? ' on' : '') + '" aria-pressed="'+(filter===v)+'" data-filter="' + v + '" title="' + esc(tip) + '">' + l + ' ' + counts[v] + '</button>').join('');
   if (filtEl.__petLastHtml !== filtHtml) { filtEl.innerHTML = filtHtml; filtEl.__petLastHtml = filtHtml }
   // 形态切换控件（CLI / 桌面端 / IDE）：计数在当前 agent+项目口径下统计；「全部形态」= 实时+历史去重后的总行数
   const VARIANT_TABS = [
@@ -418,7 +783,7 @@ function render(snap){
     ['ide', 'IDE', '只看 IDE 插件（如 VS Code）发起的会话'],
   ];
   const vfEl = $('variant-filter');
-  const vfHtml = VARIANT_TABS.map(([v, l, tip]) => '<button class="btn fbtn' + (variantSel === v ? ' on' : '') + '" data-variant="' + v + '" title="' + esc(tip) + '">' + l + ' ' + (v ? (vCountOf[v] || 0) : (liveAll.length + histPool.length)) + '</button>').join('');
+  const vfHtml = VARIANT_TABS.map(([v, l, tip]) => '<button class="btn fbtn' + (variantSel === v ? ' on' : '') + '" aria-pressed="'+(variantSel===v)+'" data-variant="' + v + '" title="' + esc(tip) + '">' + l + ' ' + (v ? (vCountOf[v] || 0) : (liveAll.length + histPool.length)) + '</button>').join('');
   if (vfEl.__petLastHtml !== vfHtml) { vfEl.innerHTML = vfHtml; vfEl.__petLastHtml = vfHtml }
   const sessEl = $('sessions');
   if (sessEl.__petLastHtml !== html) { sessEl.innerHTML = html; sessEl.__petLastHtml = html }
@@ -427,61 +792,107 @@ function render(snap){
   $('proj-hint').textContent = curProj
     ? scopeTxt + ' · 列出全部 ' + (liveV.length + histV.length) + ' 会话（活跃 ' + counts.all + ' · 完成 ' + counts.done + ' · 隐藏 ' + counts.hidden + '）'
     : scopeTxt + ' · 活跃 ' + counts.all + ' · 完成 ' + counts.done + ' · 隐藏 ' + counts.hidden;
+  if(query)$('proj-hint').textContent+=' · 匹配 '+(rows.length+hist.length);
   // ---- 投递目标行 ----
   const tgtEl=$('target');
   if(window.__TARGET__){
-    const src=tgtHit?(tgtHit.source||'dsh'):'dsh';
-    const label=esc((tgtHit&&(tgtHit.label||tgtHit.title))||String(window.__TARGET__).slice(0,12));
+    const meta=tgtHit||window.__TARGET_META__;
+    const src=meta?(meta.source||'dsh'):'dsh';
+    const label=esc((meta&&(meta.label||meta.title))||String(window.__TARGET__).slice(0,12));
     tgtEl.innerHTML=src!=='dsh'
       ?('投递目标：<b>'+label+'</b>（'+esc(tgtHit?srcLabel(tgtHit):src.toUpperCase())+'）· 经 CLI 通道投递（点击恢复自动）')
       :('投递目标：<b>'+label+'</b>（'+esc(tgtHit?srcLabel(tgtHit):'DSH')+'）（点击恢复自动）');
   }else{
-    tgtEl.innerHTML='投递目标：自动 · 最近活跃主会话（点击会话行可指定）';
+    tgtEl.innerHTML='投递目标：自动 · 最近活跃主会话';
   }
+  const filtered=!!tgt&&!window.__VISIBLE_IDS__.includes(tgt);
+  $('target-warning').hidden=!filtered;
+  $('target-warning-text').textContent=window.__TARGET_MISSING__?'目标已不在当前目录，发送已暂停。解除目标或等待目录恢复。':'目标已被当前筛选隐藏，投递仍发往原会话。';
+  $('locate-target').disabled=!!window.__TARGET_MISSING__;
+  $('clear-target').hidden=!tgt;
+  renderInspector(tgtHit||(!tgt?allSessions.find(s=>window.__VISIBLE_IDS__.includes(sidOf(s))):window.__TARGET_META__),snap);
+  updateSendButton();
   // ---- 底部：能力位 / hint / 队列（只留未完成：delivered 不再显示） ----
-  const caps=snap.capabilities||{};
   $('new-session').disabled=!caps.canCreate;
   $('new-session').title=caps.canCreate?'在当前筛选下新建会话（DSH=插件；其余=终端新窗口）':'新建通道不可用（DSH 需插件；CLI 后端需在 PATH）';
   const ch=snap.inputChannel||{};
-  $('hint').textContent=ch.mode==='cmd'?('自动投递：'+ch.detail):ch.mode==='cli'?('DSH 进本地队列 · Claude/Codex/Kimi/ZCode 直接 CLI 投递'):'输入进本地队列 · 可复制投递';
+  $('hint').textContent=tgtHit?channelLabel(tgtHit,caps):(ch.mode==='cmd'?('自动投递：'+ch.detail):ch.mode==='cli'?('DSH 进本地队列 · Claude/Codex/Kimi/ZCode 直接 CLI 投递'):'输入进本地队列 · 可复制投递');
+  $('hint').title=$('hint').textContent;
+  $('input').placeholder=tgtHit&&!sourceCan(tgtHit.source||'dsh','Input',caps)&&ch.mode!=='cmd'?'输入消息，加入本地队列…':'输入消息…';
   const qs=(snap.inputs||[]).filter(i=>i.status&&i.status!=='delivered');
   $('queue').innerHTML=qs.map(i=>{
-    const label={queued:'待投递',pending:'投递中',failed:'失败'}[i.status]||i.status;
-    return '<div class="qitem"><span class="qs '+(i.status||'queued')+'">'+label+'</span><span class="qt">'+esc(i.text)+'</span>'
-      +'<span class="qc" data-copy="'+esc(i.text)+'">复制</span>'
-      +((i.status==='queued'||i.status==='failed')?'<span class="qc" data-resend="'+esc(i.id)+'">重发</span>':'')
-      +'<span class="qc" data-del="'+esc(i.id)+'">✕</span></div>';
+    const label={queued:'待投递',pending:'待投递',failed:'失败'}[i.status]||'待投递';
+    const detail=[i.detail,i.sessionId?'目标 '+i.sessionId:'',i.via].filter(Boolean).join(' · ');
+    return '<div class="qitem"><span class="qs '+(i.status==='failed'?'failed':'queued')+'" title="'+esc(detail)+'">'+label+'</span><span class="qt" title="'+esc(i.text)+'">'+esc(i.text)+'</span>'
+      +'<button class="icon-btn qc" data-copy="'+esc(i.text)+'" title="复制消息" aria-label="复制消息">'+icon('copy')+'</button>'
+      +((i.status==='queued'||i.status==='failed')?'<button class="icon-btn qc" data-resend="'+esc(i.id)+'" title="向原目标重发" aria-label="向原目标重发">'+icon('refresh-cw')+'</button>':'')
+      +'<button class="icon-btn qc" data-del="'+esc(i.id)+'" title="删除队列项" aria-label="删除队列项">'+icon('x')+'</button></div>';
   }).join('');
+  $('queue-count').textContent='队列 '+qs.length;
+  $('queue-clear').disabled=!qs.length;
+  if(qs.some(i=>i.status==='queued'||i.status==='failed')&&!window.__QUEUE_AUTO_OPENED__){window.__QUEUE_OPEN__=true;window.__QUEUE_AUTO_OPENED__=true}
+  $('queue').hidden=!window.__QUEUE_OPEN__;
+  $('queue-toggle').setAttribute('aria-expanded',String(!!window.__QUEUE_OPEN__));
+  if($('new-dialog').open)updateNewChannel();
   const last=snap.lastEvent;
   $('note').textContent='只读会话日志 · '+(projList.length?('项目 '+projList.length+' · 会话 '+(projList.reduce((a,p)=>a+p.sessionCount,0))+' · 扫描 '+(snap.catalog&&snap.catalog.elapsedMs||0)+'ms'):'目录扫描中')+' · 最后事件 '+(last?last.type:'—');
   window.__RENDER_OUT__={agg:agg,agent:agentSel,variant:variantSel,rows:rows.length,hist:hist.length,projects:projList.length,queueShown:qs.length,targetShown:!!window.__TARGET__};
   return window.__RENDER_OUT__;
 }
+function renderInspector(s,snap){
+  if(!s){$('inspector-body').innerHTML='<div class="empty">当前没有可预览的会话</div>';$('inspector-body').__petLastHtml=null;return}
+  const caps=snap.capabilities||{},st=s.state||'unknown',id=s.id||s.sessionId;
+  const canOpen=!window.__TARGET_MISSING__&&sourceCan(s.source||'dsh','Open',caps);
+  const fields=[['来源',srcLabel(s)],['状态',STATE_LABEL[st]||st],['模型',s.model||'未提供'],['思考',s.reasoningEffort||'默认'],['待办',String(s.pending||0)],['会话',id]];
+  const usage=s.usage;
+  const event=snap.lastEvent&&snap.lastEvent.sessionId===id?snap.lastEvent:null;
+  const h='<div class="eyebrow" style="margin-top:13px">'+(window.__TARGET__?'指定投递目标':'会话预览')+'</div>'
+    +'<h2 class="inspector-name">'+esc(s.label||s.title||id)+'</h2><div class="inspector-activity">'+esc(s.activity||STATE_LABEL[st]||st)+'</div>'
+    +'<dl class="facts">'+fields.map(([k,v])=>'<dt>'+k+'</dt><dd>'+esc(v)+'</dd>').join('')+'</dl>'
+    +'<button class="btn" data-open="'+esc(id)+'"'+(canOpen?'':' disabled')+' title="'+(canOpen?'打开 / 恢复会话':'该来源没有可用打开通道')+'">'+icon('arrow-up-right')+'打开会话</button>'
+    +'<div class="channel">'+esc(channelLabel(s,caps))+'</div>'
+    +'<div class="inspector-section"><div class="eyebrow">工作目录</div><div class="path">'+esc(s.cwd||((snap.catalog?.projects||[]).find(p=>p.key===s.projectKey)||{}).cwd||'未提供')+'</div></div>'
+    +(usage?'<div class="inspector-section"><div class="eyebrow">TOKEN / 当前会话</div><dl class="facts"><dt>in</dt><dd>'+fmtTok(usage.input)+'</dd><dt>out</dt><dd>'+fmtTok(usage.output)+'</dd><dt>cache读</dt><dd>'+fmtTok(usage.cacheRead)+'</dd><dt>cache写</dt><dd>'+fmtTok(usage.cacheWrite)+'</dd><dt>请求</dt><dd>'+fmtTok(usage.requests)+'</dd></dl></div>':'')
+    +(s.note?'<div class="inspector-section path">'+esc(s.note)+'</div>':'')
+    +(event?'<div class="inspector-section"><div class="eyebrow">最近事件</div><div class="path">'+esc(event.type)+'<br>'+esc(new Date(event.ts||snap.ts).toLocaleTimeString('zh-CN'))+'</div></div>':'');
+  const el=$('inspector-body');if(el.__petLastHtml!==h){el.innerHTML=h;el.__petLastHtml=h}
+}
 async function api(path,payload,method){
   const opt={method:method||'POST',headers:{'content-type':'application/json','x-pet-token':window.__PET_TOKEN__||''}};
   if(payload!==undefined)opt.body=JSON.stringify(payload);
   const res=await fetch(path,opt);
-  return await res.json();
+  let j;
+  try{j=await res.json()}catch(_){throw new Error('本地服务返回了非 JSON 响应')}
+  if(res.ok===false&&j.ok===undefined)throw new Error(j.detail||j.error||('HTTP '+res.status));
+  return j;
 }
 async function send(){
-  const el=$('input');const text=el.value.trim();if(!text)return;
-  el.value='';$('send').disabled=true;
+  const el=$('input');const text=el.value.trim();if(!text||window.__SENDING__)return;
+  if(window.__TARGET_MISSING__){notice('目标已不在目录中，请解除目标或等待目录恢复。','warning');return}
+  if(text.length>2000){notice('消息不能超过 2000 个字符。','warning');return}
+  const target=window.__TARGET__||undefined;
+  window.__SENDING__=true;el.value='';el.readOnly=true;saveDraft();updateSendButton();
   try{
-    const j=await api('/api/input',{text:text,sessionId:window.__TARGET__||undefined});
-    if(j.ok===false&&j.item){$('note').textContent={queued:'已入本地队列（未配置投递通道）',failed:'投递失败：'+(j.item.detail||j.item.status)}[j.item.status]||('发送状态：'+j.item.status)}
-    else if(j.ok===false){$('note').textContent='被本地服务拒绝：'+((j.detail&&String(j.detail))||j.error||'未知')}
-    else if(j.ok===true){$('note').textContent='已送达 ✓ '+(j.item&&j.item.detail?j.item.detail.slice(0,60):'')}   // 成功的消息不进队列展示，只在这里闪一次确认
-  }catch(e){el.value=text;$('note').textContent='发送失败（输入已恢复）：'+e.message}
-  $('send').disabled=false;$('input').focus();
+    const j=await api('/api/input',{text,sessionId:target});
+    if(j.ok===false&&j.item)notice(j.item.status==='queued'?'已加入本地队列，等待投递。':'投递失败：'+(j.item.detail||j.item.status),j.item.status==='failed'?'error':'warning');
+    else if(j.ok===false){el.value=text;notice('被本地服务拒绝，输入已恢复：'+(j.detail||j.error||'未知'),'error')}
+    else if(j.ok===true)notice('已送达'+(j.item?.detail?' · '+j.item.detail.slice(0,100):''));
+  }catch(e){el.value=text;notice('发送失败，输入已恢复：'+e.message,'error')}
+  finally{window.__SENDING__=false;el.readOnly=false;saveDraft();updateSendButton();el.focus()}
 }
 async function openSession(id){
+  const s=(window.__ALL_SESSIONS__||[]).find(s=>(s.id||s.sessionId)===id);
+  if(!s||!sourceCan(s.source||'dsh','Open')){notice('该会话没有可用的打开通道。','warning');return}
+  if(window.__OPENING__)return;
+  window.__OPENING__=true;
   try{
     const j=await api('/api/open',{sessionId:id});
-    $('note').textContent=j.ok?('已打开/定位会话 · '+(j.via||j.reason||'')):('打开失败：'+(j.detail||j.reason||'未知'));
-  }catch(e){$('note').textContent='打开失败：'+e.message}
+    notice(j.ok?((j.opened===false?'已定位目录，未打开 Agent':'已打开 / 恢复会话')+' · '+(j.detail||j.via||j.reason||'')):('打开失败：'+(j.detail||j.reason||'未知')),j.ok?'info':'error');
+  }catch(e){notice('打开失败：'+e.message,'error')}
+  finally{window.__OPENING__=false}
 }
 $('send').onclick=send;
-$('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+$('input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
 $('sess-filter').addEventListener('click',e=>{const b=e.target.closest('[data-filter]');if(!b)return;window.__FILTER__=b.getAttribute('data-filter');if(window.__SNAP__)render(window.__SNAP__)});
 $('variant-filter').addEventListener('click',e=>{const b=e.target.closest('[data-variant]');if(!b)return;window.__VARIANT__=b.getAttribute('data-variant')||'';if(window.__SNAP__)render(window.__SNAP__)});
 $('view-sessions').onclick=function(){window.__VIEW__='sessions';if(window.__SNAP__)render(window.__SNAP__)};
@@ -491,62 +902,157 @@ $('usage-body').addEventListener('click',e=>{const b=e.target&&e.target.closest?
 $('agent-tabs').addEventListener('click',e=>{const t=e.target.closest('[data-agent]');if(!t)return;window.__AGENT__=t.getAttribute('data-agent');if(window.__SNAP__)render(window.__SNAP__)});
 $('projects').addEventListener('click',e=>{const t=e.target.closest('[data-proj]');if(!t)return;window.__PROJECT__=t.getAttribute('data-proj')||'';if(window.__SNAP__)render(window.__SNAP__)});
 $('toggle-history').onclick=function(){window.__SHOW_HISTORY__=!window.__SHOW_HISTORY__;if(window.__SNAP__)render(window.__SNAP__)};
-// 新建会话：agent tab 指定了后端就用它；否则按项目来源挑（DSH 插件优先，其次 CLI）
-$('new-session').onclick=async function(){
+$('search').addEventListener('input',()=>{window.__SEARCH__=$('search').value;if(window.__SNAP__)render(window.__SNAP__)});
+function updateNewChannel(){
+  const source=$('new-source').value||'dsh',caps=(window.__SNAP__||{}).capabilities||{};
+  const available=sourceCan(source,'Create',caps);
+  $('new-dsh-fields').hidden=source!=='dsh';
+  $('new-submit').disabled=!available||!!window.__NEW_BUSY__;
+  $('new-channel').textContent=available
+    ?(source==='dsh'?'在 DSH 桌面端插件进程内创建。':'经 '+srcLabel({source})+' CLI 在终端创建，桌面端没有官方新建通道。')
+    :(source==='dsh'?'DSH 新建通道不可用：需要授权挂载 Cordis 插件。':'该 CLI 不在可用通道列表中，请检查软件安装与 PATH。');
+  $('new-capabilities').innerHTML=AGENT_TABS.filter(([id])=>id).map(([source,name])=>'<p>'+name+' · '+(sourceCan(source,'Create',caps)?'可新建':source==='dsh'?'需要 DSH 插件授权':'CLI 通道不可用')+'</p>').join('');
+}
+function showNewDialog(){
   const snap=window.__SNAP__||{};
   const projList=(snap.catalog&&snap.catalog.projects)||[];
   const caps=snap.capabilities||{};
-  const cliSrc=(caps.cliChannels||[]).map(x=>x.source);
   const p=projList.find(x=>x.key===(window.__PROJECT__||''));
-  let src=window.__AGENT__||'';
-  if(!src&&p&&p.sources){src=(p.sources.indexOf('dsh')>=0&&caps.plugin&&caps.plugin.available)?'dsh':['claude-code','codex','kimi-code','zcode'].filter(s=>p.sources.indexOf(s)>=0&&cliSrc.indexOf(s)>=0)[0]||(cliSrc[0]||'dsh')}
-  if(!src)src='dsh';
-  // 形态标注：DSH=桌面端插件进程内创建；claude/codex/kimi/zcode 只支持经各自 CLI（终端窗口）新建——桌面端无官方新建通道
-  const surf=src==='dsh'?'DSH·桌面（插件）':(String(src).toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI')+(cliSrc.indexOf(src)>=0?'·CLI（终端窗口）':''));
-  const j=await api('/api/new',{cwd:p?p.cwd:'',source:src});
-  $('note').textContent='新建会话（'+surf+'）：'+(j.ok?(j.via||'已创建')+'；目录将在几秒内出现':((j.detail&&String(j.detail).slice(0,90))||(j.reason&&String(j.reason).slice(0,90))||j.error||'未知'));
-  try{await api('/api/catalog?refresh=1',undefined,'GET')}catch(err){}
-};
-// 会话行点击 = 选为投递目标（再点一次取消）；历史行同时打开
+  const choices=AGENT_TABS.filter(([id])=>id);
+  $('new-source').innerHTML=choices.map(([id,name])=>'<option value="'+id+'">'+name+(id==='dsh'?' · 桌面':' · CLI')+'</option>').join('');
+  $('new-source').value=window.__AGENT__||(p?.sources||[]).find(id=>sourceCan(id,'Create',caps))||choices.find(([id])=>sourceCan(id,'Create',caps))?.[0]||'dsh';
+  $('new-cwd').value=p?.cwd||'';
+  $('project-paths').innerHTML=projList.filter(p=>p.cwd&&!p.dead).map(p=>'<option value="'+esc(p.cwd)+'">'+esc(p.name)+'</option>').join('');
+  $('new-error').hidden=true;
+  updateNewChannel();$('new-dialog').showModal();$('new-source').focus();
+}
+async function createSession(e){
+  e.preventDefault();
+  if(window.__NEW_BUSY__)return;
+  const source=$('new-source').value,cwd=$('new-cwd').value.trim();
+  if(!sourceCan(source,'Create')){updateNewChannel();return}
+  if(cwd&&!cwd.startsWith('/')&&!/^[A-Za-z]:[\\/]/.test(cwd)&&!cwd.startsWith('\\\\')){$('new-error').textContent='工作目录必须是绝对路径。';$('new-error').hidden=false;return}
+  const payload={cwd,source};
+  if(source==='dsh'){if($('new-model').value.trim())payload.model=$('new-model').value.trim();if($('new-reasoning').value)payload.reasoningEffort=$('new-reasoning').value}
+  window.__NEW_BUSY__=true;updateNewChannel();$('new-error').hidden=true;
+  try{
+    const j=await api('/api/new',payload);
+    if(!j.ok)throw new Error(j.detail||j.reason||j.error||'未创建');
+    $('new-dialog').close();
+    notice('新建会话 · '+srcLabel({source})+' · '+(j.via||'已创建')+'，目录将在几秒内更新。');
+    await refreshCatalog(false);
+  }catch(err){$('new-error').textContent='新建失败：'+err.message;$('new-error').hidden=false}
+  finally{window.__NEW_BUSY__=false;updateNewChannel()}
+}
+$('new-session').onclick=showNewDialog;
+$('new-source').addEventListener('change',updateNewChannel);
+$('new-form').addEventListener('submit',createSession);
+for(const id of ['new-close','new-cancel'])$(id).onclick=()=>{$('new-dialog').close()};
+function clearFilters(){
+  window.__AGENT__='';window.__PROJECT__='';window.__FILTER__='all';window.__VARIANT__='';window.__SEARCH__='';window.__SHOW_HISTORY__=true;$('search').value='';
+  if(window.__SNAP__)render(window.__SNAP__);
+}
+function selectSession(id){
+  window.__TARGET__=window.__TARGET__===id?'':id;
+  if(!window.__TARGET__)window.__TARGET_META__=null;
+  if(window.__SNAP__)render(window.__SNAP__);
+}
+// Opening a session never changes the delivery target.
 $('sessions').addEventListener('click',e=>{
+  if(e.target.closest('[data-clear-filters]')){clearFilters();return}
+  const op=e.target.closest('[data-open]');if(op){if(!op.disabled)openSession(op.getAttribute('data-open'));return}
   const u=e.target.closest('[data-unhide]');
-  if(u){e.stopPropagation();const id=u.getAttribute('data-unhide');delete window.__HIDDEN__[id];try{localStorage.setItem('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__))}catch(err){};$('note').textContent='已恢复显示该会话';if(window.__SNAP__)render(window.__SNAP__);return}
+  if(u){e.stopPropagation();const id=u.getAttribute('data-unhide');delete window.__HIDDEN__[id];writePreference('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__));if(window.__SNAP__)render(window.__SNAP__);notice('已恢复显示该会话');return}
   const h=e.target.closest('[data-hide]');
-  if(h){e.stopPropagation();const id=h.getAttribute('data-hide');window.__HIDDEN__[id]=Date.now();try{localStorage.setItem('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__))}catch(err){};$('note').textContent='已手动隐藏（有新活动时自动恢复显示；可在「隐藏会话」视图恢复）';if(window.__SNAP__)render(window.__SNAP__);return}
+  if(h){e.stopPropagation();const id=h.getAttribute('data-hide');window.__HIDDEN__[id]=Date.now();writePreference('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__));if(window.__SNAP__)render(window.__SNAP__);notice('已隐藏，有新活动时自动恢复。');return}
   const t=e.target.closest('[data-session]');
   if(!t)return;
-  const id=t.getAttribute('data-session');
-  window.__TARGET__=(window.__TARGET__===id)?'':id;
-  if(t.classList&&t.classList.contains('hist'))openSession(id);
-  if(window.__SNAP__)render(window.__SNAP__);
+  selectSession(t.getAttribute('data-session'));
   $('input').focus();
 });
-$('target').onclick=function(){window.__TARGET__='';if(window.__SNAP__)render(window.__SNAP__)};
+$('sessions').addEventListener('keydown',e=>{
+  if(e.target.closest('button'))return;
+  const row=e.target.closest('[data-session]');if(!row)return;
+  if(e.key==='Enter'||e.key===' '){e.preventDefault();if(e.metaKey&&e.key==='Enter')openSession(row.getAttribute('data-session'));else selectSession(row.getAttribute('data-session'))}
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+    e.preventDefault();const rows=Array.from(document.querySelectorAll('#sessions [data-session]'));
+    const i=rows.indexOf(row),next=rows[Math.max(0,Math.min(rows.length-1,i+(e.key==='ArrowDown'?1:-1)))];
+    if(next)next.focus();
+  }
+});
+function clearTarget(){window.__TARGET__='';window.__TARGET_META__=null;if(window.__SNAP__)render(window.__SNAP__)}
+$('target').onclick=clearTarget;$('clear-target').onclick=clearTarget;
+$('locate-target').onclick=function(){
+  const s=(window.__ALL_SESSIONS__||[]).find(s=>(s.id||s.sessionId)===window.__TARGET__);
+  if(!s)return;
+  clearFilters();window.__VIEW__='sessions';window.__PROJECT__=s.projectKey||'';window.__FILTER__=window.__TARGET_TIER__||'all';
+  render(window.__SNAP__);
+  const row=Array.from(document.querySelectorAll('#sessions [data-session]')).find(el=>el.getAttribute('data-session')===window.__TARGET__);
+  if(row){row.scrollIntoView({block:'nearest'});row.focus()}
+};
+$('toggle-inspector').onclick=function(){
+  const automatic=!!(window.matchMedia&&window.matchMedia('(min-width: 1091px)').matches);
+  const open=window.__INSPECTOR_OPEN__===undefined?!automatic:!window.__INSPECTOR_OPEN__;
+  window.__INSPECTOR_OPEN__=open;$('inspector').dataset.open=String(open);$('inspector').hidden=!open;this.setAttribute('aria-pressed',String(open));
+};
+$('close-inspector').onclick=function(){window.__INSPECTOR_OPEN__=false;$('inspector').dataset.open='false';$('inspector').hidden=true;$('toggle-inspector').setAttribute('aria-pressed','false')};
+$('inspector-body').addEventListener('click',e=>{const b=e.target.closest('[data-open]');if(b&&!b.disabled)openSession(b.getAttribute('data-open'))});
+$('status-cards').addEventListener('click',e=>{
+  const b=e.target.closest('[data-software-source]');if(!b)return;
+  window.__VIEW__='sessions';window.__AGENT__=b.getAttribute('data-software-source');window.__VARIANT__=b.getAttribute('data-software-variant')||'';window.__PROJECT__='';window.__FILTER__='all';window.__SHOW_HISTORY__=true;window.__SEARCH__='';$('search').value='';
+  if(window.__SNAP__)render(window.__SNAP__);
+});
+async function refreshCatalog(showFeedback=true){
+  try{await api('/api/catalog?refresh=1',undefined,'GET');const snap=await api('/api/state',undefined,'GET');render(snap);if(showFeedback)notice('会话目录已刷新。')}
+  catch(e){notice('刷新失败：'+e.message,'error')}
+}
+$('refresh-data').onclick=()=>refreshCatalog();
+$('status-refresh').onclick=async()=>{try{const j=await api('/api/agents',undefined,'GET');if(window.__SNAP__){window.__SNAP__.agents=j.agents||[];render(window.__SNAP__)}notice('软件状态已更新。')}catch(e){notice('软件状态读取失败：'+e.message,'error')}};
+$('usage-refresh').onclick=async()=>{try{await api('/api/usage?refresh=1',undefined,'GET');notice('已请求重新扫描用量。')}catch(e){notice('用量刷新失败：'+e.message,'error')}};
+$('queue-toggle').onclick=function(){window.__QUEUE_OPEN__=!window.__QUEUE_OPEN__;if(window.__SNAP__)render(window.__SNAP__)};
+$('queue-clear').onclick=async function(){
+  if(!window.confirm('清空本地投递队列？这不会撤回已送达的消息。'))return;
+  try{const j=await api('/api/queue/clear',{});if(!j.ok)throw new Error(j.detail||j.error||'未清空');notice('本地队列已清空。')}
+  catch(e){notice('清空失败：'+e.message,'error')}
+};
+async function copyText(text){
+  if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return}
+  const el=document.createElement('textarea');el.value=text;el.style.position='fixed';el.style.opacity='0';document.body.appendChild(el);el.select();
+  try{if(!document.execCommand('copy'))throw new Error('剪贴板不可用')}finally{el.remove()}
+}
 // 队列操作（只对未完成项：复制/重发/删除）
 $('queue').addEventListener('click',async e=>{
   const c=e.target.closest('[data-copy]');
-  if(c){const txt=c.getAttribute('data-copy');if(navigator.clipboard)navigator.clipboard.writeText(txt);$('note').textContent='已复制到剪贴板：'+txt.slice(0,40);return}
+  if(c){try{await copyText(c.getAttribute('data-copy'));notice('消息已复制。')}catch(err){notice('复制失败：'+err.message,'error')}return}
   const del=e.target.closest('[data-del]');
-  if(del){try{await api('/api/input/'+encodeURIComponent(del.getAttribute('data-del')),undefined,'DELETE')}catch(err){}return}
+  if(del){try{const j=await api('/api/input/'+encodeURIComponent(del.getAttribute('data-del')),undefined,'DELETE');if(!j.ok)throw new Error(j.error||'未删除');notice('队列项已删除。')}catch(err){notice('删除失败：'+err.message,'error')}return}
   const rs=e.target.closest('[data-resend]');
-  if(rs){const id=rs.getAttribute('data-resend');try{const j=await api('/api/input/'+encodeURIComponent(id)+'/resend',{});$('note').textContent=j.ok?'重发已送达 ✓':'重发未送达：'+((j.item&&(j.item.detail||j.item.status))||'')}catch(err){$('note').textContent='重发失败：'+err.message}return}
+  if(rs){if(rs.disabled)return;rs.disabled=true;const id=rs.getAttribute('data-resend');try{const j=await api('/api/input/'+encodeURIComponent(id)+'/resend',{});notice(j.ok?'重发已送达。':'重发未送达：'+(j.item?.detail||j.item?.status||j.detail||j.error||'未知'),j.ok?'info':'warning')}catch(err){notice('重发失败：'+err.message,'error')}finally{rs.disabled=false}return}
 });
 $('toggle-pet').onclick=async function(){
   // 跨窗口操作 main（迷你条）：优先 Tauri 全局 API；托盘「显示悬浮窗」是保底路径
   const icon=this;
   try{
     const T=window.__TAURI__;
-    if(T&&T.window&&T.window.WebviewWindow&&T.window.WebviewWindow.getByLabel){const w=T.window.WebviewWindow.getByLabel('main');if(w){await w.isVisible()?await w.hide():await w.show();return}}
-    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){await window.__TAURI_INTERNALS__.invoke('plugin:window|show',{label:'main'});await window.__TAURI_INTERNALS__.invoke('plugin:window|set_focus',{label:'main'})}
-  }catch(e){}
-  icon.title='显示迷你条（若无效请用托盘菜单「显示悬浮窗」）';
+    if(T&&T.webviewWindow&&T.webviewWindow.WebviewWindow){const w=await T.webviewWindow.WebviewWindow.getByLabel('main');if(w){const visible=await w.isVisible();await (visible?w.hide():w.show());icon.setAttribute('aria-pressed',String(!visible));return}}
+    if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){const invoke=window.__TAURI_INTERNALS__.invoke;const visible=await invoke('plugin:window|is_visible',{label:'main'});await invoke(visible?'plugin:window|hide':'plugin:window|show',{label:'main'});icon.setAttribute('aria-pressed',String(!visible));return}
+    window.open('/mini.html','agentpet-mini','width=560,height=80');
+  }catch(e){notice('迷你条操作失败：'+e.message,'error')}
 };
-document.addEventListener('keydown',e=>{if(e.altKey&&e.metaKey&&e.key.toLowerCase()==='i'){e.preventDefault();$('input').focus()}});
+document.addEventListener('keydown',e=>{
+  const key=e.key.toLowerCase();
+  if(e.altKey&&e.metaKey&&key==='i'){e.preventDefault();$('input').focus()}
+  if((e.metaKey||e.ctrlKey)&&key==='k'){e.preventDefault();window.__VIEW__='sessions';if(window.__SNAP__)render(window.__SNAP__);$('search').focus()}
+  if((e.metaKey||e.ctrlKey)&&e.shiftKey&&key==='n'){e.preventDefault();showNewDialog()}
+  if(e.key==='Escape'&&window.__INSPECTOR_OPEN__)$('close-inspector').onclick();
+  if(e.target===$('search')&&e.key==='ArrowDown'){e.preventDefault();document.querySelector('#sessions [data-session]')?.focus()}
+  if(e.target===$('search')&&e.key==='Enter'){const id=window.__VISIBLE_IDS__?.[0];if(id){e.preventDefault();selectSession(id);$('input').focus()}}
+});
 let es=null;
 function connect(){
   es=new EventSource('/api/stream');
-  es.onmessage=e=>{try{render(JSON.parse(e.data))}catch(err){}};
-  es.onerror=function(){$('hint').textContent='与本地服务断开，3s 后重连…';es.close();setTimeout(connect,3000)};
+  es.onmessage=e=>{try{window.__CONNECTED__=true;render(JSON.parse(e.data))}catch(err){console.error('CodeAll render:',err);notice('状态数据读取失败：'+err.message,'error')}};
+  es.onerror=function(){window.__CONNECTED__=false;if(window.__SNAP__)render(window.__SNAP__);$('hint').textContent='与本地服务断开，3s 后重连…';es.close();setTimeout(connect,3000)};
 }
 connect();
 </script>

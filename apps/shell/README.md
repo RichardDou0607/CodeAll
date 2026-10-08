@@ -1,4 +1,4 @@
-# apps/shell — Agent 悬浮窗桌面外壳（Tauri v2 · M1）
+# apps/shell — CodeAll 桌面外壳（Tauri v2 · M1）
 
 把原先只在浏览器里跑的悬浮窗（demo/window.html + demo/framed.mjs）搬进**真正的 macOS 桌面窗口**：
 透明、无边框圆角、置顶、可拖拽、位置记忆；本地服务没起时显示「启动中」并自动拉起。
@@ -12,7 +12,7 @@
     apps/shell/run.sh --build        # 强制重新构建 .app
     apps/shell/run.sh --no-build     # 直接用已有产物
     apps/shell/run.sh --dev          # tauri dev 模式
-    apps/shell/run.sh --install      # 构建并安装到 /Applications：以后启动台/Spotlight 搜「AgentPet」一键打开
+    apps/shell/run.sh --install      # 构建并安装到 /Applications：以后启动台/Spotlight 搜「CodeAll」一键打开
 
 前置：Node.js、pnpm、Rust 工具链（run.sh 会自动把 ~/.cargo/bin 加进 PATH）。
 

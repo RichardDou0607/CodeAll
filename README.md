@@ -29,7 +29,7 @@
 #   迷你条（/ 默认入口）——动态单行：始终显示当前最优先/最新的会话（其余隐藏，⟳ 轮换），整条可拖拽
 #   App 窗口（/window.html）——与迷你条并存（如 Codex 本体与 pet）：原生红黄绿窗口控制，
 #   顶部切 agent 软件 · 左侧切项目 · 底部控会话；队列只留未完成项；⤢ 唤出 / 红✕ 收起（不退出）
-apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后直接打开「AgentPet」即可
+apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后直接打开「CodeAll」即可
 node demo/framed.mjs --port 7799    # 本地服务：五源观察（DSH/Claude/Codex/Kimi/ZCode）+ CLI 控制通道 + SSE
 open http://127.0.0.1:7799/         # 迷你悬浮条（demo/mini.html）；/window.html = App 界面
 node demo/test-window.mjs           # App 界面渲染自检（59 项断言）

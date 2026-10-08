@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, RunEvent, WebviewWindow, WindowEvent};
 
 const DEFAULT_PORT: u16 = 7799;
-const SPLASH_TITLE: &str = "Agent 悬浮窗 · 启动中";
+const SPLASH_TITLE: &str = "CodeAll · 启动中";
 
 // ---------------------------------------------------------------- 基础工具
 
@@ -486,7 +486,8 @@ const REMOTE_INJECT: &str = r#"
       return winCmd('inner_size').then(function (s) { return s.width / (window.devicePixelRatio || 1); });
     }
     function setLogicalSize(w, h) {
-      if (T && T.window) return T.window.getCurrentWindow().setSize(new T.window.LogicalSize(w, h));
+      var LogicalSize = T && T.dpi && T.dpi.LogicalSize || T && T.window && T.window.LogicalSize;
+      if (T && T.window && LogicalSize) return T.window.getCurrentWindow().setSize(new LogicalSize(w, h));
       return winCmd('set_size', { value: { Logical: { width: w, height: h } } });
     }
     function toggleSize() {
@@ -618,7 +619,7 @@ const REMOTE_INJECT: &str = r#"
 
 /// 轮询 webview 当前 URL，一旦导航到本地服务页就注入版式 CSS（main=迷你条 / app=App 界面）
 fn start_url_watcher(handle: AppHandle, port: u16) {
-    for (label, title) in [("main", "AgentPet · 迷你条"), ("app", "AgentPet · App")] {
+    for (label, title) in [("main", "CodeAll · 迷你条"), ("app", "CodeAll · App")] {
         let handle = handle.clone();
         let label = label.to_string();
         let title = title.to_string();
@@ -982,7 +983,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id("agent-pet-tray")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .tooltip("Agent 悬浮窗")
+        .tooltip("CodeAll")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "tray_show" => {
                 if let Some(w) = app.get_webview_window("main") {

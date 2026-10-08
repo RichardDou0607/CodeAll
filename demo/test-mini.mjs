@@ -5,26 +5,16 @@
  */
 import fs from 'node:fs';
 import vm from 'node:vm';
+import { createUiSandbox } from './test-ui-dom.mjs';
 
 const html = fs.readFileSync(new URL('./mini.html', import.meta.url), 'utf8');
 let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 script = script.replace(/let es=null;[\s\S]*$/, '');
 
-const ids = ['m-dot','m-src','m-title','m-sub','m-state','m-tm','m-pend','m-cycle','m-expand','m-pin','m-hide','bar'];
-const store = new Map();
-const mkEl = (id) => ({
-  id, innerHTML: '', textContent: '', value: '', style: {}, disabled: false, title: '',
-  addEventListener(type, fn) { (this.__h = this.__h || {})[type] = fn; }, focus() {}, closest() { return null; },
-});
-const getEl = (id) => { if (!store.has(id)) store.set(id, mkEl(id)); return store.get(id); };
-const sandbox = {
-  document: { getElementById: (id) => { if (!ids.includes(id)) throw new Error('未知元素 ' + id); return getEl(id); }, addEventListener() {} },
-  window: {}, console, JSON, Math, String, Number, Array, Object, Date, RegExp, setTimeout,
-  navigator: {}, location: { href: '' }, localStorage: { getItem() { return null; }, setItem() {} },
-};
+const { sandbox, getEl, preferences, media } = createUiSandbox(html);
 vm.createContext(sandbox);
 vm.runInContext(script, sandbox, { filename: 'mini-inline.js' });
-const click = (id) => { const el = getEl(id); const fn = el.__h && el.__h.click; if (!fn) throw new Error(id + ' 无 click 处理器'); fn({ stopPropagation() {} }); };
+const click = id => getEl(id).dispatch('click');
 
 const now = Date.now();
 const sess = (id, source, state, sinceAgo, extra = {}) => ({
@@ -45,6 +35,7 @@ const baseSnap = {
 
 // 场景一：默认 → 自动显示优先级最高（running > thinking > idle）且最新（s-dsh）
 const out1 = sandbox.render(baseSnap);
+const initialProject = getEl('m-sub').textContent;
 // 场景二：出现 waiting（s-cx 等你）→ 紧急抢占（即使此前手动锁定）
 sandbox.window.__SNAP__ = baseSnap;
 const snapWait = JSON.parse(JSON.stringify(baseSnap));
@@ -53,30 +44,30 @@ const out2 = sandbox.render(snapWait);
 const pend2 = getEl('m-pend').textContent;
 // 场景三：无紧急 → ⟳ 轮换锁定第二个（s-cc），再 ⟳ 到 s-cx，再 ⟳ 环回自动（ranked 头名 s-dsh）
 sandbox.render(baseSnap);
-click('m-cycle');
+await click('m-cycle');
 const outLock = sandbox.window.__RENDER_OUT__;
-click('m-cycle');
+await click('m-cycle');
 const outLock2 = sandbox.window.__RENDER_OUT__;
-click('m-cycle');
+await click('m-cycle');
 const outAuto = sandbox.window.__RENDER_OUT__;
-const cycleText = getEl('m-cycle').textContent;
+const cycleText = getEl('m-count').textContent;
 // 场景四：无实时会话 → 聚合行
 const snapEmpty = JSON.parse(JSON.stringify(baseSnap)); snapEmpty.sessions = []; snapEmpty.agg = 'idle';
 const out4 = sandbox.render(snapEmpty);
 
 const checks = [
   ['默认显示优先级最高的最新会话（DSH 运行中）', out1.src === 'DSH' && out1.state === '运行中' && out1.tm === '01:00' && out1.title.includes('s-dsh')],
-  ['来源标签区分命令行/桌面版本（⟳ 锁定到 CLAUDE·桌面）', getEl('m-src').textContent.includes('CLAUDE·桌面') || true],
-  ['标题行带项目名（agent桌宠）', getEl('m-sub').textContent.includes('agent桌宠') || true],   // sub 内容在场景四后已变；场景一值在 out1.title 之外，弱断言
-  ['出现 waiting 会话 → 紧急抢占显示 + ⏳ 未决', out2.src === 'CODEX' && out2.state === '等你' && pend2 === '⏳2'],
+  ['来源标签区分命令行/桌面版本', outLock.src === 'CLAUDE·桌面'],
+  ['标题行带项目名（agent桌宠）', initialProject.includes('agent桌宠')],
+  ['出现 waiting 会话 → 紧急抢占显示 + 未决数', out2.src === 'CODEX' && out2.state === '等你' && pend2 === '2'],
   ['⟳ 第一次：锁定第二个会话（s-cc 思考中）', outLock.locked === true && outLock.title.includes('s-cc')],
   ['⟳ 第二次：轮到 s-cx', outLock2.title.includes('s-cx')],
   ['⟳ 第三次：环回一圈恢复自动（ranked 头名 s-dsh）', outAuto.locked === false && outAuto.title.includes('s-dsh')],
-  ['计数按钮显示会话总数（⟳ 3）', cycleText === '⟳ 3'],
+  ['计数按钮显示会话总数', cycleText === '3'],
   ['无实时会话 → 聚合行（空闲 · 项目数）', out4.live === 0 && out4.state === '空闲' && getEl('m-sub').textContent.includes('1 个项目')],
-  ['展开按钮接线（打开 App 窗口）', !!getEl('m-expand').__h && typeof getEl('m-expand').__h.click === 'function'],
-  ['置顶按钮接线', !!getEl('m-pin').__h && typeof getEl('m-pin').__h.click === 'function'],
-  ['拖拽接线在 #bar 上（mousedown 处理器）', !!getEl('bar').__h && typeof getEl('bar').__h.mousedown === 'function'],
+  ['展开按钮接线（打开 App 窗口）', getEl('m-expand').__h.click?.length === 1],
+  ['置顶按钮接线', getEl('m-pin').__h.click?.length === 1],
+  ['拖拽接线在 #bar 上（mousedown 处理器）', getEl('bar').__h.mousedown?.length === 1],
 ];
 let ok = true;
 for (const [name, pass] of checks) { console.log((pass ? '✅ ' : '❌ ') + name); if (!pass) ok = false; }

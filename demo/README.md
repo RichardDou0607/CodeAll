@@ -1,4 +1,6 @@
-# 演示（Demo）· Agent 悬浮窗 / 工作框
+# 演示（Demo）· CodeAll / 战术终端
+
+当前正式界面采用 CodeAll「战术终端」布局：首次打开默认使用亮色主题，顶部可切换亮色、深色或跟随系统；迷你条与主界面共享 `agent-pet-theme` 偏好。界面使用本地 Agent 原始图标与 CodeAll 自有图标，不依赖外部网络资源。
 
 > 状态：**可运行演示**（2026-10-05，契约 v1.3）。已跑通：**真实 DSH 会话（多帧 zstd，只读）→ 规范事件 → 状态机 → 悬浮窗（多项目/多会话状态 + Agent·模型·思考程度 + 缩减输入框）**。
 > 尚未实现：Tauri 真·桌面悬浮窗（队友 H 进行中：apps/shell）、常驻 Hub 守护进程、多后端适配器（Claude Code / Codex…）。
@@ -11,6 +13,7 @@
 node demo/framed.mjs --port 7799     # 本地服务：只读会话日志 + SSE 推送 + 目录/输入接口
 open http://127.0.0.1:7799/          # 悬浮窗页面（demo/window.html）
 node demo/test-window.mjs            # 渲染自检：55 项断言
+node demo/test-window-actions.mjs    # 主界面行为回归（不发送真实 Agent 输入）
 node demo/test-html.mjs              # 回放页自检：8 项断言
 ```
 

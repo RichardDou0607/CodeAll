@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">CodeAll</title>
+  <desc id="desc">A mint tactical terminal mark with a C-shaped orbit and code prompt.</desc>
+  <rect width="128" height="128" rx="18" fill="#147a68"/>
+  <path d="M92 30a43 43 0 1 0 0 68" fill="none" stroke="#effff9" stroke-width="13" stroke-linecap="square"/>
+  <path d="m52 51 16 13-16 13" fill="none" stroke="#102b26" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"/>
+  <path d="M76 79h17" fill="none" stroke="#102b26" stroke-width="8" stroke-linecap="square"/>
+  <path d="M91 23v11M91 94v11" fill="none" stroke="#a6f1df" stroke-width="4" stroke-linecap="square"/>
+</svg>
