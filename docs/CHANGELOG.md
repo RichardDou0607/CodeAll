@@ -31,7 +31,15 @@
 - **README 重写**：从规划态改为产品态——已实现能力四域表（观察/控制/用量/外壳 + 安全红线，全部 v0.1.0 实测）、快速开始（断言计数更新为当前基线 85/14/12/63/16）、运维口径（服务重启规则 + Spotlight 直开时 PET_INPUT_CMD 不接线的已知缺口）、文档索引补 22/53/CHANGELOG、后续计划摘要表。修正过时叙述（「Tauri 外壳尚未实现」→ 已实现并安装）。
 - 本轮仅文档，无代码改动；未提交（待用户审阅）。
 
+### 深度清洁：源码与发布二进制去除全部个人痕迹，GitHub 仓库删库重建（用户定向「彻底干净」）
+
+- **源码文本清洗**（git grep 残留为零，规则同步用于全历史重写）：机器用户名（含文件属主名、`/Users` 路径、DSH 编码目录、界面引用）统一替换为 `demo`；全部真实会话 UUID（完整与截断形态共 7 个）替换为形状一致的合成 ID。涉及 13+ 个文件（adapters 注释与测试向量、demo 夹具 cwd、docs/00/35/40/52/54/90/99、CHANGELOG、qa、插件 README）。
+- **发布二进制清洁**：① `lib.rs` 编译期仓库路径分支加 `#[cfg(debug_assertions)]` 门（release 不再内嵌构建机绝对路径；开发经 run.sh 的 `AGENT_PET_ROOT` 环境变量定位仓库，行为不变）；② 构建加 `RUSTFLAGS --remap-path-prefix=$HOME=/build`（清除 tao/wry 等依赖 panic 位置串中的 `~/.cargo` 路径）。实测新二进制中构建机用户名/仓库路径字符串命中 0 次（旧包 322 次）；重装后功能复验通过（服务由包内资源拉起，HTTP 200）。
+- **GitHub 删库重建**：强推也无法立即清除服务端悬挂的旧提交对象（GC 前仍可按 SHA 访问）——删除整个仓库后同名重建并重推源码、tag 与 Release（新 DMG），旧对象随原仓库一并消失。提交元数据本就使用 GitHub noreply 邮箱，无需重写作者。
+- **验证**：全套件回归（catalog-check 初次偶发为 CPU 被 Rust 全量编译占满导致的 353ms 计时抖动，复跑即绿）；全新 clone 扫描无任何个人路径/真实会话 ID 残留。
+
 ### 隐私清理：移除真实会话录制，演示数据全部合成（用户定向）
+
 
 - **删除**：`fixtures/session-replay.pet.jsonl`（2026-10-05 录制的 548 条真实 DSH 会话事件）与 `demo/frame.html`（内嵌同一录制的自包含回放页）——两文件从 git 全历史清除并强推远端。
 - **替代**：`demo/build-html.mjs` 改用合成契约样本 `fixtures/contract-sample.pet.jsonl` 作为输入（并修掉 cwd 相对路径依赖）；`frame.html` 转为**不入库的生成产物**（`node demo/build-html.mjs`），`test-html.mjs` 缺失时自动构建；`.gitignore` 新增 `fixtures/session-replay*.pet.jsonl` 与 `demo/frame.html`——今后真实录制只留本地，杜绝再次入库。

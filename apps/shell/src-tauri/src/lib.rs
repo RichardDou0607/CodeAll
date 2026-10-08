@@ -158,7 +158,11 @@ fn resolve_repo_root() -> PathBuf {
             return pb;
         }
     }
+    // 编译期路径只用于开发（tauri dev / debug 构建）：release 分发二进制不得内嵌
+    // 构建机的仓库绝对路径（含用户名）；开发者跑 run.sh 时经 AGENT_PET_ROOT 环境变量定位仓库。
+    #[cfg(debug_assertions)]
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    #[cfg(debug_assertions)]
     if let Some(root) = manifest.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
         if root.join("demo").join("framed.mjs").exists() {
             return root.to_path_buf();
