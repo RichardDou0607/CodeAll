@@ -26,13 +26,13 @@ import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../ada
 import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, followKimiLogs, SOURCE as KM_SOURCE } from '../adapters/kimi-code-adapter.mjs';
 import { scanZcodeCatalog, followZcodeLogs, SOURCE as ZC_SOURCE } from '../adapters/zcode-adapter.mjs';
-import { scanAllUsage, serializeUsageScan } from '../adapters/usage-collect.mjs';
+import { scanAllUsage, serializeUsageScan, usageCalendar } from '../adapters/usage-collect.mjs';
 import { CLI_TARGETS, availableCliChannels, deliverControl, newCliSession, openCliSession } from '../adapters/cli-control.mjs';
 import net from 'node:net';
 import crypto from 'node:crypto';
 
 /** 多源会话目录（M-C）：DSH（workspace 注册表）+ Claude Code（目录即项目）+ Codex（session_meta.cwd 归并）+ ZCode（sqlite session.path）。 */
-const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', zcode: 'ZCode', agentos: 'AgentOS', opencode: 'OpenCode' };
+const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', zcode: 'ZCode' };
 
 // Codex 桌面端任务工作目录（~/Documents/Codex/<日期>/<任务名>，每任务一个一次性目录）：
 // 按 cwd 归并会让侧栏出现大量单会话「项目」（he / qi / jian / xia …）——统一折叠为一个「Codex 任务目录」组
@@ -128,6 +128,7 @@ const INPUT_LOG = path.join(PET_DIR, 'input-queue.jsonl');
 const INPUT_MAX_ITEMS = 200;      // 队列条目上限：超出丢弃最旧（补上架构文档 §4 缺失的轮转规格）
 const INPUT_MAX_BYTES = 1 << 20;  // 1MB 硬上限（单条 ≤2000 字符，正常远达不到）
 const HTML_DIR = path.dirname(fileURLToPath(import.meta.url));
+const ASSET_DIR = path.join(HTML_DIR, 'assets');
 const BOOT_TS = Date.now();
 /** 页面构建号 = max(服务启动时间, 页面文件 mtime)：服务重启或 HTML 更新后，旧页面自行刷新（页面响应 no-store）。 */
 function pageBuild(file) { try { return Math.max(BOOT_TS, fs.statSync(file).mtimeMs); } catch { return BOOT_TS; } }
@@ -266,7 +267,7 @@ async function refreshUsage() {
 // waiting / transient-error 不受时间限制（对齐前端规则①：等审批的会话一直在进行中）。
 const STALE_MS = 300_000;
 const TIMED_PROGRESS = new Set(['thinking', 'running', 'working']);
-const PINNED_PROGRESS = new Set(['waiting', 'transient-error']);
+const PINNED_PROGRESS = new Set(['waiting', 'transient-error', 'delegated']);   // delegated=等待子代理（宿主停、子代理跑）
 const isProgressState = (st) => TIMED_PROGRESS.has(st) || PINNED_PROGRESS.has(st);
 /** 实时行的有效状态：滞留的进行中状态按目录结论修正（目录无结论则降 idle；ended 归入 UI 的 done 词汇）。 */
 function effectiveState(s, meta, nowMs) {
@@ -310,6 +311,7 @@ function touchSession(sessionId, ev) {
   s.since = s.since ?? ev.ts;
   if (ev.data?.workspace) { s.label = String(ev.data.workspace).split('/').pop(); s.cwd = ev.data.workspace; }
   if (ev.data?.origin) s.origin = ev.data.origin;   // 插件 session.start 带上 origin：子代理零延迟识别（不等 5s 目录刷新）
+  if (ev.data?.parentSessionId) s.parentSessionId = String(ev.data.parentSessionId);   // 子代理 → 宿主关联（插件可选携带；缺失时按项目兜底）
   if (ev.data?.title) s.label = ev.data.title;
   return s;
 }
@@ -397,36 +399,89 @@ function snapshot() {
     }
   }
   // 实时区保留进行中的全部会话——隐藏由 UI 手动触发（用户反馈：要手动隐藏，不要自动退场）
+  // ---- 子代理活跃度：宿主暂时停住（idle/done）但子代理仍在跑 → 宿主必须保持活跃 ----
+  // 关联两级：① parentSessionId 精确匹配（codex parent_thread_id / zcode parent_id；DSH 插件可选携带）；
+  //          ② 同 projectKey 兜底（DSH 插件未带 parent：子代理与宿主共享同一 workspace/cwd）。
+  // 滞留宽容：各适配器的 5min 滞留修正会把「正在跑长任务但安静」的子代理打成 idle（如 zcode 子代理
+  // 执行超过 5 分钟的命令期间不写库）——归因一旦丢失，宿主立刻翻回 已完成（用户可见的误判）。
+  // 宽容窗口（15min）内仍视为运行；超过则信目录结论（真死了）。
+  const SUB_STALE_TOLERANCE_MS = 15 * 60_000;
+  const subRunningLive = (s, meta, nowMs) => {
+    if (isProgressState(s.state) || isProgressState(effectiveState(s, meta, nowMs))) return true;
+    return TIMED_PROGRESS.has(s.state) && nowMs - (s.lastAt || 0) <= SUB_STALE_TOLERANCE_MS;
+  };
+  const subRunningCatalog = (s, nowMs) => {
+    if (isProgressState(s.state)) return true;
+    return s.state === 'idle' && String(s.stateSource || '').includes('stale>5min') && nowMs - (s.updatedAt ?? 0) <= SUB_STALE_TOLERANCE_MS;
+  };
+  const subActiveByParent = new Map();
+  const subActiveByProject = new Map();
+  const noteSubagent = (parent, projectKey, running, lastMs) => {
+    if (!running) return;
+    if (parent) { const e = subActiveByParent.get(parent) || { running: 0, lastMs: 0 }; e.running++; e.lastMs = Math.max(e.lastMs, lastMs || 0); subActiveByParent.set(parent, e); }
+    if (projectKey) { const e = subActiveByProject.get(projectKey) || { running: 0, lastMs: 0 }; e.running++; e.lastMs = Math.max(e.lastMs, lastMs || 0); subActiveByProject.set(projectKey, e); }
+  };
+  for (const [id, s] of state.sessions) {   // ① DSH 插件事件区：子代理行原本在 live 组装时被直接丢弃
+    if (!isSubagent(id, s)) continue;
+    noteSubagent(s.parentSessionId ?? metaById.get(id)?.parentSession ?? null, keyOfSession(id, s), subRunningLive(s, metaById.get(id), nowMs), s.lastAt ?? s.since ?? 0);
+  }
+  for (const sc of [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc]) {   // ② 目录扫描：五源子代理行自带 parentSession + 粗粒度状态（DSH 曾漏扫——插件未挂载时宿主归因完全丢失）
+    for (const s of (sc?.sessions || [])) {
+      if (s.kind !== 'subagent') continue;
+      noteSubagent(s.parentSession ?? null, keyOfSession(s.sessionId, s), subRunningCatalog(s, nowMs), s.updatedAt ?? 0);
+    }
+  }
   const live = state.order.map(id => state.sessions.get(id)).filter(Boolean).filter(s => !isSubagent(s.id, s)).map(s => {
     const meta = metaById.get(s.id) || {};
+    const projectKey = keyOfSession(s.id, s);
+    const sub = subActiveByParent.get(s.id) || subActiveByProject.get(projectKey) || null;
+    const st0 = effectiveState(s, meta, nowMs);
+    // 宿主停住但子代理在跑 → 状态显示「等待子代理」（不再是 空闲/已完成）
+    const delegated = sub && (st0 === 'idle' || st0 === 'done');
+    // 标签：真实标题 → 事件标签；事件标签若就是 cwd 目录名（= 项目名）则视为无标题，不冒充
+    const label0 = meta.title || s.label;
+    const label = label0 && label0 === path.basename(String(meta.cwd || s.cwd || '')) ? '（未命名）' : label0;
     return {
-      id: s.id, source: s.source, label: meta.title || s.label, state: effectiveState(s, meta, nowMs),
-      cwd: meta.cwd || s.cwd || null, projectKey: keyOfSession(s.id, s),
-      since: s.since, pending: s.pending, activity: s.activity,
+      id: s.id, source: s.source, label, state: delegated ? 'delegated' : st0,
+      cwd: meta.cwd || s.cwd || null, projectKey,
+      since: s.since, pending: s.pending, activity: delegated ? '等待子代理完成' : s.activity,
       elapsedMs: nowMs - s.since,
       lastActiveMs: s.lastAt ?? s.since,
       agentName: meta.agentName || SOURCE_LABEL[s.source] || 'DSH', model: meta.model || null, reasoningEffort: meta.reasoningEffort || null,
       variant: meta.variant || null,
       agentPreset: meta.agentPreset || null, title: meta.title || null, kind: 'main', live: true,
+      subagentRunning: sub ? sub.running : 0, subagentLastMs: sub ? sub.lastMs : null,
       usage: usageOf(s.source ?? 'dsh', s.id),
     };
   });
   const liveIds = new Set(live.map(s => s.id));
   const liveRowById = new Map(live.map(s => [s.id, s]));
   // 进行中判定：实时行用修正后的有效状态；未被实时跟随的会话用目录粗粒度（各适配器自带 5min 滞留修正）
-  const inProgressOf = (sid, meta) => isProgressState((liveRowById.get(sid) || meta || {}).state);
+  // 宿主暂时停止（idle/done）但子代理仍在跑 → delegated（等待子代理）：计进行中；聚合并入「运行中」
+  const hostStateOf = (s) => (Number(s.subagentRunning) > 0 && (s.state === 'idle' || s.state === 'done')) ? 'delegated' : s.state;
+  // 非实时宿主同样要吃 delegated 修正：目录粗状态 done/idle/ended + 子代理在跑 = 进行中
+  //（曾只修正实时行 → 侧栏 liveCount 漏计「等待子代理」的历史区宿主，与行内徽标自相矛盾）
+  const inProgressOf = (sid, meta) => {
+    const r = liveRowById.get(sid);
+    if (r) return isProgressState(hostStateOf(r));
+    const st = (meta || {}).state;
+    if (st === 'idle' || st === 'done' || st === 'ended') return !!subActiveByParent.get(sid);
+    return isProgressState(st);
+  };
   // 聚合状态改用修正后的实时行计算（hub.agg() 是另一套状态机，曾出现「新建空闲会话 agg=思考中」的不一致）
-  const AGG_PRIORITY = { waiting: 5, 'transient-error': 4, error: 3, working: 2, running: 2, thinking: 1, done: 0, idle: -1 };
+  const AGG_PRIORITY = { waiting: 5, 'transient-error': 4, error: 3, working: 2, running: 2, delegated: 2, thinking: 1, done: 0, idle: -1 };
   let agg = 'idle';
-  for (const s of live) if ((AGG_PRIORITY[s.state] ?? -1) > (AGG_PRIORITY[agg] ?? -1)) agg = s.state;
+  for (const s of live) { const st = hostStateOf(s); const aggSt = st === 'delegated' ? 'running' : st; if ((AGG_PRIORITY[aggSt] ?? -1) > (AGG_PRIORITY[agg] ?? -1)) agg = aggSt; }
   // 当前状态计数（顶部 chips 用；counters 是累计事件数，只作诊断，不能再当“当前 N 个在跑”展示）
-  const stateCounts = { thinking: 0, running: 0, waiting: 0, errors: 0, done: 0 };
+  const stateCounts = { thinking: 0, running: 0, delegated: 0, waiting: 0, errors: 0, done: 0 };
   for (const s of live) {
-    if (s.state === 'thinking') stateCounts.thinking++;
-    else if (s.state === 'running' || s.state === 'working') stateCounts.running++;
-    else if (s.state === 'waiting') stateCounts.waiting++;
-    else if (s.state === 'error' || s.state === 'transient-error') stateCounts.errors++;
-    else if (s.state === 'done' && nowMs - (s.since || 0) <= 600_000) stateCounts.done++;
+    const st = hostStateOf(s);
+    if (st === 'thinking') stateCounts.thinking++;
+    else if (st === 'running' || st === 'working') stateCounts.running++;
+    else if (st === 'delegated') stateCounts.delegated++;
+    else if (st === 'waiting') stateCounts.waiting++;
+    else if (st === 'error' || st === 'transient-error') stateCounts.errors++;
+    else if (st === 'done' && nowMs - (s.since || 0) <= 600_000) stateCounts.done++;
   }
 
   // ---- 会话列表（多源合并，docs/21 M-C「按 cwd 归一」）----
@@ -563,7 +618,20 @@ function snapshot() {
   const history = sidebarProjects.flatMap(p => p.sessions)
     .filter(s => !liveIds.has(s.sessionId))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .map(s => ({ ...s, source: s.source || 'dsh', projectKey: keyOfSession(s.sessionId, s), usage: usageOf(s.source || 'dsh', s.sessionId) }));
+    // 历史行只按 parentSessionId 精确挂子代理（项目兜底会误伤同项目其它历史行；宿主若被实时跟随则本就在 live 区）
+    .map(s => {
+      const sub = subActiveByParent.get(s.sessionId) || null;
+      const delegated = sub && (s.state === 'idle' || s.state === 'done' || s.state === 'ended');   // 宿主停、子代理跑 → 等待子代理
+      return { ...s, source: s.source || 'dsh', state: delegated ? 'delegated' : s.state, projectKey: keyOfSession(s.sessionId, s), subagentRunning: sub ? sub.running : 0, subagentLastMs: sub ? sub.lastMs : null, usage: usageOf(s.source || 'dsh', s.sessionId) };
+    });
+  // 目录源宿主不被实时跟随 → 「等待子代理」出现在历史区：chips 与聚合同样计入（否则顶部显示 0、迷你条显示空闲）
+  {
+    const histDelegated = history.filter(h => h.state === 'delegated').length;
+    if (histDelegated) {
+      stateCounts.delegated += histDelegated;
+      if ((AGG_PRIORITY.running ?? -1) > (AGG_PRIORITY[agg] ?? -1)) agg = 'running';
+    }
+  }
   return {
     v: 1, ts: Date.now(), agg,
     build: { window: pageBuild(path.join(HTML_DIR, 'window.html')), mini: pageBuild(path.join(HTML_DIR, 'mini.html')) },
@@ -571,18 +639,20 @@ function snapshot() {
     agents: (() => {
       const counts = {};
       const bump = (src, v) => { if (!v) return; counts[src] = counts[src] || {}; counts[src][v] = (counts[src][v] || 0) + 1; };
+      for (const s of cat.sessions || []) { if (s.kind !== 'subagent' && s.variant) bump('dsh', s.variant); }   // 纯桌面软件：恒为 desktop 计数
       for (const s of multi.cc.sessions || []) bump('claude-code', s.variant);
       for (const s of multi.cx.sessions || []) bump('codex', s.variant);
       for (const s of multi.km.sessions || []) bump('kimi-code', s.variant);
-      for (const s of multi.zc.sessions || []) bump('zcode', s.variant);   // 库内无形态标记：恒无徽标计数
+      for (const s of multi.zc.sessions || []) { if (s.kind !== 'subagent') bump('zcode', s.variant); }   // 纯桌面软件：恒为 desktop 计数（子代理行不计）
       // CLI/桌面端拆行后（base+variantTag）：每行只带自己形态的会话计数
-      // （claude 桌面行含 桌面+IDE；CLI 行只含 CLI；DSH/AgentOS/OpenCode 无形态）
+      // （claude 桌面行含 桌面+IDE；CLI 行只含 CLI；无拆行的软件——ZCode 纯桌面——整卡给全部形态计数）
       return (agentStatus.agents || []).map((a) => {
         const cnt = counts[a.base || a.source];
         let v = null;
         if (cnt) {
           if (a.variantTag === 'cli') v = cnt.cli ? { cli: cnt.cli } : null;
           else if (a.variantTag === 'desktop') v = { ...(cnt.desktop ? { desktop: cnt.desktop } : {}), ...(cnt.ide ? { ide: cnt.ide } : {}) };
+          else v = cnt;
         }
         return { ...a, variants: v && Object.keys(v).length ? v : null };
       });
@@ -598,7 +668,7 @@ function snapshot() {
     inputChannel: (() => {
       const cli = cliChannelsCache();
       if (INPUT_CMD) return { mode: 'cmd', detail: INPUT_CMD };
-      if (cli.length) return { mode: 'cli', detail: 'DSH 经本地队列（挂插件可直投）；Claude Code / Codex / Kimi Code / ZCode 会话直接经各自 CLI 投递' };
+      if (cli.length) return { mode: 'cli', detail: 'DSH 经本地队列（挂插件可直投）；Claude Code / Codex / Kimi Code 会话经各自 CLI 投递；ZCode 经桌面 App 内置引擎投递' };
       return { mode: 'manual', detail: '未配置输入通道：输入会进本地队列，点击可复制手动投递命令' };
     })(),
     catalog: {
@@ -793,6 +863,36 @@ const server = http.createServer(async (req, res) => {
     res.end(fs.readFileSync(PAGE_BY_ROUTE[url.pathname], 'utf8').replace("'__PET_TOKEN_VALUE__'", JSON.stringify(TOKEN)));
     return;
   }
+  // 页面品牌图标与 Agent 原始图标：只允许访问 demo/assets 下的静态文件。
+  if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith('/assets/')) {
+    let rel = '';
+    try { rel = decodeURIComponent(url.pathname.slice('/assets/'.length)); } catch {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' }); res.end('bad asset path'); return;
+    }
+    const root = path.resolve(ASSET_DIR);
+    const file = path.resolve(root, rel);
+    const relative = path.relative(root, file);
+    if (!rel || rel.includes('\0') || (relative && (relative === '..' || relative.startsWith('..' + path.sep)))) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }); res.end('forbidden'); return;
+    }
+    try {
+      const st = fs.statSync(file);
+      if (!st.isFile()) throw new Error('not-file');
+      const type = {
+        '.svg': 'image/svg+xml',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.webp': 'image/webp',
+        '.ico': 'image/x-icon',
+      }[path.extname(file).toLowerCase()] || 'application/octet-stream';
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'public, max-age=31536000, immutable' });
+      if (req.method === 'HEAD') res.end(); else fs.createReadStream(file).pipe(res);
+    } catch {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); res.end('asset not found');
+    }
+    return;
+  }
   if (req.method === 'GET' && url.pathname === '/api/catalog') {
     // 对外只暴露「主会话」：子代理（kind==='subagent'）不是用户意义上的会话，
     // 既不该出现在列表里，也不该被选为投递目标（服务端 resolveTarget 也会再拦一次）。
@@ -824,7 +924,7 @@ const server = http.createServer(async (req, res) => {
         'claude-code': { projects: (multi.cc.projects || []).length, sessions: (multi.cc.sessions || []).length },
         codex: { projects: (multi.cx.projects || []).length, sessions: (multi.cx.sessions || []).filter(s => s.kind !== 'subagent').length },
         'kimi-code': { projects: (multi.km.projects || []).length, sessions: (multi.km.sessions || []).length },
-        zcode: { projects: (multi.zc.projects || []).length, sessions: (multi.zc.sessions || []).length },
+        zcode: { projects: (multi.zc.projects || []).length, sessions: (multi.zc.sessions || []).filter(s => s.kind !== 'subagent').length },
       },
     })));
     return;
@@ -856,7 +956,7 @@ const server = http.createServer(async (req, res) => {
           session: { sessionId: found.sessionId, title: found.title, source: found.source, cwd: found.cwd, variant: found.variant ?? null },
           opened: !!r.opened,
           reason: r.ok ? undefined : 'Terminal 打开失败',
-          detail: (r.detail || r.via) + (found.variant === 'desktop' ? '（桌面端会话经 CLI 续接）' : ''),
+          detail: (r.detail || r.via) + (found.source === 'zcode' ? '（ZCode 桌面会话 · App 内置引擎续接）' : found.variant === 'desktop' ? '（桌面端会话经 CLI 续接）' : ''),
         }));
         return;
       }
@@ -910,6 +1010,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/agents') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(agentStatus));
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/usage/calendar') {
+    const u = usageCache.data;
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    res.end(JSON.stringify(u ? {
+      generatedAt: usageCache.at, refreshing: usageCache.busy, ...usageCalendar(u),
+    } : { pending: true }));
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/usage') {

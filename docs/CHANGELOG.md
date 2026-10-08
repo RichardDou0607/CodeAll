@@ -1,5 +1,21 @@
 # 变更日志（文档与契约）
 
+## 2026-10-08
+
+### v0.1.0 首次发布定稿：软件列表收敛为五源，移除 AgentOS / OpenCode
+
+- **决定**：首发软件状态列表只收录**已端到端落地**的五源——DSH / Claude Code（CLI+桌面）/ Codex（CLI+桌面）/ Kimi Code（CLI+桌面）/ ZCode，共 8 行。AgentOS（远端执行体，docs/21 §6）与 OpenCode（ACP 接入，docs/21 M-I）**尚无观察/控制实现**，从列表移除以免宣传未交付能力；接入落地后回到注册表即可。
+- **改动**（四处同步）：`adapters/local-agents.mjs` 删两个注册条目（留注释指引回归路径）；`demo/window.html` SOURCE_META 删两项兜底（AGENT_TABS/SOURCE_ORDER 本就不含）；`demo/framed.mjs` SOURCE_LABEL 删两项；`demo/test-ui-fixture.mjs` 夹具删两行。
+- **验证**：本机扫描 8 行（3 已连接/5 未打开，AgentOS/OpenCode 不再出现）；test-window 断言更新（状态卡 10→8 张、徽标检查去掉夹具中已不存在的「未下载」、新增「无 AgentOS/OpenCode」反断言）；test-window 85 / test-window-actions 14 / test-mini 12 / test-html 8 / test-ui-dom / test-usage-calendar / catalog-check 16 / multi-source-check 59 / usage-calendar-check 全过；check-fixtures 仍为既有 session-replay 基线失败（与本轮无关，待重录）。
+- **发布**：全部当前工作（用量日历、五家原始图标、全屏 Space 修复等）定稿为 tag **v0.1.0**。
+
+### 悬浮窗被 App 原生全屏「带走」修复（2026-10-08）
+
+- **现象**：App 界面（绿色按钮）进 macOS 原生全屏后，悬浮迷你条被一并收进全屏 Space，桌面上无法显示。
+- **根因**：macOS 默认窗口集合行为——同 App 任一窗口进原生全屏时，无 `FullScreenAuxiliary` 位的窗口会被带进全屏 Space；tao/Tauri 配置未暴露集合行为。
+- **修复**：`lib.rs` 新增 `set_floating_space_behavior()`（objc2-app-kit 直调，与背景拖拽同一模式），对 main 窗口设置 `CanJoinAllSpaces | FullScreenAuxiliary`——常驻所有 Space 且可与全屏窗口并存；`shell_window_diag` 增加 `spaceBehavior*` 读回字段。置顶（📌）语义不变：未置顶被全屏窗口盖住但桌面常在，置顶则浮于全屏之上。
+- **验证**：debug 构建实机拉起日志 `FLOATING_SPACE_BEHAVIOR ok=true`（canJoinAllSpaces+fullScreenAuxiliary 均生效）；详见 docs/53 §14。
+
 ## 2026-10-07
 
 ### ZCode 接入（M-L，五源；用户当日指定「把 ZCode 也接入并完整回归」）

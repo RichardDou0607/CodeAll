@@ -111,23 +111,9 @@ export const LOCAL_AGENTS = Object.freeze([
     activity: [{ dir: path.join(HOME, '.zcode', 'cli', 'db'), depth: 1, fileRe: /^db\.sqlite(-wal|-shm)?$/ }],
     note: 'GLM 系桌面 Agent：观察 = sqlite 只读（WAL 并发读）',
   },
-  {
-    id: 'agentos', name: 'AgentOS M1', source: 'agentos',
-    installPaths: [path.join(HOME, '.local/bin/agent'), path.join(HOME, 'agentos')],
-    processRe: /(^|\/)agent(\s|$)/,  // 要求 agent 是独立路径段/行首 + 空白：ssh-agent、--agent、agent桌宠 均不匹配
-    activity: [{ dir: path.join(HOME, 'agentos', '.state'), depth: 3, fileRe: /.*/ }],
-    note: '自研执行体（远端控制见 docs/21 §6）',
-  },
-  {
-    id: 'opencode', name: 'OpenCode', source: 'opencode',
-    installPaths: [
-      path.join(HOME, '.config/opencode'), path.join(HOME, '.local/share/opencode'),
-      '/usr/local/bin/opencode', '/opt/homebrew/bin/opencode',
-    ],
-    processRe: /(^|\/)opencode(\s|$)|ai\.opencode\.desktop|OpenCode\.app\//i,
-    activity: [{ dir: path.join(HOME, '.local/share/opencode'), depth: 1, fileRe: /^opencode\.db(-wal|-shm)?$/ }],
-    note: '接入首选 ACP（docs/21 M-I）',
-  },
+  // v0.1.0 首发仅收录五源（DSH / Claude Code / Codex / Kimi Code / ZCode）。
+  // AgentOS（远端执行体，docs/21 §6）与 OpenCode（ACP 接入，docs/21 M-I）未随首发，
+  // 待接入落地后再回到此注册表。
 ]);
 
 // ---------------------------------------------------------------------------

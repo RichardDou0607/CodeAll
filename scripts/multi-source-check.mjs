@@ -165,9 +165,11 @@ let cx;
   check('ML13', '划词问答不进会话列表（selection_side_chat = 瞬态 UI 产物，仅计入 stats.sideChats；计数与 ZCode 自身会话列表对齐）',
     !zc.sessions.some((s) => /selection side/i.test(String(s.title || '')) || s.kind === 'sidechat') && (zc.stats.sideChats ?? 0) >= 0,
     { sideChats: zc.stats.sideChats ?? null, sessions: zc.stats.sessions });
+  // sessions 现含子代理行（供快照挂宿主活跃度）；ML3 的计数口径对齐 stats.sessions（仅主会话）
+  const zcMains = zc.sessions.filter((s) => s.kind !== 'subagent');
   check('ML3', '元信息完整（title / cwd / agentVersion / 有限 updatedAt）',
-    zc.sessions.every((s) => s.title && s.cwd) && zc.sessions.filter((s) => Number.isFinite(s.updatedAt)).length === zc.stats.sessions && zc.sessions.filter((s) => s.agentVersion).length >= zc.stats.sessions * 0.8,
-    { withVersion: zc.sessions.filter((s) => s.agentVersion).length });
+    zcMains.every((s) => s.title && s.cwd) && zcMains.filter((s) => Number.isFinite(s.updatedAt)).length === zc.stats.sessions && zcMains.filter((s) => s.agentVersion).length >= zc.stats.sessions * 0.8,
+    { withVersion: zcMains.filter((s) => s.agentVersion).length });
   const STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'unknown']);
   check('ML4', '粗状态在已知集合内（含 5min 滞留修正）', zc.sessions.every((s) => STATE_SET.has(s.state)), { states: [...new Set(zc.sessions.map((s) => s.state))] });
   check('ML5', '扫描性能 < 300ms', tookMs < 300, { tookMs: Number(tookMs.toFixed(1)) });

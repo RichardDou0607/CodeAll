@@ -102,6 +102,27 @@ export function truncateText(s, n = ACTIVITY_TEXT_MAX) {
 const titleIsEcho = (t) => /^\s*<system-reminder>/.test(String(t ?? ''));
 
 /**
+ * 从事件序列提取「首条用户消息」作为兜底标题（剥 <...> 噪声；无合适文本返回 null）。
+ * 目录标题回退链：session/title → 首条用户消息 → （无；不再用项目名冒充标题）。
+ */
+export function firstUserTitleFromEvents(events = []) {
+  for (const ev of events) {
+    if (ev?.type !== 'user/message') continue;
+    const d = ev.data ?? {};
+    if (d.source && d.source.kind && d.source.kind !== 'user') continue;   // 系统注入（如 user-approval 政策通知）不是用户输入
+    const text = (Array.isArray(d.content) ? d.content : [])
+      .filter(b => b && b.type === 'text' && typeof b.text === 'string')
+      .map(b => b.text).join(' ');
+    const raw = text.trim();
+    if (!raw || raw.startsWith('<')) continue;   // 整段标签包装（<system-reminder> 等）不是用户所写
+    const t = raw.replace(/<[^>]{0,200}>/g, ' ').replace(/\s+/g, ' ').trim();
+    const noise = /^(You are|系统|system-reminder|teammate|DeepSeek Harness|Agent Teams|协作)/i.test(t);
+    if (t.length >= 4 && !noise) return truncateText(t, 42);
+  }
+  return null;
+}
+
+/**
  * 从原生事件序列抽取会话元信息。
  * @param events 原生事件（按 seq 升序；可只含扫描窗口 head+tail）
  * @param header 首行 header 事件（type === 'session'），可为 null
@@ -352,6 +373,26 @@ export function selfTest() {
   const checks = [];
   const ok = (name, cond, extra) => checks.push({ name, pass: !!cond, extra: cond ? undefined : extra });
   const eq = (name, a, b) => ok(name, JSON.stringify(a) === JSON.stringify(b), { got: a, want: b });
+
+  // --- 首条用户消息兜底标题 ---
+  eq('firstUserTitle: 常规用户输入', firstUserTitleFromEvents([
+    { type: 'session', id: 's1' },
+    { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '帮我做一个 SVG 动画，主题是鹈鹕骑车' }] } },
+  ]), '帮我做一个 SVG 动画，主题是鹈鹕骑车');
+  eq('firstUserTitle: 政策通知（source.kind 非 user）跳过', firstUserTitleFromEvents([
+    { type: 'user/message', data: { role: 'user', source: { kind: 'user-approval' }, content: [{ type: 'text', text: 'The approval policy changed from never to ask' }] } },
+    { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '真正的用户提问内容' }] } },
+  ]), '真正的用户提问内容');
+  eq('firstUserTitle: <system-reminder> 噪声跳过 + 标签剥除', firstUserTitleFromEvents([
+    { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '<system-reminder>noise</system-reminder>' }] } },
+    { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '开头有<ignore>标签</ignore>的提问' }] } },
+  ]), '开头有 标签 的提问');
+  eq('firstUserTitle: 过短文本跳过 → null', firstUserTitleFromEvents([
+    { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: 'ok' }] } },
+  ]), null);
+  eq('firstUserTitle: 超长截断 42 码点', firstUserTitleFromEvents([
+    { type: 'user/message', data: { role: 'user', content: [{ type: 'text', text: '很'.repeat(60) }] } },
+  ]).length, 42);
 
   // --- 解码：单帧 vs 多帧 ---
   const z = (o) => zlib.zstdCompressSync(Buffer.from(JSON.stringify(o) + '\n', 'utf8'));

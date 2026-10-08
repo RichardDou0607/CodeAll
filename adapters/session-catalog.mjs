@@ -24,7 +24,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { decodeZstdFrames, extractMeta, coarseState as coarseStateOf, findFrameOffsets, AGENT_NAME, AGENT_VERSION } from './dsh-meta.mjs';
+import { decodeZstdFrames, extractMeta, coarseState as coarseStateOf, findFrameOffsets, firstUserTitleFromEvents, AGENT_NAME, AGENT_VERSION } from './dsh-meta.mjs';
 
 export const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 export const SESSIONS_ROOT = process.env.DSH_SESSIONS || path.join(DSH_HOME, 'sessions');
@@ -36,7 +36,7 @@ export const KNOWN_AGENTS = Object.freeze([
 
 export const DEFAULT_OPTS = Object.freeze({
   root: SESSIONS_ROOT,
-  headFrames: 8,
+  headFrames: 24,   // 8→24：session/title 常落在首轮对话后（实测第 ~31 条记录、8 帧只盖 23 条），窗口漏采会把真实标题错降为项目名
   tailFrames: 2,
   chunkBytes: 64 * 1024,
   maxHeadBytes: 1024 * 1024,
@@ -196,16 +196,9 @@ export function pickLogFile(sessionDir) {
 }
 
 /**
- * DSH 会话形态（cli/desktop）判定：
- *  - desktop profile 被 Electron 应用独占（docs/52 §5.3），桌面端是唯一正常生产会话的客户端 → 默认 'desktop'；
- *  - cwd 落在 ~/.dsh/profiles/** 的会话是 CLI/脚本从 profile 目录启动的痕迹 → 'cli'；
- *  - cwd 不可得（降级记录）→ null（不猜）。
+ * DSH 会话形态：DSH 无独立 CLI 产品（desktop profile 被 Electron 应用独占，docs/52 §5.3），
+ * 会话一律产自桌面端 → 恒为 'desktop'。
  */
-export function dshVariantOf(cwd) {
-  if (typeof cwd !== 'string' || !cwd) return null;
-  const profRoot = path.join(DSH_HOME, 'profiles');
-  return (cwd === profRoot || cwd.startsWith(profRoot + path.sep)) ? 'cli' : 'desktop';
-}
 
 /** 解析单个会话目录 → 会话记录；任何失败都降级为 sessionId + 时间 + 大小。 */
 export function parseSession(sessionRoot, projectDirName, sessionDirName, opts = {}) {
@@ -249,14 +242,14 @@ export function parseSession(sessionRoot, projectDirName, sessionDirName, opts =
     const now = Number.isFinite(o.now) ? o.now : Date.now();
     // 找不到 header 帧（坏帧/空文件/未写完）= 解析不完整：**仍然**给出 sessionId + 时间 + 大小，但显式标降级
     if (!header) return { ...rec, updatedAt, cwd: decodeProjectDirName(projectDirName), cwdSource: 'dir-name(lossy)', metaComplete: false, metaApproximate: true, framesScanned, readBytes, readMode: o.deep ? 'deep' : 'window', degraded: true, error: 'no-header-frame' };
-    // title 若是兜底推导而来，也必须标注来源（前端可据此显示「未命名」而不是假装有标题）
-    const titleFallback = header.cwd ? path.basename(header.cwd) : sessionDirName;
+    // 标题回退链：session/title → 首条用户消息 → null（前端显示「（未命名）」；不再拿项目名冒充标题）
+    const firstUserTitle = firstUserTitleFromEvents(events);
     const metaSources = { ...meta.sources };
-    if (!metaSources.title) metaSources.title = header.cwd ? 'derived:basename(cwd)' : 'derived:sessionId';
+    if (!metaSources.title) metaSources.title = firstUserTitle ? 'derived:first-user-message' : 'derived:none';
     return {
       ...rec,
       sessionId: header?.id ?? sessionDirName,
-      title: meta.title ?? titleFallback,
+      title: meta.title ?? firstUserTitle ?? null,
       titleRaw: meta.titleRaw,
       provider: meta.provider, model: meta.model, reasoningEffort: meta.reasoningEffort,
       agentPreset: meta.agentPreset, agentVersion: meta.agentVersion,
@@ -270,7 +263,7 @@ export function parseSession(sessionRoot, projectDirName, sessionDirName, opts =
       delegationDepth: header?.delegationDepth ?? null,
       isSeeded: header?.isSeeded ?? null,
       kind: header?.origin === 'subagent' ? 'subagent' : 'main',
-      variant: dshVariantOf(header?.cwd),
+      variant: 'desktop',   // DSH 无 CLI 产品：恒为桌面形态（降级记录除外，保持 null 不猜）
       label: events.find((r) => r?.type === 'subagent/descriptor')?.data?.label ?? null,
       state: st.state, stateSource: st.stateSource,
       live: (now - log.mtimeMs) < o.liveWindowMs,

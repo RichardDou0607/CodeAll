@@ -136,12 +136,12 @@ export function scanZcodeCatalog(opts = {}) {
            SELECT m.session_id, 'message' AS tbl, m.id, m.time_created, m.time_updated, m.data,
                   ROW_NUMBER() OVER (PARTITION BY m.session_id ORDER BY m.time_updated DESC, m.id DESC) AS rn
            FROM message m
-           WHERE m.session_id IN (SELECT id FROM session WHERE time_archived IS NULL AND task_type NOT IN ('subagent_child', 'selection_side_chat'))
+           WHERE m.session_id IN (SELECT id FROM session WHERE time_archived IS NULL AND task_type NOT IN ('selection_side_chat'))
            UNION ALL
            SELECT p.session_id, 'part' AS tbl, p.id, p.time_created, p.time_updated, p.data,
                   ROW_NUMBER() OVER (PARTITION BY p.session_id ORDER BY p.time_updated DESC, p.id DESC) AS rn
            FROM part p
-           WHERE p.session_id IN (SELECT id FROM session WHERE time_archived IS NULL AND task_type NOT IN ('subagent_child', 'selection_side_chat'))
+           WHERE p.session_id IN (SELECT id FROM session WHERE time_archived IS NULL AND task_type NOT IN ('selection_side_chat'))
          ) WHERE rn <= ? ORDER BY time_updated DESC, id DESC`
       ).all(o.coarseRows);
       for (const r of rows) {
@@ -162,7 +162,7 @@ export function scanZcodeCatalog(opts = {}) {
     for (const s of sessions) {
       const kind = kindOfTaskType(s.task_type);
       if (s.time_archived != null) { archived++; continue; }
-      if (kind === 'subagent') { subagents++; continue; }
+      if (kind === 'subagent') subagents++;   // 子代理行保留进 sessions（快照据此给宿主挂活跃度），不进项目组/主会话计数
       if (kind === 'sidechat') { sideChats++; continue; }   // 划词问答：瞬态产物，不进会话列表
       const cwd = typeof s.path === 'string' && s.path ? s.path : (typeof s.directory === 'string' ? s.directory : null);
       const rows = recent.get(s.id) || [];
@@ -187,16 +187,17 @@ export function scanZcodeCatalog(opts = {}) {
         bytes: null, logFile: o.dbPath, logName: 'db.sqlite',
         origin: kind === 'subagent' ? 'subagent' : null, parentSession: s.parent_id ?? null, delegationDepth: null,
         kind, cwd, cwdSource: cwd ? 'session.path' : null, archived: false,
-        variant: null,                                          // 库内无 CLI/桌面形态标记（与 DSH 同口径：不打徽标）
+        variant: 'desktop',                                     // ZCode 为纯桌面软件（无独立 CLI 产品）：会话一律产自桌面 App，统一打桌面徽标
         degraded: !rows.length, error: null,
         metaSources: { cwd: 'session.path', title: 'session.title(' + (s.title_source ?? '?') + ')', model: modelId ? 'session_entry:runtime/model_selection' : null },
         metaComplete: true, metaApproximate: false,
         readBytes: 0, readMode: 'sqlite:ro',
       });
     }
-    // 按 cwd 归并为项目（与 kimi 适配器同构）
+    // 按 cwd 归并为项目（与 kimi 适配器同构）；子代理不进项目组（sessionCount/liveCount 口径不变）
     const byCwd = new Map();
     for (const s of out) {
+      if (s.kind === 'subagent') continue;
       const key = s.cwd ?? '(未知目录)';
       if (!byCwd.has(key)) byCwd.set(key, []);
       byCwd.get(key).push(s);
@@ -217,11 +218,13 @@ export function scanZcodeCatalog(opts = {}) {
     }
     projects.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    const mains = out.filter(s => s.kind !== 'subagent');
     const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
     return {
       root: o.dbPath, source: SOURCE, generatedAt: now, tookMs, elapsedMs: Number(tookMs.toFixed(2)),
-      projects, sessions: out, sessionCount: out.length, failed: degraded,
-      stats: { projects: projects.length, sessions: out.length, live: out.filter((s) => s.live).length, degraded, archived, subagentSessions: subagents, sideChats, readBytes: 0 },
+      // sessions 含子代理行（供快照挂宿主活跃度）；sessionCount 仅主会话（软件状态卡「会话总数」用）
+      projects, sessions: out, sessionCount: mains.length, failed: degraded,
+      stats: { projects: projects.length, sessions: mains.length, live: mains.filter((s) => s.live).length, degraded, archived, subagentSessions: subagents, sideChats, readBytes: 0 },
     };
   } catch (e) {
     return { ...base, elapsedMs: Number((Number(process.hrtime.bigint() - t0) / 1e6).toFixed(2)), degraded: true, error: 'sqlite:' + String(e.message || e).slice(0, 120) };

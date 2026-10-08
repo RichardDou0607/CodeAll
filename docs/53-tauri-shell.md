@@ -438,3 +438,35 @@ WKWebView 对它返回 true，说明「在网页内容上按住拖动 → 会移
 
 回滚：`apps/shell/tools/mount-dsh-plugin.sh --rollback`（插件不写任何持久状态）。
 
+
+## 14. macOS 原生全屏不再「带走」悬浮窗 — 2026-10-08 追加
+
+### 14.1 现象与根因
+
+用户反馈：把 App 界面（label=app，原生标题栏窗口）用绿色按钮进原生全屏后，
+悬浮迷你条（label=main）被一起带进全屏 Space——桌面上再也找不到它。
+
+根因是 macOS 的默认窗口集合行为：**同 App 任一窗口进入原生全屏时，其余
+默认集合行为的窗口会被收进全屏 Space**（NSWindowCollectionBehavior 没有
+FullScreenAuxiliary 位的窗口不允许与全屏窗口并存）。tao/Tauri 配置里没有暴露
+集合行为（`visibleOnAllWorkspaces` 只覆盖 CanJoinAllSpaces 一个位），需要原生补位。
+
+### 14.2 修复
+
+`lib.rs` 新增 `set_floating_space_behavior()`（与既有 `set_movable_by_background`
+同一套 objc2-app-kit 直调模式），对 main 窗口 OR 入两个位：
+
+- `CanJoinAllSpaces` —— 常驻所有 Space（各个桌面 + 全屏 Space），桌面永远能看到；
+- `FullScreenAuxiliary` —— 允许与全屏窗口并存，不再被全屏带走。
+
+在 setup() 里 `win.show()` 之前调用一次即可长期生效：tao 的
+`set_visible_on_all_workspaces` 对集合行为是读改写且只切 CanJoinAllSpaces 位，
+`set_always_on_top` 只动 window level，都不会冲掉 FullScreenAuxiliary。
+
+读回证据进日志与 `shell_window_diag`（新增 `spaceBehaviorCanJoinAllSpaces` /
+`spaceBehaviorFullScreenAuxiliary` 字段）：
+
+    [shell t_ms=  1745] FLOATING_SPACE_BEHAVIOR ok=true (canJoinAllSpaces+fullScreenAuxiliary)
+
+行为语义：📌 未置顶时悬浮窗仍是普通层级（全屏窗口盖住它，但切回桌面它一直都在）；
+📌 置顶时悬浮窗浮在全屏 App 之上——桌宠语义。改动文件：`apps/shell/src-tauri/src/lib.rs`。

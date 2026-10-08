@@ -398,6 +398,57 @@ fn mouse_down_can_move_window(win: &WebviewWindow) -> Option<bool> {
     }
 }
 
+/// macOS 全屏兼容（修复：App 窗口进原生全屏会把悬浮窗一并带进全屏 Space）。
+/// 默认集合行为下，同 App 任一窗口进入原生全屏时，其余窗口会被收进全屏 Space，
+/// 桌面上就找不到悬浮窗了。给悬浮窗补两个位：
+///   CanJoinAllSpaces —— 常驻所有 Space（含各个桌面与全屏 Space）
+///   FullScreenAuxiliary —— 允许与全屏窗口并存，不被全屏「带走」
+/// tao 的 set_visible_on_all_workspaces 对集合行为是读改写、只切 CanJoinAllSpaces 位，
+/// 置顶（set_always_on_top 走 window level）也不会碰它，所以设置一次即可长期生效。
+#[cfg(target_os = "macos")]
+fn set_floating_space_behavior(win: &WebviewWindow) -> Result<bool, String> {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+    let ptr = win.ns_window().map_err(|e| e.to_string())? as *mut NSWindow;
+    if ptr.is_null() {
+        return Err("ns_window() 返回空指针".into());
+    }
+    unsafe {
+        let ns: &NSWindow = &*ptr;
+        let mut b = ns.collectionBehavior();
+        b |= NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary;
+        ns.setCollectionBehavior(b);
+        let cur = ns.collectionBehavior();
+        Ok(cur.contains(NSWindowCollectionBehavior::CanJoinAllSpaces)
+            && cur.contains(NSWindowCollectionBehavior::FullScreenAuxiliary))
+    }
+}
+
+/// 读回集合行为两个关键位，进 shell_window_diag 便于诊断
+#[cfg(target_os = "macos")]
+fn floating_space_flags(win: &WebviewWindow) -> Option<(bool, bool)> {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+    let ptr = win.ns_window().ok()? as *mut NSWindow;
+    if ptr.is_null() {
+        return None;
+    }
+    let b = unsafe { (&*ptr).collectionBehavior() };
+    Some((
+        b.contains(NSWindowCollectionBehavior::CanJoinAllSpaces),
+        b.contains(NSWindowCollectionBehavior::FullScreenAuxiliary),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_floating_space_behavior(_win: &WebviewWindow) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn floating_space_flags(_win: &WebviewWindow) -> Option<(bool, bool)> {
+    None
+}
+
 #[cfg(not(target_os = "macos"))]
 fn set_movable_by_background(_win: &WebviewWindow, _on: bool) -> Result<bool, String> {
     Ok(false)
@@ -894,6 +945,8 @@ fn shell_window_diag(window: WebviewWindow) -> Result<Value, String> {
         "resizable": window.is_resizable().unwrap_or(true),
         "movableByWindowBackground": movable_by_background(&window),
         "contentViewMouseDownCanMoveWindow": mouse_down_can_move_window(&window),
+        "spaceBehaviorCanJoinAllSpaces": floating_space_flags(&window).map(|f| f.0),
+        "spaceBehaviorFullScreenAuxiliary": floating_space_flags(&window).map(|f| f.1),
     }))
 }
 
@@ -1083,6 +1136,14 @@ pub fn run() {
                     mouse_down_can_move_window(&win)
                 )),
                 Err(e) => log(&format!("MOVABLE_BY_BACKGROUND_ERR err={}", e)),
+            }
+            // 全屏兼容：避免悬浮窗被 App 窗口的原生全屏带走（见函数注释）
+            match set_floating_space_behavior(&win) {
+                Ok(v) => log(&format!(
+                    "FLOATING_SPACE_BEHAVIOR ok={} (canJoinAllSpaces+fullScreenAuxiliary)",
+                    v
+                )),
+                Err(e) => log(&format!("FLOATING_SPACE_BEHAVIOR_ERR err={}", e)),
             }
             match setup_tray(app.handle()) {
                 Ok(_) => {}

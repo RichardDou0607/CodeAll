@@ -211,17 +211,55 @@ export function scanKimiCatalog(opts = {}) {
     }
   } catch { /* root 不存在：未安装/未用过 CLI */ }
   const sessions = [];
-  let degraded = 0, readBytes = 0, archived = 0;
+  let degraded = 0, readBytes = 0, archived = 0, subagents = 0;
+  const now = Number.isFinite(o.now) ? o.now : Date.now();
   for (const d of sessionDirs.slice(0, o.maxSessions)) {
     const s = parseKimiSession(d, o);
     if (s.archived) { archived++; continue; }               // 归档会话不进列表
     if (s.degraded) degraded++;
     readBytes += s.readBytes ?? 0;
     sessions.push(s);
+    // 子代理流：agents/<非 main>/wire.jsonl（宿主委派后 main 停写、子代理写自己的流）。
+    // 产出 kind='subagent' 行供快照给宿主挂活跃度；不进项目组/主会话计数（与 zcode 口径一致）。
+    try {
+      const agentsDir = path.join(d, 'agents');
+      let ags; try { ags = fs.readdirSync(agentsDir, { withFileTypes: true }); } catch { ags = []; }
+      for (const a of ags) {
+        if (!a.isDirectory() || a.name === 'main') continue;
+        const wf = path.join(agentsDir, a.name, 'wire.jsonl');
+        let wst; try { wst = fs.statSync(wf); } catch { continue; }
+        let coarse = { state: 'unknown', stateSource: 'no-signal' };
+        try {
+          const { head, tail, bytesRead } = readWireWindows(wf, { size: wst.size, headBytes: o.wireHeadBytes, tailBytes: o.wireTailBytes });
+          const win = tail.length ? tail : head;
+          coarse = coarseStateFromWireLines(win);
+          let lastTs = null;                                // 时效修正同 main：thinking/running 超 5min 无新行 → idle
+          for (let i = win.length - 1; i >= 0; i--) { if (Number.isFinite(win[i]?.time)) { lastTs = win[i].time; break } }
+          if ((coarse.state === 'thinking' || coarse.state === 'running') && lastTs !== null && now - lastTs > 300_000) {
+            coarse = { state: 'idle', stateSource: coarse.stateSource + ':stale>5min→idle' };
+          }
+          readBytes += bytesRead;
+        } catch { /* 子代理 wire 读不了按 unknown */ }
+        subagents++;
+        sessions.push({
+          sessionId: s.sessionId + '::' + a.name, dirName: a.name, agentName: AGENT_NAME, source: SOURCE,
+          dir: d, projectDir: path.dirname(d), projectDirName: path.basename(path.dirname(d)),
+          title: '子代理 ' + a.name, titleRaw: null, provider: null, model: null, reasoningEffort: null, agentPreset: null,
+          agentVersion: null, state: coarse.state, stateSource: 'subagent-wire:' + coarse.stateSource, live: now - wst.mtimeMs < o.liveWindowMs,
+          createdAt: null, updatedAt: Math.round(wst.mtimeMs), bytes: wst.size, logFile: wf, logName: 'wire.jsonl',
+          origin: 'subagent', parentSession: s.sessionId, delegationDepth: null, isSeeded: null, kind: 'subagent', label: null,
+          cwd: s.cwd, cwdSource: s.cwdSource, archived: false, isCustomTitle: null,
+          degraded: false, error: null, metaSources: {},
+          metaComplete: true, metaApproximate: false, readBytes: 0, readMode: 'state+wire-window',
+          variant: null,
+        });
+      }
+    } catch { /* agents 目录缺失：普通会话 */ }
   }
   const ws = readKimiWorkspaces();
   const byCwd = new Map();
   for (const s of sessions) {
+    if (s.kind === 'subagent') continue;   // 子代理不进项目组（sessionCount/liveCount 口径不变）
     const key = s.cwd ?? '(未知目录)';
     if (!byCwd.has(key)) byCwd.set(key, []);
     byCwd.get(key).push(s);
@@ -246,10 +284,12 @@ export function scanKimiCatalog(opts = {}) {
   projects.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   sessions.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  const mains = sessions.filter((s) => s.kind !== 'subagent');
   return {
     root: o.root, source: SOURCE, generatedAt: Date.now(), tookMs, elapsedMs: Number(tookMs.toFixed(2)),
-    projects, sessions, sessionCount: sessions.length, failed: degraded,
-    stats: { projects: projects.length, sessions: sessions.length, live: sessions.filter((s) => s.live).length, degraded, archived, readBytes, subagentSessions: 0 },
+    // sessions 含子代理行（供快照挂宿主活跃度）；sessionCount 仅主会话（软件状态卡「会话总数」用）
+    projects, sessions, sessionCount: mains.length, failed: degraded,
+    stats: { projects: projects.length, sessions: mains.length, live: mains.filter((s) => s.live).length, degraded, archived, readBytes, subagentSessions: subagents },
   };
 }
 

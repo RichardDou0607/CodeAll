@@ -8,4 +8,4 @@
 - `kimi.png`：`/Applications/Kimi Code.app/Contents/Resources/icon.icns`
 - `zcode.png`：`/Applications/ZCode.app/Contents/Resources/icon.icns`
 
-AgentOS、OpenCode 等没有在本机确认到原始安装图标的来源，界面使用 CodeAll 自有图标作为回退。
+未收录进 v0.1.0 软件列表的软件（AgentOS、OpenCode 等）不在本目录；后续接入时若拿不到原始图标，界面使用 CodeAll 自有图标作为回退。

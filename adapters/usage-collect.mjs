@@ -58,7 +58,7 @@ import { SESSIONS_ROOT as DSH_ROOT, pickLogFile } from './session-catalog.mjs';
 
 export const DEFAULT_OPTS = Object.freeze({
   maxFiles: 800,                 // 单源文件数上限（本机 Claude 164 / Codex 34 / Kimi 12 / DSH 37）
-  maxLineBytes: 512 * 1024,      // 超大行（工具输出）必不含 usage：跳过
+  maxLineBytes: 512 * 1024,      // 超大行跳过，并在日历标注部分数据
   softBudgetMs: 15_000,          // 单源单轮软时限：到点即停（partial=true），未处理文件下轮续
   refresh: false,                // true=忽略文件级缓存强制重读（诊断用）
 });
@@ -94,6 +94,29 @@ function bumpModelDay(mdm, model, day, d) {
   let dm = mdm.get(model);
   if (!dm) { dm = new Map(); mdm.set(model, dm); }
   bumpDay(dm, day, d);
+}
+function newCalls() { return { days: new Map(), seen: new Set(), undated: 0 }; }
+function addCallDays(target, days) {
+  for (const [day, counts] of days || []) {
+    const row = target.get(day) ?? { toolCalls: 0, mcpCalls: 0 };
+    row.toolCalls += counts.toolCalls;
+    row.mcpCalls += counts.mcpCalls;
+    target.set(day, row);
+  }
+}
+function recordTool(calls, id, name, timestamp) {
+  if (id != null && id !== '') {
+    if (calls.seen.has(id)) return;
+    calls.seen.add(id);
+  }
+  const ts = typeof timestamp === 'number' ? timestamp : Date.parse(timestamp);
+  if (!Number.isFinite(ts) || !Number.isFinite(new Date(ts).getTime())) { calls.undated++; return; }
+  const day = dayKeyOf(ts);
+  const row = calls.days.get(day) ?? { toolCalls: 0, mcpCalls: 0 };
+  row.toolCalls++;
+  // Only explicit MCP names/namespaces qualify; results and discovery events never count.
+  if (/(^|[.])mcp(?:__|[.:/-])/i.test(String(name ?? ''))) row.mcpCalls++;
+  calls.days.set(day, row);
 }
 /** fresh input / 命中率折算（含cache语义的源要先减掉 cacheRead）。 */
 function freshInputOf(u, includesCache) { return includesCache ? Math.max(0, fin(u.input) - fin(u.cacheRead)) : fin(u.input); }
@@ -153,18 +176,20 @@ async function collectDshFile(file, o) {
   if (hit) return { ...hit.result, cached: true };
   let buf; try { buf = fs.readFileSync(file); } catch { return { skipped: true }; }
   const byModel = new Map(), modelDays = new Map(), days = new Map();
-  const flat = newUsage();
-  let curModel = null, sid = null, parseErrors = 0, usageLines = 0, totalTokensSum = 0;
+  const flat = newUsage(), calls = newCalls();
+  let curModel = null, sid = null, parseErrors = 0, skippedLines = 0, usageLines = 0, totalTokensSum = 0;
   for (const line of dshReadText(buf).split('\n')) {
     const t = line.trim();
     if (!t) continue;
-    if (!t.includes('"usage"') && !t.includes('"request/header"') && !t.includes('"type":"session"')) continue;
-    if (t.length > o.maxLineBytes) continue;
+    if (!t.includes('"usage"') && !t.includes('"request/header"') && !t.includes('"session"') && !t.includes('"tool/call"')) continue;
+    if (t.length > o.maxLineBytes) { skippedLines++; continue; }
     let j; try { j = JSON.parse(t); } catch { parseErrors++; continue; }
     if (j?.type === 'session' && sid === null) sid = typeof j.id === 'string' ? j.id : null;
     else if (j?.type === 'request/header') {
       const m = j.data?.header?.config?.model;
       if (typeof m === 'string' && m) curModel = m;
+    } else if (j?.type === 'tool/call') {
+      recordTool(calls, j.data?.callId ?? j.seq, j.data?.name ?? j.data?.toolName ?? j.data?.tool?.name, j.time);
     } else if (j?.type === 'assistant/message') {
       const u = j.data?.usage;
       if (!u || (!Number.isFinite(u.inputTokens) && !Number.isFinite(u.outputTokens))) continue;
@@ -179,8 +204,8 @@ async function collectDshFile(file, o) {
     }
   }
   const result = {
-    flat, days, models: byModel, modelDays, variant: null, sid,   // DSH 无形态标记（与目录口径一致）
-    stats: { usageLines, parseErrors, totalTokensSum, componentsSum: flat.input + flat.output + flat.cacheRead + flat.cacheWrite },
+    flat, days, callDays: calls.days, models: byModel, modelDays, variant: null, sid,
+    stats: { usageLines, parseErrors, skippedLines, undatedCalls: calls.undated, totalTokensSum, componentsSum: flat.input + flat.output + flat.cacheRead + flat.cacheWrite },
   };
   dshFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
   return result;
@@ -207,10 +232,12 @@ export async function scanDshUsage(opts = {}) {
     if (acc.stats.files >= o.maxFiles) { acc.stats.partial = true; break; }
     const r = await collectDshFile(f, o);
     if (r.aborted) { acc.stats.partial = true; break; }
-    if (r.skipped || !r.sid) continue;
+    if (r.skipped || !r.sid) { acc.stats.skippedFiles++; continue; }
     acc.stats.files++;
     if (r.cached) acc.stats.cachedFiles++;
     acc.stats.parseErrors += r.stats.parseErrors;
+    acc.stats.skippedLines += r.stats.skippedLines;
+    acc.stats.undatedCalls += r.stats.undatedCalls;
     if (r.stats.componentsSum !== r.stats.totalTokensSum) acc.stats.identityMismatched++;   // 恒等式失配=解析可疑（对账口径）
     try { acc.stats.readBytes += fs.statSync(f).size; } catch { /* 文件消失 */ }
     foldFile(acc, r, r.sid);
@@ -229,8 +256,8 @@ async function collectClaudeFile(file, o) {
   let st; try { st = fs.statSync(file); } catch { return { skipped: true }; }
   const hit = o.refresh ? null : cachedEntry(claudeFileCache, file, st);
   if (hit) return { ...hit.result, cached: true };
-  const byMsg = new Map();
-  let variant = null, anonSeq = 0, parseErrors = 0, aborted = false, lineCnt = 0;
+  const byMsg = new Map(), calls = newCalls();
+  let variant = null, anonSeq = 0, parseErrors = 0, skippedLines = 0, aborted = false, lineCnt = 0;
   const deadline = Date.now() + o.softBudgetMs;
   try {
     const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
@@ -238,12 +265,17 @@ async function collectClaudeFile(file, o) {
       for await (const line of rl) {
         if ((++lineCnt & 511) === 0 && Date.now() > deadline) { aborted = true; break; }
         const isUsage = line.includes('"usage"');
-        if (!isUsage && !line.includes('"entrypoint"')) continue;
-        if (line.length > o.maxLineBytes) continue;
+        if (!isUsage && !line.includes('"entrypoint"') && !line.includes('"tool_use"')) continue;
+        if (line.length > o.maxLineBytes) { skippedLines++; continue; }
         let j; try { j = JSON.parse(line); } catch { parseErrors++; continue; }
         if (typeof j?.entrypoint === 'string') variant = variantFromEntrypoint(j.entrypoint);   // 后写覆盖
-        if (!isUsage) continue;
         const m = j?.message;
+        if (j?.type === 'assistant' && Array.isArray(m?.content)) {
+          for (const [i, block] of m.content.entries()) {
+            if (block?.type === 'tool_use') recordTool(calls, block.id ?? (m.id ? m.id + ':' + i : null), block.name, j.timestamp);
+          }
+        }
+        if (!isUsage) continue;
         if (j?.type !== 'assistant' || !m?.usage) continue;
         const u = m.usage;
         const input = fin(u.input_tokens), output = fin(u.output_tokens);
@@ -268,7 +300,7 @@ async function collectClaudeFile(file, o) {
     bumpModel(byModel, model, d);
     bumpModelDay(modelDays, model, day, d);
   }
-  const result = { flat, days, models: byModel, modelDays, variant, stats: { distinctMsgs: byMsg.size, parseErrors } };
+  const result = { flat, days, callDays: calls.days, models: byModel, modelDays, variant, stats: { distinctMsgs: byMsg.size, parseErrors, skippedLines, undatedCalls: calls.undated } };
   claudeFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
   return result;
 }
@@ -299,10 +331,12 @@ export async function scanClaudeUsage(opts = {}) {
     if (acc.stats.files >= o.maxFiles) { acc.stats.partial = true; break; }
     const r = await collectClaudeFile(f, o);
     if (r.aborted) { acc.stats.partial = true; break; }
-    if (r.skipped) continue;
+    if (r.skipped) { acc.stats.skippedFiles++; continue; }
     acc.stats.files++;
     if (r.cached) acc.stats.cachedFiles++;
     acc.stats.parseErrors += r.stats.parseErrors;
+    acc.stats.skippedLines += r.stats.skippedLines;
+    acc.stats.undatedCalls += r.stats.undatedCalls;
     try { acc.stats.readBytes += fs.statSync(f).size; } catch { /* 文件消失 */ }
     foldFile(acc, r, sidOf(f));
   }
@@ -320,8 +354,9 @@ async function collectCodexFile(file, o) {
   let st; try { st = fs.statSync(file); } catch { return { skipped: true }; }
   const hit = o.refresh ? null : cachedEntry(codexFileCache, file, st);
   if (hit) return { ...hit.result, cached: true };
-  let curModel = null, variant = null, requests = 0, aborted = false, lineCnt = 0, parseErrors = 0;
+  let curModel = null, variant = null, requests = 0, aborted = false, lineCnt = 0, parseErrors = 0, skippedLines = 0;
   const byModel = new Map(), modelDays = new Map(), days = new Map();
+  const calls = newCalls();
   let finalTotal = null;                               // 最后一条 total_token_usage（会话累计，权威）
   const deadline = Date.now() + o.softBudgetMs;
   try {
@@ -330,11 +365,13 @@ async function collectCodexFile(file, o) {
       for await (const line of rl) {
         if ((++lineCnt & 511) === 0 && Date.now() > deadline) { aborted = true; break; }
         const isTok = line.includes('"token_count"');
-        if (!isTok && !line.includes('"turn_context"') && !line.includes('"thread_settings_applied"') && !line.includes('"originator"')) continue;
-        if (line.length > o.maxLineBytes) continue;
+        if (!isTok && !line.includes('"turn_context"') && !line.includes('"thread_settings_applied"') && !line.includes('"originator"') && !line.includes('"function_call"') && !line.includes('"custom_tool_call"')) continue;
+        if (line.length > o.maxLineBytes) { skippedLines++; continue; }
         let j; try { j = JSON.parse(line); } catch { parseErrors++; continue; }
         const p = j?.payload ?? {};
-        if (j?.type === 'session_meta') {
+        if (j?.type === 'response_item' && (p.type === 'function_call' || p.type === 'custom_tool_call')) {
+          recordTool(calls, p.call_id ?? p.id, [p.namespace, p.name].filter(Boolean).join('.'), j.timestamp);
+        } else if (j?.type === 'session_meta') {
           if (typeof p.originator === 'string') variant = variantFromOriginator(p.originator);
         } else if (j?.type === 'turn_context' && typeof p.model === 'string') curModel = p.model;
         else if (j?.type === 'event_msg' && p.type === 'thread_settings_applied' && typeof p.thread_settings?.model === 'string') curModel = p.thread_settings.model;
@@ -366,7 +403,7 @@ async function collectCodexFile(file, o) {
     byModel.set(model, u);
   }
   if (!byModel.size && (flat.input || flat.output)) bumpModel(byModel, '(unknown)', flat);
-  const result = { flat, days, models: byModel, modelDays, variant, stats: { tokenEvents: requests, parseErrors } };
+  const result = { flat, days, callDays: calls.days, models: byModel, modelDays, variant, stats: { tokenEvents: requests, parseErrors, skippedLines, undatedCalls: calls.undated } };
   codexFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
   return result;
 }
@@ -385,10 +422,12 @@ export async function scanCodexUsage(opts = {}) {
     if (acc.stats.files >= o.maxFiles) { acc.stats.partial = true; break; }
     const r = await collectCodexFile(f, o);
     if (r.aborted) { acc.stats.partial = true; break; }
-    if (r.skipped) continue;
+    if (r.skipped) { acc.stats.skippedFiles++; continue; }
     acc.stats.files++;
     if (r.cached) acc.stats.cachedFiles++;
     acc.stats.parseErrors += r.stats.parseErrors;
+    acc.stats.skippedLines += r.stats.skippedLines;
+    acc.stats.undatedCalls += r.stats.undatedCalls;
     try { acc.stats.readBytes += fs.statSync(f).size; } catch { /* 文件消失 */ }
     foldFile(acc, r, threadIdOf(f));
   }
@@ -407,9 +446,9 @@ async function collectKimiWire(file, o) {
   let st; try { st = fs.statSync(file); } catch { return { skipped: true }; }
   const hit = o.refresh ? null : cachedEntry(kimiFileCache, file, st);
   if (hit) return { ...hit.result, cached: true };
-  let variant = null, aborted = false, lineCnt = 0, parseErrors = 0;
+  let variant = null, aborted = false, lineCnt = 0, parseErrors = 0, skippedLines = 0;
   const byModel = new Map(), modelDays = new Map(), days = new Map();
-  const flat = newUsage();
+  const flat = newUsage(), calls = newCalls();
   const deadline = Date.now() + o.softBudgetMs;
   try {
     const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
@@ -418,11 +457,16 @@ async function collectKimiWire(file, o) {
         if ((++lineCnt & 511) === 0 && Date.now() > deadline) { aborted = true; break; }
         const isUsage = line.includes('"usage.record"');
         const isMeta = line.includes('"clientMetadata"');        // turn.prompt 的形态标记（与 parseKimiSession 同源）
-        if (!isUsage && !isMeta) continue;
-        if (line.length > o.maxLineBytes) continue;
+        const isTool = line.includes('"tool.call"');
+        if (!isUsage && !isMeta && !isTool) continue;
+        if (line.length > o.maxLineBytes) { skippedLines++; continue; }
         // 形态：clientMetadata 含 composer = 桌面版（原始行子串判定，免整行 JSON.parse）
-        if (isMeta) { variant = line.includes('composer') ? 'desktop' : 'cli'; if (!isUsage) continue; }
+        if (isMeta) { variant = line.includes('composer') ? 'desktop' : 'cli'; if (!isUsage && !isTool) continue; }
         let j; try { j = JSON.parse(line); } catch { parseErrors++; continue; }
+        if (j?.type === 'context.append_loop_event' && j.event?.type === 'tool.call') {
+          const ev = j.event;
+          recordTool(calls, ev.uuid ?? ev.toolCallId ?? ev.callId, ev.name ?? ev.toolName ?? ev.tool_name, j.time);
+        }
         if (j?.type !== 'usage.record' || !j.usage) continue;
         const d = {
           input: fin(j.usage.inputOther), output: fin(j.usage.output),
@@ -439,7 +483,7 @@ async function collectKimiWire(file, o) {
     } finally { try { rl.close(); } catch { /* 已关闭 */ } }
   } catch { return { skipped: true }; }
   if (aborted) return { aborted: true };
-  const result = { flat, days, models: byModel, modelDays, variant, stats: { parseErrors } };
+  const result = { flat, days, callDays: calls.days, models: byModel, modelDays, variant, stats: { parseErrors, skippedLines, undatedCalls: calls.undated } };
   kimiFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
   return result;
 }
@@ -470,21 +514,23 @@ export async function scanKimiUsage(opts = {}) {
   let wireCount = 0;
   for (const s of sessions) {
     let partialSession = false;
-    const tmp = { flat: newUsage(), days: new Map(), models: new Map(), modelDays: new Map(), variant: null, stats: { parseErrors: 0 } };
+    const tmp = { flat: newUsage(), days: new Map(), callDays: new Map(), models: new Map(), modelDays: new Map(), variant: null };
     for (const w of s.wires) {
       if (wireCount >= o.maxFiles) { acc.stats.partial = true; partialSession = true; break; }
       const r = await collectKimiWire(w, o);
       if (r.aborted) { acc.stats.partial = true; partialSession = true; break; }
-      if (r.skipped) continue;
+      if (r.skipped) { acc.stats.skippedFiles++; continue; }
       wireCount++; acc.stats.files++;
       if (r.cached) acc.stats.cachedFiles++;
       acc.stats.parseErrors += r.stats.parseErrors;
+      acc.stats.skippedLines += r.stats.skippedLines;
+      acc.stats.undatedCalls += r.stats.undatedCalls;
       try { acc.stats.readBytes += fs.statSync(w).size; } catch { /* 文件消失 */ }
       mergeInto(tmp, r);
       if (r.variant) tmp.variant = r.variant;          // 多 wire（子代理）时以 main 的判定为准可被覆盖，取后见
     }
     if (partialSession) break;                         // 半扫会话不落账（下轮重来）
-    if (!tmp.flat.requests) continue;
+    if (!tmp.flat.requests && !tmp.callDays.size) continue;
     foldFile(acc, tmp, s.sid);
   }
   acc.stats.sessions = acc.bySession.size;
@@ -528,6 +574,21 @@ export function scanZcodeUsage(opts = {}) {
         variant: null,
       }, r.sid);
     }
+    const tools = db.prepare(`
+      SELECT session_id AS sid, id,
+             json_extract(data,'$.callID') AS callId,
+             json_extract(data,'$.tool') AS toolName,
+             time_created AS tc
+      FROM part WHERE json_extract(data,'$.type')='tool'
+      ORDER BY time_created, id
+    `).all();
+    const calls = newCalls();
+    for (const r of tools) {
+      recordTool(calls, JSON.stringify([r.sid, r.callId ?? r.id]), r.toolName, r.tc);
+      if (!acc.bySession.has(r.sid)) acc.bySession.set(r.sid, newUsage());
+    }
+    addCallDays(acc.callsByDay, calls.days);
+    acc.stats.undatedCalls += calls.undated;
     acc.stats.sessions = acc.bySession.size;
   } catch (e) {
     return finishScan('zcode', acc, t0, { inputIncludesCache: true, degraded: true, error: 'sqlite:' + String(e.message || e).slice(0, 120) });
@@ -542,9 +603,9 @@ export function scanZcodeUsage(opts = {}) {
 /** scan 级累加器：bySession（全量扁平）/ byModel / byDay / byModelDay / byVariantDay（时间窗用）+ byVariantFlat（全量，形态=文件级权威值）。 */
 function newAcc() {
   return {
-    bySession: new Map(), byModel: new Map(), byDay: new Map(), byModelDay: new Map(), byVariantDay: new Map(), byVariantFlat: new Map(),
+    bySession: new Map(), byModel: new Map(), byDay: new Map(), callsByDay: new Map(), byModelDay: new Map(), byVariantDay: new Map(), byVariantFlat: new Map(),
     totals: newUsage(),
-    stats: { files: 0, cachedFiles: 0, sessions: 0, readBytes: 0, parseErrors: 0, partial: false, identityMismatched: 0 },
+    stats: { files: 0, cachedFiles: 0, sessions: 0, readBytes: 0, parseErrors: 0, skippedLines: 0, skippedFiles: 0, undatedCalls: 0, partial: false, identityMismatched: 0 },
   };
 }
 /** 把一个「文件结果」（统一形状 {flat, days, models, modelDays, variant}）折叠进 scan 累加器。 */
@@ -554,6 +615,7 @@ function foldFile(acc, r, sid) {
   acc.bySession.set(sid, row);
   addInto(acc.totals, r.flat);
   for (const [day, u] of r.days) bumpDay(acc.byDay, day, u);
+  addCallDays(acc.callsByDay, r.callDays);
   for (const [model, u] of r.models) bumpModel(acc.byModel, model, u);
   for (const [model, dm] of r.modelDays) {
     let tgt = acc.byModelDay.get(model);
@@ -572,6 +634,7 @@ function foldFile(acc, r, sid) {
 function mergeInto(tmp, r) {
   addInto(tmp.flat, r.flat);
   for (const [day, u] of r.days) bumpDay(tmp.days, day, u);
+  addCallDays(tmp.callDays, r.callDays);
   for (const [model, u] of r.models) bumpModel(tmp.models, model, u);
   for (const [model, dm] of r.modelDays) {
     let tgt = tmp.modelDays.get(model);
@@ -583,7 +646,7 @@ function finishScan(source, acc, t0, extra = {}) {
   const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
   return {
     source, generatedAt: Date.now(), elapsedMs: Number(tookMs.toFixed(2)),
-    bySession: acc.bySession, byModel: acc.byModel, byDay: acc.byDay, byModelDay: acc.byModelDay, byVariantDay: acc.byVariantDay, byVariantFlat: acc.byVariantFlat,
+    bySession: acc.bySession, byModel: acc.byModel, byDay: acc.byDay, callsByDay: acc.callsByDay, byModelDay: acc.byModelDay, byVariantDay: acc.byVariantDay, byVariantFlat: acc.byVariantFlat,
     totals: acc.totals, stats: acc.stats, ...extra,
   };
 }
@@ -695,10 +758,28 @@ export function serializeUsageScan(sc) {
     totals: { ...sc.totals }, inputIncludesCache: !!sc.inputIncludesCache, dayApproximate: !!sc.dayApproximate,
     byModel: [...sc.byModel.entries()].map(([model, u]) => ({ model, ...u })).sort(byTotalDesc),
     byVariant: [...variantTotalsOf(sc).entries()].map(([variant, u]) => ({ variant, totals: { ...u } })),
-    byDay,
+    byDay, callsByDay: Object.fromEntries(sc.callsByDay || []),
     bySessionCount: sc.bySession.size, bySession,
     stats: sc.stats, degraded: !!sc.degraded, error: sc.error ?? null,
   };
+}
+
+/** Calendar payload has no session identities or transcripts and stays out of SSE snapshots. */
+export function usageCalendar(scans) {
+  const sources = {};
+  for (const [key, source] of [['dsh', 'dsh'], ['cc', 'claude-code'], ['cx', 'codex'], ['km', 'kimi-code'], ['zc', 'zcode']]) {
+    const sc = scans[key], days = {};
+    for (const [day, u] of sc?.byDay || []) days[day] = { ...u, tokens: fin(u.input) + fin(u.output), toolCalls: 0, mcpCalls: 0 };
+    for (const [day, counts] of sc?.callsByDay || []) days[day] = { ...(days[day] ?? { ...newUsage(), tokens: 0 }), ...counts };
+    const stats = sc?.stats ?? {};
+    sources[source] = {
+      days, available: !!sc && !sc.degraded,
+      partial: !!(stats.partial || stats.parseErrors || stats.skippedLines || stats.skippedFiles || stats.undatedCalls),
+      dayApproximate: !!sc?.dayApproximate,
+      undatedCalls: stats.undatedCalls || 0,
+    };
+  }
+  return { sources, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
 
 /** 供 framed 一次性跑五源（并行；单源失败降级不拖垮整体）。 */

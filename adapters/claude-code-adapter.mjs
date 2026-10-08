@@ -104,6 +104,7 @@ const ts = (v) => {
 export function coarseStateFromLines(lines) {
   let state = 'idle', stateSource = 'no-signal';
   for (const o of lines) {
+    if (o?.isSidechain === true) continue;   // 子代理（sidechain）行不定宿主状态：委派期间宿主保持 running（最后的 main 信号 = 委派 tool_use）
     if (o?.type === 'user' && o.isSidechain === false) { state = 'thinking'; stateSource = 'user'; }
     else if (o?.type === 'assistant' && Array.isArray(o.message?.content)) {
       const hasTool = o.message.content.some((b) => b?.type === 'tool_use');
@@ -170,7 +171,18 @@ export function parseClaudeSession(file, opts = {}) {
     }
   }
   const now = Number.isFinite(o.now) ? o.now : Date.now();
-  const title = customTitle ?? aiTitle ?? agentNameTitle ?? null;
+  // 首条真实用户输入作为兜底标题（跳过 <system-reminder>/命令回显等注入；不再拿项目名冒充标题）
+  let firstUser = null;
+  for (const l of lines) {
+    if (l?.type !== 'user' || l.isSidechain === true) continue;
+    const c = l.message?.content;
+    const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text ?? '').join(' ') : '';
+    const raw = text.trim();
+    if (!raw || raw.startsWith('<') || raw.startsWith('Caveat:')) continue;
+    const t = raw.replace(/<[^>]{0,200}>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (t.length >= 4) { firstUser = t.slice(0, 42); break; }
+  }
+  const title = customTitle ?? aiTitle ?? agentNameTitle ?? firstUser ?? null;
   const updatedAt = Math.round(Math.max(st.mtimeMs, lastTs ?? 0));
   // 会话形态（命令行版 vs 桌面版）：entrypoint 实测 ∈ cli / sdk-cli / claude-desktop-3p / claude-vscode
   const variant = entrypoint == null ? null
@@ -179,8 +191,8 @@ export function parseClaudeSession(file, opts = {}) {
     : 'cli';                                   // cli / sdk-cli 及其他 CLI 形态
   return {
     ...base,
-    title: title ?? path.basename(cwd ?? decodeClaudeProjectDir(base.projectDirName) ?? sessionId),
-    titleRaw: title, metaSources,
+    title: title ?? null,
+    titleRaw: customTitle ?? aiTitle ?? agentNameTitle ?? null, metaSources,
     cwd: cwd ?? decodeClaudeProjectDir(base.projectDirName),
     cwdSource: cwd ? 'line:cwd' : 'dir-name(lossy)',
     createdAt, updatedAt, model,

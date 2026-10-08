@@ -17,6 +17,7 @@ export function createUiSandbox(html) {
     setAttribute(name, value) { this.attrs[name] = String(value); },
     getAttribute(name) { return this.attrs[name] ?? null; },
     closest(selector) { return selector.startsWith('[') && selector.slice(1, -1) in this.attrs ? this : null; },
+    querySelectorAll() { return []; },
     focus() { this.focused = true; }, scrollIntoView() {},
     showModal() { this.open = true; }, close() { this.open = false; },
   });

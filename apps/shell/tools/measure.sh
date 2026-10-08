@@ -23,7 +23,7 @@ ART="$SHELL_DIR/artifacts"
 mkdir -p "$ART"
 
 PORT="${PET_PORT:-7799}"
-APP="$SHELL_DIR/src-tauri/target/release/bundle/macos/AgentPet.app"
+APP="$SHELL_DIR/src-tauri/target/release/bundle/macos/CodeAll.app"
 BIN="$(ls "$APP/Contents/MacOS/"* 2>/dev/null | head -1)"
 LOG="$ART/run.log"
 WINDOW_JSON="$HOME/Library/Application Support/com.agentpet.shell/window.json"
@@ -31,9 +31,9 @@ WINDOW_JSON="$HOME/Library/Application Support/com.agentpet.shell/window.json"
 now_ms() { node -e 'process.stdout.write(String(Date.now()))'; }
 hr() { printf '\n\033[36m== %s ==\033[0m\n' "$*"; }
 wall() { if [ -n "${2:-}" ]; then echo "$(( $2 - $1 )) ms"; else echo "（未观测到）"; fi; }
-# AgentPet 名下可能同时挂着 layer=101 的弹出菜单/提示窗，取面积最大的那个当主窗口
+# CodeAll 名下可能同时挂着 layer=101 的弹出菜单/提示窗，取面积最大的那个当主窗口
 main_win_line() {
-  "$TOOLS/bin/wininfo" AgentPet | grep '^window=' \
+  "$TOOLS/bin/wininfo" CodeAll | grep '^window=' \
     | sed -n 's/.*bounds=(x:\([-0-9]*\) y:\([-0-9]*\) w:\([0-9]*\) h:\([0-9]*\)).*/\3 \4 &/p' \
     | sort -rn -k1,1 | head -1 | cut -d' ' -f3-
 }
@@ -42,7 +42,7 @@ main_win_bounds() { main_win_line | sed -n 's/.*bounds=(x:\([-0-9]*\) y:\([-0-9]
 
 if [ ! -x "$BIN" ]; then echo "找不到产物 ${BIN}，请先跑 apps/shell/run.sh --build" >&2; exit 2; fi
 
-kill_pet() { pkill -f 'AgentPet.app/Contents/MacOS/agent-pet-shell' 2>/dev/null; sleep 0.6; }
+kill_pet() { pkill -f 'CodeAll.app/Contents/MacOS/agent-pet-shell' 2>/dev/null; sleep 0.6; }
 wait_for() {
   local pat="$1" tmo="${2:-30}" i=0
   while [ "$i" -lt $((tmo * 20)) ]; do
@@ -139,14 +139,14 @@ for P in $APP_PID $WEBPIDS; do
 done
 
 hr "6. 窗口层级交叉核对（独立工具 CGWindowList，非应用自述）"
-"$TOOLS/bin/wininfo" AgentPet | sed 's/^/  /'
+"$TOOLS/bin/wininfo" CodeAll | sed 's/^/  /'
 echo "  —— 对照：同一时刻全屏窗口的 layer 分布（证明本窗口被抬到浮动层）——"
 "$TOOLS/bin/wininfo" "" | sed -n 's/.* owner=\(.*\) name=.* layer=\(-\{0,1\}[0-9]*\) .*/\2\t\1/p' | sort -n | uniq -c | head -12 | sed 's/^/    /'
 
 hr "7. 透明验证（窗口单独截图 → 角像素 alpha）"
 WINID=$(main_win_id)
-echo "  CGWindowID=${WINID}（主窗口，按面积取；AgentPet 名下全部窗口如下）"
-"$TOOLS/bin/wininfo" AgentPet | sed 's/^/    /'
+echo "  CGWindowID=${WINID}（主窗口，按面积取；CodeAll 名下全部窗口如下）"
+"$TOOLS/bin/wininfo" CodeAll | sed 's/^/    /'
 if [ -n "$WINID" ]; then
   screencapture -x -o -l "$WINID" "$ART/window.png"
   ls -l "$ART/window.png" | sed 's/^/  /'

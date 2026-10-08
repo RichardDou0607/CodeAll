@@ -155,11 +155,23 @@ export function parseCodexSession(file, opts = {}) {
   }
   const now = Number.isFinite(o.now) ? o.now : Date.now();
   const isSub = parent != null && parent !== '';
+  // 首条真实用户输入作为兜底标题（跳过 <app-context>/<environment_context> 等注入包装；不再拿项目名冒充标题）
+  let firstUser = null;
+  for (const l of lines) {
+    if (l.type !== 'response_item' || l.payload?.type !== 'message' || l.payload?.role !== 'user') continue;
+    const text = (Array.isArray(l.payload.content) ? l.payload.content : [])
+      .filter(b => b && (b.type === 'input_text' || b.type === 'text') && typeof b.text === 'string')
+      .map(b => b.text).join(' ');
+    const raw = text.trim();
+    if (!raw || raw.startsWith('<')) continue;   // 桌面端注入的上下文包装（role=user 但非用户所写）
+    const t = raw.replace(/<[^>]{0,200}>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (t.length >= 4) { firstUser = t.slice(0, 42); break; }
+  }
   // 会话形态：originator 本机实测 "Codex Desktop"（Codex++ 壳）；CLI 发起的会话为 codex/codex-cli 等
   const variant = originator == null ? null : /desktop/i.test(originator) ? 'desktop' : 'cli';
   return {
     ...base,
-    title: nickname ?? (cwd ? path.basename(cwd) : sessionId.slice(0, 8)),
+    title: nickname ?? firstUser ?? null,
     titleRaw: nickname, metaSources,
     cwd, cwdSource: cwd ? 'session_meta.cwd' : null,
     createdAt: createdAt ?? ts(meta?.timestamp) ?? null,
@@ -225,14 +237,16 @@ export function scanCodexCatalog(opts = {}) {
   projects.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   sessions.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  const mains = sessions.filter((s) => s.kind !== 'subagent');
   return {
     root: o.root, source: SOURCE, generatedAt: Date.now(), tookMs, elapsedMs: Number(tookMs.toFixed(2)),
-    projects, sessions, sessionCount: sessions.length, failed: degraded,
+    // sessionCount 仅主会话（与 claude/kimi/zcode 口径一致；子代理线程计入 stats.subagentSessions）
+    projects, sessions, sessionCount: mains.length, failed: degraded,
     stats: {
-      projects: projects.length, sessions: sessions.length,
-      mainSessions: sessions.filter((s) => s.kind === 'main').length,
+      projects: projects.length, sessions: mains.length,
+      mainSessions: mains.length,
       subagentSessions: sessions.filter((s) => s.kind === 'subagent').length,
-      live: sessions.filter((s) => s.live).length, degraded, readBytes,
+      live: mains.filter((s) => s.live).length, degraded, readBytes,
     },
   };
 }

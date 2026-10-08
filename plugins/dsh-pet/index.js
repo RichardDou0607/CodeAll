@@ -766,6 +766,21 @@ export class PetBridge {
     try {
       const header = session.header || {};
       const startedAt = typeof header.createdAt === 'number' ? header.createdAt : Date.now();
+      // 子代理 → 宿主关联：agents 服务带 parentSessionId/parentId（快照据此精确挂活跃度；缺失时 Hub 按项目兜底）
+      let parentSessionId = null;
+      try {
+        const agents = this.ctx.get('agents');
+        if (agents !== undefined && typeof agents.list === 'function') {
+          for (const item of agents.list()) {
+            const agent = unwrapAgent(item);
+            if (agent && agent.session && agent.session.id === session.id) {
+              const p = agent.parentSessionId ?? agent.parentId;
+              if (p !== undefined && p !== null && p !== '') parentSessionId = String(p);
+              break;
+            }
+          }
+        }
+      } catch { /* agents 服务不可用：不带 parent，Hub 按项目兜底 */ }
       // 会话创建 ≠ 开始思考（契约 §4.2 的 session.start → thinking 只用于「会话开始工作」）。
       // 新建会话通常是空闲的：这里发 v1.3 的 session.meta（元数据帧，不进状态机），
       // 让悬浮窗建立该会话的行但显示空闲，而不是永远「思考中」（2026-10-05 实测踩坑）。
@@ -775,6 +790,7 @@ export class PetBridge {
         title: header.title ?? null,
         // origin/delegationDepth：让 Hub 零延迟识别子代理（不必等目录扫描的 5s 缓存）
         origin: header.origin ?? null, delegationDepth: header.delegationDepth ?? null,
+        parentSessionId,
       }, startedAt);
       if (header.agentPreset) this.emitSessionMeta(session, { type: 'agent-preset/selected', data: { preset: header.agentPreset }, time: startedAt });
     } catch (error) {
