@@ -65,6 +65,80 @@ function firstLine(text, max) {
   return truncate(line, max).text;
 }
 
+/** 只返回当前模型选择的公开元数据，不读取或暴露任何凭证。 */
+function currentModelSelection(ctx) {
+  try {
+    const service = ctx.get('agentDefaultModel');
+    const selection = service !== undefined && isFn(service.currentSelection) ? service.currentSelection() : null;
+    if (!selection) return null;
+    const provider = String(selection.provider ?? selection.providerId ?? '').trim();
+    const model = String(selection.model ?? selection.modelId ?? '').trim();
+    const reasoningEffort = String(selection.reasoningEffort ?? selection.thoughtLevel ?? selection.options?.reasoningLevel ?? '').trim();
+    return provider && model && reasoningEffort ? { provider, model, reasoningEffort } : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 模型目录（用户定向 2026-10-09：新建会话要能选 DSH 的任一注册模型，而不是只有当前默认）。
+// DSH 的真源是 llm 服务的注册表（桌面 UI 的模型选择器走的是同一份投影）：
+//   ctx.llm.listProviders() → ctx.llm.listModels(providerId) → resolveModelInfo(provider, model)
+// 只透出 provider/model/名称/思考档位，绝不读凭证。30s 缓存 + 后台刷新（stale-while-revalidate），
+// /health 的探测窗口只有 1.2s，冷启动构建绝不阻塞在请求路径上。
+// ---------------------------------------------------------------------------
+const MODEL_CATALOG_MS = 30_000;
+let modelCatalogCache = { at: 0, data: null, inflight: null };
+
+async function buildModelCatalog(ctx) {
+  try {
+    const llm = ctx.get('llm');
+    if (llm === undefined || !isFn(llm.listProviders) || !isFn(llm.listModels)) return null;
+    const providers = await llm.listProviders();
+    const out = [];
+    for (const provider of Array.isArray(providers) ? providers : []) {
+      const providerId = String((provider && provider.id) || '').trim();
+      if (!providerId) continue;
+      let models = [];
+      try { models = await llm.listModels(providerId); } catch { continue; }   // 单个 provider 失败不阻断目录
+      for (const model of Array.isArray(models) ? models : []) {
+        const modelId = String((model && model.id) || '').trim();
+        if (!modelId) continue;
+        let reasoning = null;
+        if (isFn(llm.resolveModelInfo)) {
+          try {
+            const resolved = await llm.resolveModelInfo(providerId, modelId);
+            const info = resolved && resolved.reasoning;
+            const efforts = Array.isArray(info && info.efforts)
+              ? info.efforts.map((effort) => String((effort && effort.id) ?? effort ?? '').trim()).filter(Boolean)
+              : [];
+            if (efforts.length) {
+              const fallback = info.defaultEffort == null ? null : String((info.defaultEffort && info.defaultEffort.id) ?? info.defaultEffort);
+              reasoning = { efforts, defaultEffort: efforts.includes(fallback) ? fallback : null };
+            }
+          } catch { /* 单模型信息失败：该模型不带档位 */ }
+        }
+        out.push({ provider: providerId, model: modelId, name: (model && typeof model.name === 'string' && model.name) || null, reasoning });
+      }
+    }
+    return out.length ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 读当前目录（可能为 null）；过期时后台刷新，不阻塞调用方。 */
+function modelCatalogSnapshot(ctx) {
+  if (Date.now() - modelCatalogCache.at > MODEL_CATALOG_MS && modelCatalogCache.inflight === null) {
+    const inflight = buildModelCatalog(ctx).then(
+      (data) => { modelCatalogCache = { at: Date.now(), data, inflight: null }; },
+      () => { modelCatalogCache = { ...modelCatalogCache, inflight: null }; },
+    );
+    modelCatalogCache = { ...modelCatalogCache, inflight };
+  }
+  return modelCatalogCache.data;
+}
+
 /** 契约 v1.3 §3：session.activity 只允许粗粒度摘要，禁止步骤/参数/命令原文/文件内容。 */
 export function coarseActivity(type, data) {
   switch (type) {
@@ -364,14 +438,40 @@ export async function resolveWorkspace(ctx, cwd) {
   } catch { return null; }
 }
 
-/** 新建一个会话（工作目录 cwd）。cwd 对应的 workspace 不存在时会先创建，保证会话落在指定项目里。 */
+/**
+ * 新建一个会话（工作目录 cwd）。cwd 对应的 workspace 不存在时会先创建，保证会话落在指定项目里。
+ * 模型（用户定向 2026-10-09）：请求可携带 DSH 目录里的任意 provider/model[/reasoningEffort]，不再要求
+ * 与当前默认选择相等——有 sessionController 时 create 后立刻 selectModel（会话级选择，作用于下一条
+ * 消息；DSH 自身语义会同时把它存为新默认）；无 controller 的回退路径把选择放进 agents.create 的
+ * agentOptions。不传模型时维持原行为（用当前默认选择）。
+ */
 export async function createSession(ctx, request) {
   const cwd = typeof request.cwd === 'string' && request.cwd !== '' ? request.cwd : null;
+  const requested = (() => {
+    const provider = typeof request.provider === 'string' ? request.provider.trim() : '';
+    const model = typeof request.model === 'string' ? request.model.trim() : '';
+    const reasoningEffort = typeof request.reasoningEffort === 'string' ? request.reasoningEffort.trim() : '';
+    return provider && model ? { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) } : null;
+  })();
+  const current = currentModelSelection(ctx);
   const workspace = request.workspaceId
     ? { id: request.workspaceId }
     : (cwd ? await resolveWorkspace(ctx, cwd) : null);
   const controller = ctx.get('sessionController');
   if (controller !== undefined && isFn(controller.create)) {
+    // create 不接受模型参数（始终用默认选择建 agent）→ 建好后经 selectModel 安装所选模型。
+    // 失败时保留已创建的 sessionId（会话在，只是模型没装上；调用方不得当成功投递）。
+    const applyModel = async (sid) => {
+      if (!requested || !sid) return null;
+      if (!isFn(controller.selectModel)) return { ok: false, code: 'no-model-api', sessionId: sid, detail: '组合里的 sessionController 没有 selectModel：无法按所选模型创建' };
+      try {
+        await controller.selectModel({ sessionId: sid, ...requested });
+        return null;
+      } catch (error) {
+        return { ok: false, code: 'model-unavailable', sessionId: sid,
+          detail: '会话已创建（' + String(sid).slice(0, 12) + '…）但模型选择未生效：' + String((error && error.message) || error) };
+      }
+    };
     // workspaceId 优先：DSH 内部 create 的 workspaceId 分支会 attachSession（cwd 分支不会）。
     // 带 workspaceId 的调用被拒（如 RPC schema 不认）时退回纯 cwd —— 会话能建出来，只是没挂项目。
     let wsError = null;
@@ -381,7 +481,10 @@ export async function createSession(ctx, request) {
           workspaceId: workspace.id,
           ...(request.sessionId ? { sessionId: request.sessionId } : {}),
         });
-        return { ok: true, via: 'sessionController.create+workspace', sessionId: result && result.sessionId ? result.sessionId : null,
+        const sid0 = result && result.sessionId ? result.sessionId : null;
+        const modelFailure = await applyModel(sid0);
+        if (modelFailure) return { ...modelFailure, via: 'sessionController.selectModel' };
+        return { ok: true, via: 'sessionController.create+workspace', sessionId: sid0,
           workspaceId: workspace.id, detail: result };
       } catch (error) { wsError = String((error && error.message) || error); }
     }
@@ -403,6 +506,8 @@ export async function createSession(ctx, request) {
           }
         } catch (e) { attachError = String((e && e.message) || e); }
       }
+      const modelFailure = await applyModel(sid);
+      if (modelFailure) return { ...modelFailure, via: 'sessionController.selectModel' };
       return { ok: true, via: 'sessionController.create' + (attached ? '+workspace.attachSession' : ''),
         sessionId: sid, workspaceId: attached ? workspace.id : null, detail: result,
         ...(wsError ? { workspaceError: wsError } : {}), ...(attachError ? { attachError: attachError } : {}) };
@@ -416,12 +521,13 @@ export async function createSession(ctx, request) {
   }
   const sessionId = request.sessionId || 'session-' + randomUUID();
   const defaultModel = ctx.get('agentDefaultModel');
-  const selection = defaultModel !== undefined && isFn(defaultModel.currentSelection) ? defaultModel.currentSelection() : null;
+  const selection = requested || current || (defaultModel !== undefined && isFn(defaultModel.currentSelection) ? defaultModel.currentSelection() : null);
   try {
     const handle = await agents.create({
       sessionId: sessionId,
       ...(cwd ? { meta: { cwd: cwd } } : {}),
-      ...(selection ? { agentOptions: { provider: selection.provider, model: selection.model } } : {}),
+      ...(selection ? { agentOptions: { provider: selection.provider, model: selection.model,
+        ...(selection.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}) } } : {}),
     });
     const agent = unwrapAgent(handle);
     const created = (agent && agent.session && agent.session.id) || sessionId;
@@ -802,13 +908,18 @@ export class PetBridge {
     this.stats.requests += 1;
     const url = new URL(req.url || '/', 'http://localhost');
     const route = req.method + ' ' + url.pathname;
-    if (route === 'GET /health') return this.json(res, 200, {
-      ok: true, contract: CONTRACT, source: SOURCE, pid: process.pid, socket: this.socketPath,
-      startedAt: this.started, subscribers: this.subscribers.size, events: this.stats.events,
-      unknownEvents: this.stats.unknownEvents,
-      capabilities: { canDecide: false, canInput: true, canCatalog: true, canOpen: true, canCreate: true },
-      codeVersion: 'agents-first-2026-10-05T16:00',
-    });
+    if (route === 'GET /health') {
+      const catalog = modelCatalogSnapshot(this.ctx);
+      return this.json(res, 200, {
+        ok: true, contract: CONTRACT, source: SOURCE, pid: process.pid, socket: this.socketPath,
+        startedAt: this.started, subscribers: this.subscribers.size, events: this.stats.events,
+        unknownEvents: this.stats.unknownEvents,
+        capabilities: { canDecide: false, canInput: true, canCatalog: true, canOpen: true, canCreate: true },
+        modelSelection: currentModelSelection(this.ctx),
+        ...(catalog ? { modelCatalog: catalog } : {}),
+        codeVersion: 'model-catalog-2026-10-09',
+      });
+    }
     if (route === 'GET /events') return this.stream(res);
     if (req.method === 'POST') {
       let body;
@@ -1016,4 +1127,3 @@ export function apply(ctx, config) {
 }
 
 export default { name, inject, apply };
-

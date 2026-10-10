@@ -21,7 +21,7 @@ import { scanClaudeCatalog, mapClaudeLine } from '../adapters/claude-code-adapte
 import { scanCodexCatalog, mapCodexLine } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, mapKimiLine, scanKimiStatus, scanKimiLegacyCount } from '../adapters/kimi-code-adapter.mjs';
 import { scanZcodeCatalog, mapZcodeRow, openZcodeDb, coarseStateFromZcodeRows } from '../adapters/zcode-adapter.mjs';
-import { scanClaudeUsage, scanCodexUsage, scanKimiUsage, scanZcodeUsage, scanDshUsage, usageOverview } from '../adapters/usage-collect.mjs';
+import { scanClaudeUsage, scanCodexUsage, scanKimiUsage, scanZcodeUsage, scanDshUsage, usageOverview, usageCalendar } from '../adapters/usage-collect.mjs';
 import { SESSIONS_ROOT as DSH_ROOT, pickLogFile } from '../adapters/session-catalog.mjs';
 import zlib from 'node:zlib';
 import { SESSIONS_ROOT as CODEX_ROOT, threadIdOf } from '../adapters/codex-adapter.mjs';
@@ -254,30 +254,40 @@ let cx;
       { input: cc.totals.input, models: cc.byModel.size, requests: cc.totals.requests, biggestSid: String(biggest?.[0]).slice(0, 8), dedupRequests: biggest?.[1].requests, rawUsageLines: rawLines, dirFound: !!sidDir });
   }
 
-  // MU2 Codex：独立反读最新 rollout 的最后一条 token_count.total_token_usage（权威累计值），
-  //            与扫描器 bySession 比对（不同代码路径读同一字段，验证解析与 threadId 映射）
+  // MU2 Codex：独立反读最新 rollout 的 token_count 全序列，按文件自有量重算——
+  //           自有量 = 首条 last_token_usage + (末条 total − 首条 total)。首条 total 可能是继承的父会话/
+  //           fork 前缀（2026-10-09 修：旧口径直接取末条 total，本机把 9,282 万 token 父前缀重复计入），
+  //           与扫描器 bySession 比对（不同代码路径，验证解析与 threadId 映射）；per-model 归属总量 ≈ 总量。
   {
     const rollouts = [];
     (function walk(d) { let ents; try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of ents) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (e.name.startsWith('rollout-') && e.name.endsWith('.jsonl')) rollouts.push(p); } })(CODEX_ROOT);
     rollouts.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
     const f = rollouts[0];
-    let expect = null;
+    let expect = null, lastTotal = null, firstTotal = null, firstLast = null;
     try {
-      const lines = fs.readFileSync(f, 'utf8').split('\n');
-      for (let i = lines.length - 1; i >= 0; i--) {
-        if (!lines[i].includes('"token_count"')) continue;
-        const j = JSON.parse(lines[i]);
-        if (j?.payload?.type === 'token_count') { expect = j.payload.info?.total_token_usage ?? null; break; }
+      const evs = [];
+      for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
+        if (!line.includes('"token_count"')) continue;
+        let j; try { j = JSON.parse(line); } catch { continue; }
+        if (j?.payload?.type === 'token_count' && Number.isFinite(j.payload.info?.total_token_usage?.input_tokens)) evs.push(j.payload.info);
+      }
+      if (evs.length) {
+        firstTotal = evs[0].total_token_usage.input_tokens;
+        firstLast = evs[0].last_token_usage?.input_tokens ?? 0;
+        lastTotal = evs[evs.length - 1].total_token_usage.input_tokens;
+        expect = firstLast + Math.max(0, lastTotal - firstTotal);
       }
     } catch { /* 读取失败 */ }
     const got = cx.bySession.get(threadIdOf(f));
     const byModelSum = [...cx.byModel.values()].reduce((a, u) => a + u.input, 0);
-    check('MU2', 'Codex 用量：会话扁平值 = 最后一条 total_token_usage（独立反读对账）；per-model 归属总量 ≈ 总量',
-      !!expect && !!got && got.input === expect.input_tokens && Math.abs(byModelSum - cx.totals.input) <= cx.totals.input * 0.02 + 1,
-      { file: path.basename(f).slice(0, 30), expect: expect?.input_tokens, got: got?.input, byModelSum, totals: cx.totals.input });
+    check('MU2', 'Codex 用量：文件自有量 = 首条自身 last + Δ累计（独立反读；继承前缀不计）+ per-model 归属总量 ≈ 总量',
+      expect !== null && !!got && got.input === expect && Math.abs(byModelSum - cx.totals.input) <= cx.totals.input * 0.02 + 1,
+      { file: path.basename(f).slice(0, 30), firstTotal, firstLast, lastTotal, inheritedPrefix: firstTotal === null ? null : Math.max(0, firstTotal - firstLast), expect, got: got?.input, byModelSum, totals: cx.totals.input });
   }
 
-  // MU3 Kimi：最新 wire 的 usage.record 原始行数 = 扫描器该会话 requests（每请求一条，直接累加）
+  // MU3 Kimi：会话全部 wire（main + agents/<id>/ 子代理流）的 usage.record 原始行数之和 = 扫描器该会话
+  //          requests（每请求一条，直接累加）。2026-10-09 修：此前只数「最新一条 wire」——子代理 wire 比 main
+  //          新时必然对不上（本机实测 main 6 行 + agent-0 12 行 = 18，而旧断言拿 6 比 18）。
   {
     let wire = null, mtime = 0;
     for (const wd of fs.readdirSync(KIMI_ROOT, { withFileTypes: true })) {
@@ -294,15 +304,20 @@ let cx;
         }
       }
     }
-    let sid = null, rawCount = null;
+    let sid = null, rawCount = null, wires = 0;
     if (wire) {
       try { sid = JSON.parse(fs.readFileSync(path.join(wire.sessionDir, 'state.json'), 'utf8')).id ?? null; } catch { /* 无 state */ }
-      rawCount = fs.readFileSync(wire.file, 'utf8').split('\n').filter((l) => l.includes('"usage.record"')).length;
+      rawCount = 0;
+      let ags = []; try { ags = fs.readdirSync(path.join(wire.sessionDir, 'agents'), { withFileTypes: true }); } catch { /* 无 agents */ }
+      for (const a of ags) {
+        const w = path.join(wire.sessionDir, 'agents', a.name, 'wire.jsonl');
+        try { rawCount += fs.readFileSync(w, 'utf8').split('\n').filter((l) => l.includes('"usage.record"')).length; wires++; } catch { /* 无 wire */ }
+      }
     }
     const got = sid ? km.bySession.get(sid) : null;
-    check('MU3', 'Kimi 用量：requests = usage.record 原始行数（独立计数对账）',
+    check('MU3', 'Kimi 用量：requests = 会话全部 wire 的 usage.record 原始行数之和（独立计数对账）',
       !!got && rawCount !== null && got.requests === rawCount && km.totals.requests > 0,
-      { sid: String(sid).slice(0, 12), got: got?.requests, rawCount });
+      { sid: String(sid).slice(0, 12), got: got?.requests, rawCount, wires });
   }
 
   // MU4 ZCode：message.tokens 路径（扫描器 SQL）vs part.step-finish 路径（独立 SQL）——双存储路径互证
@@ -375,21 +390,40 @@ let cx;
       { cc: keys(cc), cx: keys(cx), km: keys(km) });
   }
 
-  // MU9 时间维度（自然日桶）：五源 Σ日桶.requests = 总量；非 Codex 源 input 精确相等、Codex 事件增量近似 ≥70%；
-  // ranges 单调：today ≤ d7 ≤ d30 ≤ 全部（requests 口径）
+  // MU9 时间维度（自然日桶）：**五源 Σ日桶 逐字段 = 总量**（2026-10-09 起 Codex 改为累计值差分归日，
+  // 不再有「Codex 事件增量近似」这个例外——这正是当日「图表 459.4M vs 日历 397.2M」的根因）；
+  // 每源 dayIdentityMismatched = 0（foldFile 内置恒等式自检）；ranges 单调：today ≤ d7 ≤ d30 ≤ 全部
   {
-    const dayReq = (sc) => [...(sc.byDay ?? new Map()).values()].reduce((a, u) => a + u.requests, 0);
-    const dayIn = (sc) => [...(sc.byDay ?? new Map()).values()].reduce((a, u) => a + u.input, 0);
-    const exactReq = [dsh, cc, cx, km, zc].every((sc) => dayReq(sc) === sc.totals.requests);
-    const exactIn = [dsh, cc, km, zc].every((sc) => dayIn(sc) === sc.totals.input);
-    const cxRatio = cx.totals.input > 0 ? dayIn(cx) / cx.totals.input : 0;
+    const FIELDS = ['input', 'output', 'cacheRead', 'cacheWrite', 'requests'];
+    const daySum = (sc, k) => [...(sc.byDay ?? new Map()).values()].reduce((a, u) => a + (u[k] || 0), 0);
+    const SRC5 = [dsh, cc, cx, km, zc];
+    const exact = SRC5.every((sc) => FIELDS.every((k) => daySum(sc, k) === (sc.totals[k] || 0)));
+    const identityOk = SRC5.every((sc) => (sc.stats?.dayIdentityMismatched ?? 0) === 0);
     const ov = usageOverview({ dsh, cc, cx, km, zc });
     const r = (k) => ov.ranges[k].totals.requests;
     const mono = r('today') <= r('d7') && r('d7') <= r('d30') && r('d30') <= ov.totals.requests;
     const todayNonZero = r('today') > 0;      // 扫描当日有真实使用
-    check('MU9', '时间维度：Σ日桶=总量（requests 全源精确 / input 非Codex精确·Codex≥70%）；today≤d7≤d30≤全部',
-      exactReq && exactIn && cxRatio >= 0.7 && mono && todayNonZero,
-      { dayReq: { dsh: dayReq(dsh), cc: dayReq(cc), cx: dayReq(cx), km: dayReq(km), zc: dayReq(zc) }, cxRatio: Number(cxRatio.toFixed(3)), ranges: { today: r('today'), d7: r('d7'), d30: r('d30'), all: ov.totals.requests } });
+    check('MU9', '时间维度：五源 Σ日桶 逐字段 = 总量（含 Codex）+ 恒等式自检零失配；today≤d7≤d30≤全部',
+      exact && identityOk && mono && todayNonZero,
+      { codexInput: { daySum: daySum(cx, 'input'), totals: cx.totals.input }, codexInheritedPrefixExcluded: cx.stats?.inheritedPrefix ?? null, codexDuplicateReports: cx.stats?.duplicateReports ?? null,
+        dayIdentity: { dsh: dsh.stats?.dayIdentityMismatched, cc: cc.stats?.dayIdentityMismatched, cx: cx.stats?.dayIdentityMismatched, km: km.stats?.dayIdentityMismatched, zc: zc.stats?.dayIdentityMismatched },
+        ranges: { today: r('today'), d7: r('d7'), d30: r('d30'), all: ov.totals.requests } });
+  }
+
+  // MU10 展示口径（2026-10-09 统一）：日历日桶 tokens（全量，含缓存读）按天求和 = 图表「全部」totalTokens；
+  //      与各 Agent 自带计数对齐（DSH 的 prompt 含 cacheRead，Codex/ZCode 的 input 本身已含）
+  {
+    const cal = usageCalendar({ dsh, cc, cx, km, zc });
+    const ov = usageOverview({ dsh, cc, cx, km, zc });
+    const SRC5 = [['dsh', 'dsh'], ['cc', 'claude-code'], ['cx', 'codex'], ['km', 'kimi-code'], ['zc', 'zcode']];
+    const bad = SRC5.filter(([key, src]) => {
+      const sum = Object.values(cal.sources[src].days).reduce((a, d) => a + (d.tokens || 0), 0);
+      return sum !== ov.bySource[src]?.totals?.totalTokens;
+    }).map(([, src]) => src);
+    check('MU10', '展示口径：五源 Σ日历日桶 tokens（含缓存读）= 「全部」totalTokens；prompt 语义按源折算',
+      bad.length === 0 && ov.bySource.dsh.totals.promptTokens === ov.bySource.dsh.totals.input + ov.bySource.dsh.totals.cacheRead
+        && ov.bySource.codex.totals.promptTokens === ov.bySource.codex.totals.input,
+      { mismatched: bad, dsh: { prompt: ov.bySource.dsh.totals.promptTokens, total: ov.bySource.dsh.totals.totalTokens }, codex: { prompt: ov.bySource.codex.totals.promptTokens, total: ov.bySource.codex.totals.totalTokens } });
   }
 
   // MU5/MU6 在 M-C 实例上验（见下）：framed 快照 usage 块 + /api/usage 明细端点

@@ -1,5 +1,7 @@
 # QA · MVP 测试计划（工作框 + 契约 v1.2）
 
+> **2026-10-09 当前发布门槛改为 [docs/23-v0.1.0-scope.md](../docs/23-v0.1.0-scope.md) V01-V06：CLI + DS Harness 对话闭环。本文原 70 条保留为扩展回归参考，不再全部阻塞 v0.1.0；契约、安全及必保链路相关项仍执行。**
+
 > 负责人：队友 B（product-experience）｜任务：task-9｜状态：**DRAFT v0.1**（2026-10-05）
 > 输入基线：契约 [`docs/00-interface-contract.md`](../docs/00-interface-contract.md)（FROZEN **v1.2**）、架构 [`docs/10-architecture.md`](../docs/10-architecture.md)（DRAFT v0.9）、实现栈 [`docs/30`](../docs/30-implementation-stack.md)（占位）、适配矩阵 [`docs/40`](../docs/40-adapters.md)（DRAFT v1）、产品规格 [`docs/50-product-spec.md`](../docs/50-product-spec.md) §11（47 条）、工作框规格 [`docs/51-work-frame-spec.md`](../docs/51-work-frame-spec.md) §7（27 条）、团队角色 [`docs/70`](../docs/70-team-and-metrics.md)、独立验收 [`docs/99`](../docs/99-verification-report.md)。
 > 目标：把 **27 + 47 = 74 条验收**合并去重成 **70 条可执行用例**，标注「现在就能自动验证 / 实现后可自动 / 必须手工」，并给出 CI 门禁。

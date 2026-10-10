@@ -35,32 +35,49 @@ return {
   lastEvent: { type: 'tool.call', ts: now, sessionId: 'session-1' },
   usage: {
     generatedAt: now - 5000,
-    totals: { input: 123456789, output: 2345678, cacheRead: 987654321, cacheWrite: 12345, requests: 4321, freshInput: 136802468, hitRate: 0.9 },
+    totals: { input: 123456789, output: 2345678, cacheRead: 987654321, cacheWrite: 12345, requests: 4321, freshInput: 136802468, promptTokens: 1111111110, totalTokens: 1113689133, hitRate: 0.9 },
     byModel: [
-      { model: 'GLM-5.3', sources: ['zcode', 'claude-code'], input: 800000000, output: 1500000, cacheRead: 700000000, cacheWrite: 0, requests: 2000, hitRate: 0.47 },
-      { model: 'gpt-6-sol', sources: ['codex'], input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, hitRate: 0.23 },
+      { model: 'GLM-5.3', sources: ['zcode', 'claude-code'], input: 800000000, output: 1500000, cacheRead: 700000000, cacheWrite: 0, requests: 2000, promptTokens: 810000000, totalTokens: 811500000, hitRate: 0.47 },
+      { model: 'gpt-6-sol', sources: ['codex'], input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, promptTokens: 40000000, totalTokens: 40500000, hitRate: 0.23 },
     ],
     bySource: {
-      dsh: { totals: { input: 1700000, output: 2000000, cacheRead: 270000000, cacheWrite: 0, requests: 1341, hitRate: 0.994 }, inputIncludesCache: false, partial: false, elapsedMs: 300, variants: [], models: [{ model: 'deepseek-flash', input: 1700000, output: 2000000, cacheRead: 270000000, cacheWrite: 0, requests: 1341, hitRate: 0.994 }] },
-      'claude-code': { totals: { input: 30000000, output: 1000000, cacheRead: 8000000, cacheWrite: 0, requests: 500, hitRate: 0.21 }, inputIncludesCache: false, partial: false, elapsedMs: 2100, variants: [{ variant: 'desktop', totals: { input: 29000000, output: 950000, cacheRead: 7500000, cacheWrite: 0, requests: 420, hitRate: 0.21 } }, { variant: 'cli', totals: { input: 1000000, output: 50000, cacheRead: 500000, cacheWrite: 0, requests: 80, hitRate: 0.33 } }], models: [{ model: 'glm-5.3', input: 30000000, output: 1000000, cacheRead: 8000000, cacheWrite: 0, requests: 500, hitRate: 0.21 }] },
-      codex: { totals: { input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, hitRate: 0.23 }, inputIncludesCache: true, partial: false, elapsedMs: 430, variants: [{ variant: 'desktop', totals: { input: 39000000, output: 490000, cacheRead: 11900000, cacheWrite: 0, requests: 296, hitRate: 0.23 } }], models: [{ model: 'gpt-6-sol', input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, hitRate: 0.23 }] },
-      'kimi-code': { totals: { input: 2600000, output: 609000, cacheRead: 0, cacheWrite: 0, requests: 181, hitRate: 0 }, inputIncludesCache: false, partial: false, elapsedMs: 300, variants: [{ variant: 'desktop', totals: { input: 2400000, output: 577000, cacheRead: 0, cacheWrite: 0, requests: 170, hitRate: 0 } }], models: [{ model: 'k3', input: 1600000, output: 161000, cacheRead: 0, cacheWrite: 0, requests: 181, hitRate: 0 }] },
-      zcode: { totals: { input: 1670000000, output: 5000000, cacheRead: 990000000, cacheWrite: 0, requests: 6300, hitRate: 0.6 }, inputIncludesCache: true, partial: false, elapsedMs: 24, variants: [], models: [{ model: 'GLM-5.3', input: 807000000, output: 1900000, cacheRead: 700000000, cacheWrite: 0, requests: 2810, hitRate: 0.65 }] },
+      dsh: { totals: { input: 1700000, output: 2000000, cacheRead: 270000000, cacheWrite: 0, requests: 1341, promptTokens: 271700000, totalTokens: 273700000, hitRate: 0.994 }, inputIncludesCache: false, partial: false, elapsedMs: 300, variants: [], models: [{ model: 'deepseek-flash', input: 1700000, output: 2000000, cacheRead: 270000000, cacheWrite: 0, requests: 1341, hitRate: 0.994 }] },
+      'claude-code': { totals: { input: 30000000, output: 1000000, cacheRead: 8000000, cacheWrite: 0, requests: 500, promptTokens: 38000000, totalTokens: 39000000, hitRate: 0.21 }, inputIncludesCache: false, partial: false, elapsedMs: 2100, variants: [{ variant: 'desktop', totals: { input: 29000000, output: 950000, cacheRead: 7500000, cacheWrite: 0, requests: 420, hitRate: 0.21 } }, { variant: 'cli', totals: { input: 1000000, output: 50000, cacheRead: 500000, cacheWrite: 0, requests: 80, hitRate: 0.33 } }], models: [{ model: 'glm-5.3', input: 30000000, output: 1000000, cacheRead: 8000000, cacheWrite: 0, requests: 500, hitRate: 0.21 }] },
+      codex: { totals: { input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, promptTokens: 40000000, totalTokens: 40500000, hitRate: 0.23 }, inputIncludesCache: true, partial: false, elapsedMs: 430, variants: [{ variant: 'desktop', totals: { input: 39000000, output: 490000, cacheRead: 11900000, cacheWrite: 0, requests: 296, hitRate: 0.23 } }], models: [{ model: 'gpt-6-sol', input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, hitRate: 0.23 }] },
+      'kimi-code': { totals: { input: 2600000, output: 609000, cacheRead: 0, cacheWrite: 0, requests: 181, promptTokens: 2600000, totalTokens: 3209000, hitRate: 0 }, inputIncludesCache: false, partial: false, elapsedMs: 300, variants: [{ variant: 'desktop', totals: { input: 2400000, output: 577000, cacheRead: 0, cacheWrite: 0, requests: 170, hitRate: 0 } }], models: [{ model: 'k3', input: 1600000, output: 161000, cacheRead: 0, cacheWrite: 0, requests: 181, hitRate: 0 }] },
+      zcode: { totals: { input: 1670000000, output: 5000000, cacheRead: 990000000, cacheWrite: 0, requests: 6300, promptTokens: 1670000000, totalTokens: 1675000000, hitRate: 0.6 }, inputIncludesCache: true, partial: false, elapsedMs: 24, variants: [], models: [{ model: 'GLM-5.3', input: 807000000, output: 1900000, cacheRead: 700000000, cacheWrite: 0, requests: 2810, hitRate: 0.65 }] },
     },
     ranges: {
       today: {
-        totals: { input: 5000000, output: 300000, cacheRead: 4000000, cacheWrite: 0, requests: 210, hitRate: 0.44 },
+        totals: { input: 5000000, output: 300000, cacheRead: 4000000, cacheWrite: 0, requests: 210, promptTokens: 9000000, totalTokens: 9300000, hitRate: 0.44 },
         bySource: {
           dsh: { totals: { input: 100000, output: 20000, cacheRead: 900000, cacheWrite: 0, requests: 30, hitRate: 0.9 }, variants: [], models: [] },
           'claude-code': { totals: { input: 2000000, output: 100000, cacheRead: 1500000, cacheWrite: 0, requests: 90, hitRate: 0.43 }, variants: [{ variant: 'cli', totals: { input: 2000000, output: 100000, cacheRead: 1500000, cacheWrite: 0, requests: 90, hitRate: 0.43 } }], models: [{ model: 'glm-5.3', input: 2000000, output: 100000, cacheRead: 1500000, cacheWrite: 0, requests: 90, hitRate: 0.43 }] },
         },
         byModel: [{ model: 'glm-5.3', sources: ['claude-code'], input: 2000000, output: 100000, cacheRead: 1500000, cacheWrite: 0, requests: 90, hitRate: 0.43 }],
       },
-      d7: { totals: { input: 10000000, output: 600000, cacheRead: 8000000, cacheWrite: 0, requests: 420, hitRate: 0.44 }, bySource: {}, byModel: [] },
-      d30: { totals: { input: 50000000, output: 2000000, cacheRead: 40000000, cacheWrite: 0, requests: 1200, hitRate: 0.44 }, bySource: {}, byModel: [] },
+      d7: { totals: { input: 10000000, output: 600000, cacheRead: 8000000, cacheWrite: 0, requests: 420, promptTokens: 18000000, totalTokens: 18600000, hitRate: 0.44 }, bySource: {}, byModel: [] },
+      d30: { totals: { input: 50000000, output: 2000000, cacheRead: 40000000, cacheWrite: 0, requests: 1200, promptTokens: 90000000, totalTokens: 92000000, hitRate: 0.44 }, bySource: {}, byModel: [] },
     },
   },
   build: { window: 1730000000000, mini: 1730000000000 },
+  modelRegistry: {
+    dsh: { available: true, models: [{ value: 'deepseek/deepseek-flash', label: 'deepseek · deepseek-flash', providerId: 'deepseek', modelId: 'deepseek-flash', cliModel: 'deepseek/deepseek-flash', reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'max', canCreate: true }] },
+    // hidden 项模拟「切换器换了整张上游模型表」：不可调用，不进新建下拉
+    'claude-code': { available: true, models: [
+      { value: 'gpt-6-astra', label: 'GPT-6-Astra', modelId: 'gpt-6-astra', cliModel: 'gpt-6-astra', reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultReasoningEffort: 'medium', canCreate: true },
+      { value: 'claude-opus-4-8', label: 'Opus 4.8', modelId: 'claude-opus-4-8', cliModel: 'claude-opus-4-8', reasoningEfforts: ['high'], defaultReasoningEffort: 'high', canCreate: false, hidden: true, unavailableReason: '该模型没有映射到当前供应商的上游模型（切换器只配置了实际使用的模型）' },
+    ] },
+    codex: { available: true, models: [
+      { value: 'gpt-6-astra', label: 'GPT-6-Astra', modelId: 'gpt-6-astra', cliModel: 'gpt-6-astra', reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], defaultReasoningEffort: 'medium', canCreate: true },
+      { value: 'codex-narrow', label: 'Codex Narrow', modelId: 'codex-narrow', cliModel: 'codex-narrow', reasoningEfforts: ['high'], canCreate: true },
+    ] },
+    'kimi-code': { available: true, models: [{ value: 'kimi-code/k3', label: 'K3', providerId: 'kimi-code', modelId: 'k3', cliModel: 'kimi-code/k3', reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high', canCreate: true }] },
+    zcode: { available: true, models: [
+      { value: 'deepseek/deepseek-flash', label: 'deepseek · deepseek-flash', providerId: 'deepseek', modelId: 'deepseek-flash', cliModel: 'deepseek/deepseek-flash', reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'max', canCreate: true },
+      { value: 'account:plan/glm', label: 'Account GLM', providerId: 'account:plan', modelId: 'glm', reasoningEfforts: ['high'], canCreate: false },
+    ] },
+  },
   capabilities: { canCatalog: true, canOpen: true, canCreate: true, canInput: true, cliChannels: [{ source: 'claude-code' }, { source: 'codex' }, { source: 'kimi-code' }, { source: 'zcode' }], plugin: { available: false } },
   catalog: {
     elapsedMs: 55,

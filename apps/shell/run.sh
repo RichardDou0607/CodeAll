@@ -47,18 +47,8 @@ done
 
 [ -n "$PORT" ] && export AGENT_PET_PORT="$PORT"
 
-# ---- 输入投递通道（B 之后补上的一跳：悬浮窗 → DSH 会话）----------------------
-# plugins/dsh-pet 挂载后会在 $TMPDIR/agent-pet/dsh-plugin.sock 上提供 POST /input。
-# 这里探测到 socket 就自动把 demo/framed.mjs 的 PET_INPUT_CMD 指到投递脚本，
-# 输入状态才会从 queued 变成 delivered。
-TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"
-PLUGIN_SOCK="${PET_DSH_SOCK:-$TMPBASE/agent-pet/dsh-plugin.sock}"
-if [ -z "${PET_INPUT_CMD:-}" ] && [ -S "$PLUGIN_SOCK" ]; then
-  export PET_INPUT_CMD="node $SELF_DIR/tools/pet-input-send.mjs"
-  say "检测到 DSH 插件 socket → 已启用自动投递：PET_INPUT_CMD=$PET_INPUT_CMD"
-elif [ -z "${PET_INPUT_CMD:-}" ]; then
-  say "未检测到 DSH 插件 socket（$PLUGIN_SOCK）→ 输入仍只进本地队列；挂载见 apps/shell/tools/mount-dsh-plugin.sh"
-fi
+# 服务自行探测 DSH 插件并向指定会话投递；插件离线时只入队。
+# 不再注入 PET_INPUT_CMD：它无法携带目标 session ID。
 
 if [ "$RESTART_SERVER" = 1 ]; then
   if pkill -f "demo/framed.mjs --port ${AGENT_PET_PORT:-7799}" 2>/dev/null; then

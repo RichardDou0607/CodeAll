@@ -8,7 +8,8 @@
  * 断言组：
  *   UC-A Claude：message.id 去重（后写覆盖）· sidechain 计入 · 无 id 行计数 · 子代理文件归父会话
  *               · 超大行跳过 · entrypoint→desktop · 增量缓存复用/追加失效 · 自然日分桶
- *   UC-B Codex：权威累计值（最后一条 total）· 单模型整额归属 · originator→desktop · 日桶=事件增量
+ *   UC-B Codex：累计值差分归日（首条只认自身 last，防 fork/子代理继承前缀双计；其后 Δ累计，
+ *               重复上报的 0 增量事件不计 token）· Σ日桶≡总量 · 单模型整额归属 · originator→desktop
  *   UC-C Kimi ：每请求累加 · agents/<id>/ 子代理流并入 · model 别名 split('/').pop · composer→desktop · state.json sid
  *   UC-D DSH  ：多帧 zstd 解压 · v3+v4 并存只取最高代 · 恒等式(∑分量=∑totalTokens) · session 首行 id
  *   UC-E 汇总 ：命中率折算（input 含/不含 cache 两种语义）· ranges 当日/7日/30日/全部归属 · 序列化结构
@@ -72,8 +73,34 @@ fs.writeFileSync(cxFile, [
   cxTok(noon(0), { input_tokens: 1000, cached_input_tokens: 400, cache_write_input_tokens: 0, output_tokens: 10 }, { input_tokens: 1000, cached_input_tokens: 400, cache_write_input_tokens: 0, output_tokens: 10 }),
   cxTok(noon(3), { input_tokens: 2000, cached_input_tokens: 900, cache_write_input_tokens: 0, output_tokens: 25 }, { input_tokens: 1000, cached_input_tokens: 500, cache_write_input_tokens: 0, output_tokens: 15 }),
 ].join('\n') + '\n');
-// 期望：flat = 最后一条 total（in 2000 / out 25 / cacheRead 900 · requests 2，事件数）；单模型整额归属 gpt-test
+// 期望：flat = 首条自身 last（1000/400/10）+ 其后 Δ累计（1000/500/15）= in 2000 / out 25 / cacheRead 900
+// （本 fixture 首条 total == last，故与「取最后一条 total」同值）；单模型整额归属 gpt-test；requests = 事件数 2
 const CX_EXP = { input: 2000, output: 25, cacheRead: 900, cacheWrite: 0, requests: 2 };
+
+// ---- UC-B 反例 fixture（2026-10-09 用户报障「图表 459.4M vs 日历 397.2M」的两个陷阱）----
+// 陷阱① 子代理/fork rollout 的首条 total 继承父会话累计 → 逐文件求和会重复计入父前缀；
+// 陷阱② 同一累计值连着多条事件（重复上报）→ Σlast_token_usage 虚高。
+const CX2_ROOT = path.join(TMP, 'codex-fork', 'sessions');
+const CX2_DIR = path.join(CX2_ROOT, '2026', '10', '09');
+fs.mkdirSync(CX2_DIR, { recursive: true });
+const CX2_PARENT = '11111111-1111-4111-8111-111111111111';
+const CX2_CHILD = '22222222-2222-4222-8222-222222222222';
+const cx2Tok = (tsMs, total, last) => JSON.stringify({ timestamp: iso(tsMs), type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: total, last_token_usage: last } } });
+const cx2Meta = (sid, forkedFrom) => JSON.stringify({ timestamp: iso(noon(0)), type: 'session_meta', payload: { session_id: sid, cwd: '/tmp/cx2', originator: 'Codex Desktop', ...(forkedFrom ? { forked_from_id: forkedFrom } : {}) } });
+fs.writeFileSync(path.join(CX2_DIR, 'rollout-2026-10-09T00-00-00-' + CX2_PARENT + '.jsonl'), [
+  cx2Meta(CX2_PARENT, null),
+  cx2Tok(noon(0), { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 10 }, { input_tokens: 1000, cached_input_tokens: 400, output_tokens: 10 }),
+  cx2Tok(noon(0) + 60_000, { input_tokens: 2000, cached_input_tokens: 900, output_tokens: 25 }, { input_tokens: 1000, cached_input_tokens: 500, output_tokens: 15 }),
+].join('\n') + '\n');
+fs.writeFileSync(path.join(CX2_DIR, 'rollout-2026-10-09T00-01-00-' + CX2_CHILD + '.jsonl'), [
+  cx2Meta(CX2_CHILD, CX2_PARENT),
+  cx2Tok(noon(0) + 90_000, { input_tokens: 2000, cached_input_tokens: 900, output_tokens: 25 }, { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 }),
+  cx2Tok(noon(0) + 120_000, { input_tokens: 2000, cached_input_tokens: 900, output_tokens: 25 }, { input_tokens: 500, cached_input_tokens: 400, output_tokens: 5 }),
+  cx2Tok(noon(1), { input_tokens: 2600, cached_input_tokens: 1100, output_tokens: 40 }, { input_tokens: 600, cached_input_tokens: 200, output_tokens: 15 }),
+].join('\n') + '\n');
+// 期望：父自有 2000 + 子自有 600 = 2600（继承前缀 2000 只算一次）；重复上报不计 token 但仍计请求；
+// 旧口径给 父 2000 + 子 2600 = 4600（双计前缀），日桶 Σlast = 2000+500+600 亦虚高。
+const CX2_EXP = { input: 2600, output: 40, cacheRead: 1100, cacheWrite: 0, requests: 5 };
 
 // ================================================================ fixture：Kimi
 const KM_ROOT = path.join(TMP, 'kimi', 'sessions');
@@ -112,8 +139,9 @@ try {
 const DSH_EXP = { input: 140, output: 14, cacheRead: 50, cacheWrite: 2, requests: 2 };
 
 // ================================================================ 跑扫描 + 断言
-const [cc1, cx1, km1, dsh1] = await Promise.all([
+const [cc1, cx1, km1, dsh1, cx2] = await Promise.all([
   scanClaudeUsage({ root: CC_ROOT }), scanCodexUsage({ root: CX_ROOT }), scanKimiUsage({ root: KM_ROOT }), scanDshUsage({ root: DSH_ROOT }),
+  scanCodexUsage({ root: CX2_ROOT }),
 ]);
 
 check('UCA1', 'Claude：message.id 去重（后写覆盖）+ sidechain/无id行计入 + 子代理文件归父会话 + 超大行跳过',
@@ -150,13 +178,23 @@ check('UCA3', 'Claude：自然日分桶精确（0d/3d/10d 各桶值 + Σ桶=总�
     cc4.stats.cachedFiles === 0 && eqUsage(cc4.totals, t3), { cached: cc4.stats.cachedFiles });
 }
 
-check('UCB1', 'Codex：会话扁平值=最后一条 total_token_usage（权威累计）+ 单模型整额归属（非增量求和）',
-  eqUsage(cx1.totals, CX_EXP) && eqUsage(cx1.bySession.get(cxUuid), CX_EXP) && eqUsage(cx1.byModel.get('gpt-test'), CX_EXP),
-  { got: cx1.totals, model: cx1.byModel.get('gpt-test') });
-check('UCB2', 'Codex：originator=Codex Desktop → desktop；日桶=事件增量（1000/400/10 + 1000/500/15）',
+check('UCB1', 'Codex：扁平值=首条自身 last + 其后 Δ累计（本 fixture 与「最后一条 total」同值）+ 单模型整额归属',
+  eqUsage(cx1.totals, CX_EXP) && eqUsage(cx1.bySession.get(cxUuid), CX_EXP) && eqUsage(cx1.byModel.get('gpt-test'), CX_EXP)
+    && cx1.stats.inheritedPrefix === 0 && cx1.stats.dayIdentityMismatched === 0,
+  { got: cx1.totals, model: cx1.byModel.get('gpt-test'), prefix: cx1.stats.inheritedPrefix });
+check('UCB2', 'Codex：originator=Codex Desktop → desktop；Σ日桶 = 总量（1000/400/10 + 1000/500/15）',
   cx1.byVariantFlat.get('desktop') && eqUsage(cx1.byVariantFlat.get('desktop'), CX_EXP)
     && [...cx1.byDay.values()].reduce((a, u) => a + u.input, 0) === 2000,
   { variants: [...cx1.byVariantFlat.keys()], dayInputSum: [...cx1.byDay.values()].reduce((a, u) => a + u.input, 0) });
+check('UCB3', 'Codex：fork/子代理 rollout 的继承累计前缀只算一次（父 2000 + 子自有 600 = 2600；旧口径双计为 4600）',
+  eqUsage(cx2.totals, CX2_EXP) && cx2.bySession.get(CX2_PARENT).input === 2000 && cx2.bySession.get(CX2_CHILD).input === 600
+    && cx2.stats.inheritedPrefix === 2000 && cx2.stats.dayIdentityMismatched === 0,
+  { got: cx2.totals, parent: cx2.bySession.get(CX2_PARENT), child: cx2.bySession.get(CX2_CHILD), prefix: cx2.stats.inheritedPrefix });
+check('UCB4', 'Codex：重复上报（累计值不动）不计 token 但仍计请求；Δ 按事件日归桶且 Σ日桶 ≡ 总量',
+  [...cx2.byDay.values()].reduce((a, u) => a + u.input, 0) === CX2_EXP.input
+    && [...cx2.byDay.values()].reduce((a, u) => a + u.requests, 0) === CX2_EXP.requests
+    && cx2.stats.duplicateReports === 1,
+  { days: [...cx2.byDay.entries()].map(([k, u]) => [k, u.input, u.requests]), dup: cx2.stats.duplicateReports, mism: cx2.stats.dayIdentityMismatched });
 
 check('UCC1', 'Kimi：每请求累加（含子代理 wire 并入同会话）+ model 别名取尾段 + sid=state.json.id + composer→desktop',
   eqUsage(km1.totals, KM_EXP) && eqUsage(km1.bySession.get('km-sess-1'), KM_EXP) && km1.byModel.get('k3').requests === 2 && !!km1.byModel.get('flash') && km1.byVariantFlat.get('desktop') && eqUsage(km1.byVariantFlat.get('desktop'), KM_EXP),
@@ -186,6 +224,16 @@ check('UCD1', 'DSH：多帧 zstd 解压 + v3/v4 并存只取最高代（v3 的 9
     Object.entries(expToday).every(([s, v]) => r('today', s) === v) && Object.entries(expD7).every(([s, v]) => r('d7', s) === v) && Object.entries(expD30).every(([s, v]) => r('d30', s) === v),
     { today: { cc: r('today', 'claude-code'), cx: r('today', 'codex') }, d7: { cc: r('d7', 'claude-code') }, d30: { cc: r('d30', 'claude-code') } });
   // 合并模型跨源 hitRate：glm-test 仅 claude（fresh=441? 用 cc1 无追加版）… 以 deepseek/k3 类跨源混合不设 fixture，验证 totals 合并口径即可
+  // UCE5 展示口径（2026-10-09 统一）：totalTokens = promptTokens（含缓存读）+ cacheWrite + out；
+  // promptTokens 按源语义 = input（Codex/ZCode 已含 cache）或 input + cacheRead（DSH/Claude/Kimi）
+  check('UCE5', '展示口径：DSH（input 不含 cache）与 Codex（input 含 cache）两端 totalTokens 折算都对',
+    (() => {
+      const d = ov.bySource.dsh.totals, c = ov.bySource.codex.totals, t = ov.totals;
+      return d.promptTokens === d.input + d.cacheRead && d.totalTokens === d.promptTokens + d.cacheWrite + d.output
+        && c.promptTokens === c.input && c.totalTokens === c.promptTokens + c.cacheWrite + c.output
+        && t.totalTokens === t.promptTokens + t.cacheWrite + t.output;
+    })(),
+    { dsh: ov.bySource.dsh.totals, codex: ov.bySource.codex.totals, total: ov.totals.totalTokens });
   check('UCE3', 'overview 合计 hitRate 用 freshInput 折算（跨源可加）',
     (() => {
       const fresh = 441 + (2000 - 900) + 157 + 140;      // cc + codex + kimi + dsh（各自语义）

@@ -24,6 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { categoryOf } from '../demo/frame.mjs';
+import { loadModelMap, mapModelName } from './model-map.mjs';
 
 export const SOURCE = 'codex';
 export const AGENT_NAME = 'Codex';
@@ -109,7 +110,7 @@ export function parseCodexSession(file, opts = {}) {
   const base = {
     sessionId, dirName: path.basename(file), agentName: AGENT_NAME, source: SOURCE,
     dir: path.dirname(file), projectDir: path.dirname(file), projectDirName: '',
-    title: null, titleRaw: null, provider: null, model: null, reasoningEffort: null, agentPreset: null,
+    title: null, titleRaw: null, provider: null, model: null, modelRaw: null, reasoningEffort: null, agentPreset: null,
     agentVersion: null, state: 'unknown', stateSource: null, live: false,
     createdAt: null, updatedAt: null, bytes: st?.size ?? 0, logFile: file, logName: path.basename(file),
     origin: null, parentSession: null, delegationDepth: null, isSeeded: null, kind: 'main', label: null,
@@ -153,6 +154,13 @@ export function parseCodexSession(file, opts = {}) {
       coarse = { state: 'idle', stateSource: coarse.stateSource + ':stale>5min→idle' };
     }
   }
+  // 模型名映射（用户定向 2026-10-09）：rollout 里记的是 Codex 侧的注册名（可能是切换器的别名），
+  // 展示一律用「实际请求名」——映射来自实际请求配置（~/.codex/config.toml + 切换器路由表）。
+  let modelRaw = null;
+  if (model) {
+    const hit = mapModelName(loadModelMap({ source: SOURCE }), model);
+    if (hit.mapped) { modelRaw = model; model = hit.actual; metaSources.model += '→model-map(' + (hit.via || 'actual-request-config') + ')'; }
+  }
   const now = Number.isFinite(o.now) ? o.now : Date.now();
   const isSub = parent != null && parent !== '';
   // 首条真实用户输入作为兜底标题（跳过 <app-context>/<environment_context> 等注入包装；不再拿项目名冒充标题）
@@ -176,7 +184,7 @@ export function parseCodexSession(file, opts = {}) {
     cwd, cwdSource: cwd ? 'session_meta.cwd' : null,
     createdAt: createdAt ?? ts(meta?.timestamp) ?? null,
     updatedAt: Math.round(Math.max(st.mtimeMs, lastTs ?? 0)),
-    model, reasoningEffort: effort,
+    model, modelRaw, reasoningEffort: effort,
     agentVersion: version, originator,
     origin: isSub ? 'subagent' : 'main',
     parentSession: isSub ? parent : null,
@@ -313,8 +321,9 @@ export function followCodexLogs(opts = {}) {
   const maxFiles = opts.maxFiles ?? 80;
   const onEvent = opts.onEvent ?? (() => {});
   const files = new Map();
+  const evictedOffsets = new Map();  // 被淘汰文件的 offset（再准入时续读）
   let stopped = false;
-  const stats = { files: 0, lines: 0, events: 0, parseErrors: 0, resamples: 0 };
+  const stats = { files: 0, lines: 0, events: 0, parseErrors: 0, resamples: 0, evictions: 0 };
 
   function listFiles() {
     const out = [];
@@ -344,19 +353,45 @@ export function followCodexLogs(opts = {}) {
     } catch { return {}; }
   }
 
+  /** 预算准入（maxFiles）：触顶淘汰最久未修改的跟随项；被淘汰者再活跃时从淘汰点续读（防抖 + 不漏增量）。 */
+  function admit(file, st) {
+    const existing = files.get(file);
+    if (existing) return existing;
+    if (files.size >= maxFiles) {
+      let victimFile = null, victim = null;
+      for (const [key, entry] of files) {
+        if (!victim || (entry.mtimeMs ?? 0) < (victim.mtimeMs ?? 0)) { victim = entry; victimFile = key; }
+      }
+      if (!victim || (victim.mtimeMs ?? 0) >= st.mtimeMs) return null;
+      files.delete(victimFile);
+      evictedOffsets.set(victimFile, victim.offset);
+      if (evictedOffsets.size > maxFiles * 2) evictedOffsets.delete(evictedOffsets.keys().next().value);
+      stats.evictions++;
+    }
+    const meta = readMeta(file);
+    if (meta.subagent) { files.set(file, { offset: st.size, ctx: null, subagent: true, mtimeMs: st.mtimeMs }); return null; }   // 子代理线程：不产事件
+    const resume = evictedOffsets.get(file);
+    evictedOffsets.delete(file);
+    const offset = opts.fromStart ? 0 : (resume !== undefined && st.size >= resume ? resume : st.size);
+    const fresh = { offset, ctx: { sessionId: meta.sessionId ?? threadIdOf(file), seq: 0 }, mtimeMs: st.mtimeMs };
+    files.set(file, fresh);
+    return fresh;
+  }
+
   function pump() {
     if (stopped) return;
     const now = Date.now();
+    // 先统一 stat 并按 mtime 倒序：最近写入的会话优先占预算
+    const entries = [];
     for (const file of listFiles()) {
       let st; try { st = fs.statSync(file); } catch { continue; }
-      let f = files.get(file);
-      if (!f) {
-        if (files.size >= maxFiles) continue;
-        const meta = readMeta(file);
-        if (meta.subagent) { files.set(file, { offset: st.size, ctx: null, subagent: true }); continue; }   // 子代理线程：不产事件
-        f = { offset: opts.fromStart ? 0 : st.size, ctx: { sessionId: meta.sessionId ?? threadIdOf(file), seq: 0 } };
-        files.set(file, f);
-      }
+      entries.push({ file, st });
+    }
+    entries.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
+    for (const { file, st } of entries) {
+      const f = admit(file, st);
+      if (!f) continue;
+      f.mtimeMs = st.mtimeMs;
       if (f.subagent || !f.ctx) continue;
       if (st.size < f.offset) { f.offset = 0; stats.resamples++; }
       if (st.size <= f.offset) continue;

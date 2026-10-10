@@ -79,7 +79,7 @@ test('Lazy load once; month totals, tools-only days, exact day details and exist
   assert.match(h.text(), /Kimi Code/);
   await h.click('data-urange', 'today');
   assert.equal(sandbox.window.__USAGE_CALENDAR_DAY__, 20261007);
-  assert.match(h.text(), /in 5.0M/);
+  assert.match(h.text(), /in（含缓存读） 9\.0M/);
 });
 
 test('Source filter does not affect sessions; selection and focus survive new snapshots', async () => {

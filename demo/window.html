@@ -236,7 +236,10 @@ footer{flex:none;max-height:38vh;overflow:auto;border-top:1px solid var(--line);
 .qgroup-h{display:flex;align-items:center;gap:6px;font-size:9px;color:var(--dim);padding:2px 0}
 .qgroup-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qitem{display:flex;gap:8px;align-items:center;font-size:10px;padding:3px 0;border-top:1px solid var(--line)}
-.qt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt)}
+.qcontent{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.qt,.qdetail{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qt{color:var(--txt)}
+.qdetail{color:var(--dim);font-size:9px}
 .qs{flex:none;font-size:9px}
 .qc{width:24px;height:24px}
 .qs.queued,.qs.pending{color:var(--wait)}
@@ -245,16 +248,14 @@ footer{flex:none;max-height:38vh;overflow:auto;border-top:1px solid var(--line);
 #note{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #connection{display:flex;gap:6px;align-items:center;white-space:nowrap}
 #connection[data-connected=false]{color:var(--wait)}
-#feedback{position:fixed;bottom:32px;right:16px;max-width:min(540px,calc(100% - 32px));border:1px solid var(--line);border-left:3px solid var(--acc);border-radius:4px;box-shadow:var(--shadow);background:var(--win);padding:12px 15px;font-size:11px;overflow-wrap:anywhere;z-index:10}
-#feedback[data-kind=error]{border-left-color:var(--err)}
-#feedback[data-kind=warning]{border-left-color:var(--wait)}
 dialog{width:min(470px,calc(100% - 32px));max-height:85vh;overflow:auto;border:1px solid var(--line);border-top:2px solid var(--acc);border-radius:5px;padding:21px;background:var(--win);color:var(--txt);box-shadow:var(--shadow)}
 dialog::backdrop{background:#0008}
 .dialog-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
 .dialog-head h2{font-size:16px;font-weight:600;margin:0}
 .field{display:flex;flex-direction:column;gap:6px;margin:13px 0;font-size:11px}
 .field>span{color:var(--dim)}
-.field input,.field select{width:100%;min-width:0;border:1px solid var(--line);border-radius:3px;background:var(--bg);padding:8px 10px}
+.field input,.field select,.field textarea{width:100%;min-width:0;border:1px solid var(--line);border-radius:3px;background:var(--bg);padding:8px 10px}
+.field textarea{min-height:72px;max-height:180px;resize:vertical}
 .dialog-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px}
 .capability-note{font-size:10px;color:var(--dim);line-height:1.8}
 .capability-note p{margin:5px 0;overflow-wrap:anywhere}
@@ -432,18 +433,18 @@ dialog::backdrop{background:#0008}
     <div id="software-metrics"></div>
     <section class="chart-section" aria-labelledby="software-chart-title">
       <h2 id="software-chart-title" class="chart-title">Agent 运行概览</h2>
-      <div class="chart-caption">会话数来自实时目录与历史目录去重；Token 按各来源 in + out 统计。</div>
+      <div class="chart-caption">会话数来自实时目录与历史目录去重；Token 按各来源全量口径（prompt 含缓存读 + 输出，与各 Agent 自带计数一致）统计。</div>
       <div id="software-chart" class="chart-grid"></div>
     </section>
     <div id="status-cards"></div>
   </section>
   <section id="usage-page">
     <div class="page-head"><div><div class="eyebrow">TELEMETRY / USAGE</div><h1 class="u-title">用量统计</h1></div><button class="icon-btn" id="usage-refresh" title="重新扫描用量" aria-label="重新扫描用量"><svg class="icon" aria-hidden="true"><use href="#i-refresh-cw"></use></svg></button></div>
-    <div class="u-sub">本地日志 · 含子代理 · Token = in + out · MCP 为工具调用的子集，按显式 MCP 名称识别。</div>
+    <div class="u-sub">本地日志 · 含子代理 · Token = 全量口径（prompt 含缓存读 + cache写 + out，对齐各 Agent 自带计数）· in 含缓存读、cache读是 in 的子集 · MCP 为工具调用的子集，按显式 MCP 名称识别。</div>
     <div id="usage-body"><div class="empty">首次全量扫描中…</div></div>
   </section>
   <footer>
-    <div class="target-line"><svg class="icon target-icon" aria-hidden="true"><use href="#i-crosshair"></use></svg><button class="trow" id="target" title="恢复自动投递目标">投递目标：自动 · 最近活跃主会话</button><button class="icon-btn" id="clear-target" title="解除指定目标" aria-label="解除指定目标" hidden><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>
+    <div class="target-line"><svg class="icon target-icon" aria-hidden="true"><use href="#i-crosshair"></use></svg><button class="trow" id="target" title="选择要对话的主会话">投递目标：请先选择会话</button><button class="icon-btn" id="clear-target" title="解除指定目标" aria-label="解除指定目标" hidden><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>
     <div id="target-warning" hidden><svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"></use></svg><span id="target-warning-text"></span><button class="btn" id="locate-target">定位目标</button></div>
     <div class="composer">
       <textarea id="input" maxlength="2000" placeholder="输入消息…" aria-label="发送给当前投递目标的消息"></textarea>
@@ -454,20 +455,15 @@ dialog::backdrop{background:#0008}
   </footer>
   <div class="statusbar"><span id="connection" data-connected="false"><span class="dot" id="connection-dot"></span><span id="connection-label">连接中</span></span><span id="note">读取本地状态…</span></div>
 </div>
-<div id="feedback" role="status" aria-live="polite" hidden></div>
 <dialog id="new-dialog" aria-labelledby="new-title">
   <form id="new-form">
     <div class="dialog-head"><h2 id="new-title">新建会话</h2><button class="icon-btn" id="new-close" type="button" title="关闭" aria-label="关闭新建会话"><svg class="icon" aria-hidden="true"><use href="#i-x"></use></svg></button></div>
     <label class="field"><span>Agent 软件</span><select id="new-source" required></select></label>
-    <label class="field"><span>工作目录</span><input id="new-cwd" list="project-paths" placeholder="使用 Agent 默认目录" autocomplete="off"></label>
-    <datalist id="project-paths"></datalist>
-    <label class="field" id="new-model-field"><span>模型（可选）</span><input id="new-model" list="model-options" placeholder="留空 = 沿用默认" autocomplete="off"></label>
-    <datalist id="model-options"></datalist>
+    <label class="field" id="new-cwd-field"><span id="new-cwd-label">工作目录（必选）</span><select id="new-cwd" required><option value="" selected disabled>选择该项目文件夹</option></select></label>
+    <label class="field" id="new-model-field"><span id="new-model-label">模型（必选）</span><select id="new-model" required><option value="" selected disabled>选择已注册模型</option></select></label>
     <div class="capability-note" id="new-model-note" hidden></div>
-    <label class="field" id="new-first-field"><span>首条消息（可选）</span><textarea id="new-first" rows="2" placeholder="留空 = 打开终端新会话；填写 = 不开终端，以此消息直接无头创建会话"></textarea></label>
-    <div id="new-dsh-fields" hidden>
-      <label class="field"><span>思考程度（可选）</span><select id="new-reasoning"><option value="">沿用默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="max">max</option></select></label>
-    </div>
+    <label class="field" id="new-first-field"><span>首条消息（必填）</span><textarea id="new-first" rows="2" maxlength="2000" required placeholder="输入新会话的第一条消息"></textarea></label>
+    <label class="field"><span>思考强度（必选）</span><select id="new-reasoning" required><option value="" selected disabled>请先选择模型</option></select></label>
     <div class="capability-note" id="new-channel"></div>
     <details class="capability-note"><summary>通道状态</summary><div id="new-capabilities"></div></details>
     <p id="new-error" role="alert" hidden></p>
@@ -511,13 +507,6 @@ applyTheme(readPreference('agent-pet-theme','light'));
 document.querySelectorAll('[data-theme-mode]').forEach(b=>b.addEventListener('click',()=>setTheme(b.getAttribute('data-theme-mode'))));
 window.addEventListener('storage',e=>{if(e.key==='agent-pet-theme')applyTheme(readPreference('agent-pet-theme','light'))});
 if(window.matchMedia)window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=>{if(window.__THEME_MODE__==='system')applyTheme('system')});
-let noticeTimer;
-function notice(text,kind='info'){
-  const el=$('feedback');
-  el.textContent=text;el.dataset.kind=kind;el.hidden=false;
-  clearTimeout(noticeTimer);
-  noticeTimer=setTimeout(()=>{el.hidden=true},kind==='error'?7000:4000);
-}
 function sourceCan(source,action,caps=(window.__SNAP__||{}).capabilities||{}){
   if(!caps['can'+action])return false;
   if(source!=='dsh')return (caps.cliChannels||[]).some(c=>c.source===source);
@@ -526,15 +515,15 @@ function sourceCan(source,action,caps=(window.__SNAP__||{}).capabilities||{}){
 }
 function channelLabel(s,caps){
   const source=s?s.source||'dsh':'';
-  if(!source)return (window.__SNAP__||{}).inputChannel?.detail||'由后端选择最近活跃主会话';
+  if(!source)return '请先选择会话';
   return sourceCan(source,'Input',caps)
     ? (source==='dsh'?'DSH 插件直投':srcLabel(s)+' · '+(source==='zcode'?'App 内置引擎投递':'CLI 投递'+(s.variant==='desktop'?'（桌面会话经 CLI 续接）':'')))
-    : ((window.__SNAP__||{}).inputChannel?.mode==='cmd'?'自定义命令投递':'本地队列 · 无可用直投通道');
+    : '本地队列 · 无可用直投通道';
 }
 function saveDraft(){writePreference('agent-pet-draft',$('input').value.slice(0,2000))}
 $('input').value=readPreference('agent-pet-draft','').slice(0,2000);
 function updateSendButton(){
-  $('send').disabled=!!window.__SENDING__||!!window.__TARGET_MISSING__||!$('input').value.trim();
+  $('send').disabled=!!window.__SENDING__||!window.__TARGET__||!!window.__TARGET_MISSING__||!$('input').value.trim();
 }
 $('input').addEventListener('input',()=>{saveDraft();updateSendButton()});
 updateSendButton();
@@ -546,7 +535,12 @@ const SOURCE_VARIANTS={dsh:['desktop'],'claude-code':['cli','desktop','ide'],cod
 function srcLabel(s){const base=String(s&&s.source||'dsh').toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI');return base+(s&&s.variant&&VARIANT_LABEL[s.variant]?'·'+VARIANT_LABEL[s.variant]:'')}
 function fmtTok(n){n=Number(n)||0;return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'k':String(n)}
 function pct(r){return (r==null||isNaN(r))?'—':(r*100).toFixed(1)+'%'}
-function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);if(s.usage&&(s.usage.input||s.usage.output))p.push('tok '+fmtTok(s.usage.input)+'/'+fmtTok(s.usage.output));return p.join(' · ')}
+// 展示口径（2026-10-09 与采集器同步）：prompt 全量 = 含缓存读的输入；total = prompt + cache写 + out。
+// 「input 是否已含 cache」按源语义：Codex/ZCode 含（OpenAI 式），DSH/Claude/Kimi 不含（Anthropic 式）。
+const INPUT_INCLUDES_CACHE={codex:1,zcode:1};
+function promptOf(t,source){const x=t||{};const v=Number(x.promptTokens);if(Number.isFinite(v))return v;return Number(x.input||0)+(INPUT_INCLUDES_CACHE[source]?0:Number(x.cacheRead||0))}
+function totalOf(t,source){const x=t||{};const v=Number(x.totalTokens);if(Number.isFinite(v))return v;return promptOf(x,source)+Number(x.cacheWrite||0)+Number(x.output||0)}
+function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);if(s.usage&&(s.usage.input||s.usage.output))p.push('tok 全量 '+fmtTok(totalOf(s.usage,s.source||'dsh'))+'（in '+fmtTok(s.usage.input)+'/out '+fmtTok(s.usage.output)+'）');return p.join(' · ')}
 const USAGE_RANGES=[['all','全部'],['today','当日'],['d7','7 日内'],['d30','30 日内']];
 const CALENDAR_METRICS=[
   ['tokens','Token','chart-no-axes-column','Token'],
@@ -586,14 +580,16 @@ function calendarSelectedSources(data){
   return selected?(available.includes(selected)?[selected]:[]):available;
 }
 function calendarCounts(data,dayKey,sources){
-  const out={tokens:0,mcpCalls:0,toolCalls:0,input:0,output:0,cacheRead:0,cacheWrite:0,requests:0};
+  const out={tokens:0,mcpCalls:0,toolCalls:0,input:0,promptTokens:0,output:0,cacheRead:0,cacheWrite:0,requests:0};
   for(const source of sources||[]){
     const row=data?.sources?.[source]?.days?.[String(dayKey)];
     if(!row)continue;
     out.input+=Number(row.input)||0;out.output+=Number(row.output)||0;
     out.cacheRead+=Number(row.cacheRead)||0;out.cacheWrite+=Number(row.cacheWrite)||0;
     out.requests+=Number(row.requests)||0;
+    // 全量口径：服务端已按源语义算好 tokens/promptTokens（旧数据回退 in+out）
     out.tokens+=Number(row.tokens??((Number(row.input)||0)+(Number(row.output)||0)))||0;
+    out.promptTokens+=Number(row.promptTokens??((Number(row.input)||0)+(data?.sources?.[source]?.inputIncludesCache?0:(Number(row.cacheRead)||0))))||0;
     out.mcpCalls+=Number(row.mcpCalls)||0;out.toolCalls+=Number(row.toolCalls)||0;
   }
   return out;
@@ -640,7 +636,7 @@ function calendarDetailHtml(data,dayKey,sources,metric){
     +'<div class="uc-detail-main"><div class="uc-detail-date">'+esc(calendarLabel(dayKey))+'</div>'
     +'<div class="uc-detail-value">'+calendarMetricValue(metric,row,approx,incomplete,true)+'</div><div class="uc-detail-metric">'+esc(metricDef[3])+(metric==='tokens'?'':' 调用')+(incomplete?' · 已记录':'')+'</div>'
     +'<div class="uc-facts">'+CALENDAR_METRICS.map(([key,label])=>'<span class="uc-fact">'+label+' <b>'+calendarMetricValue(key,row,approx,incomplete)+'</b></span>').join('')+'</div>'
-    +'<div class="uc-facts"><span class="uc-fact">in <b>'+calendarMetricValue('input',row,false,incomplete)+'</b></span><span class="uc-fact">out <b>'+calendarMetricValue('output',row,false,incomplete)+'</b></span></div></div>'
+    +'<div class="uc-facts"><span class="uc-fact" title="in = 全量 prompt（含缓存读），等于各 Agent 自己显示的输入量">in（含缓存读） <b>'+calendarMetricValue('promptTokens',row,false,incomplete)+'</b></span><span class="uc-fact">out <b>'+calendarMetricValue('output',row,false,incomplete)+'</b></span></div></div>'
     +'<div class="uc-breakdown"><table><thead><tr><th>来源</th><th>Token</th><th>MCP</th><th>工具</th><th>请求</th></tr></thead><tbody>'
     +(sourceRows||'<tr><td colspan="5" style="text-align:left;color:var(--dim)">当天没有可用明细</td></tr>')+'</tbody></table></div></div>';
 }
@@ -696,7 +692,7 @@ function usageCalendarHtml(data,now){
   h+='<div class="uc-caption">'+esc(caption.join(' · '))+'</div>';
   h+='<div class="uc-month-totals" aria-label="本月合计">'+CALENDAR_METRICS.map(([k,l])=>'<div class="metric"><div class="metric-label">本月 '+l+(incomplete?' · 已记录':'')+'</div><div class="metric-value" data-month-total="'+k+'" title="'+calendarMetricValue(k,monthTotals,approx,incomplete,true)+'">'+calendarMetricValue(k,monthTotals,approx,incomplete)+'</div></div>').join('')+'<div class="metric"><div class="metric-label">活跃天数</div><div class="metric-value">'+activeDays+'</div></div></div>';
   if(state.error)h+='<div class="uc-caption" role="status"><span class="warn">更新失败，保留上次数据：'+esc(state.error)+'</span><button type="button" class="btn" data-calendar-retry data-calendar-focus="retry">重试</button></div>';
-  if(approx||partial.length||unavailable.length)h+='<div class="uc-caption"><span class="warn">'+esc([approx?'Codex 每日 Token 为事件增量近似值':'',partial.length?'部分数据：'+partial.map(s=>sourceMeta(s).name).join('、'):'',!window.__USAGE_CALENDAR_SOURCE__&&unavailable.length?'来源不可用：'+unavailable.map(s=>sourceMeta(s).name).join('、'):''].filter(Boolean).join(' · '))+'</span></div>';
+  if(approx||partial.length||unavailable.length)h+='<div class="uc-caption"><span class="warn">'+esc([approx?'Codex 每日 Token 按会话累计差分归日（Σ日桶=全量，跨事件边界的归日仍属近似）':'',partial.length?'部分数据：'+partial.map(s=>sourceMeta(s).name).join('、'):'',!window.__USAGE_CALENDAR_SOURCE__&&unavailable.length?'来源不可用：'+unavailable.map(s=>sourceMeta(s).name).join('、'):''].filter(Boolean).join(' · '))+'</span></div>';
   h+=grid+'<div class="uc-legend" aria-label="用量由少到多">少'+[0,20,30,40,50].map(n=>'<span class="uc-swatch" style="background:color-mix(in srgb,'+color+' '+n+'%,var(--win))"></span>').join('')+'多</div>';
   if(!activeDays)h+='<div class="uc-caption">'+(incomplete?'本月暂无已记录用量，数据尚不完整。':'本月暂无用量记录。')+'</div>';
   h+=calendarDetailHtml(data,selected,sources,metric)+'</section>';
@@ -725,10 +721,23 @@ async function loadUsageCalendar(force=false){
     if(window.__SNAP__&&window.__VIEW__==='usage')render(window.__SNAP__);
   }
 }
-function uTable(rows,withSources){
+// 用量表里的模型名同样按「实际请求名」显示（与新建下拉、会话详情同口径）；
+// 合并表跨来源时若映射结果不一致，就保留记录里的原名，避免拼出一个不存在的模型。
+function modelLabel(row,source){
+  const reg=((window.__SNAP__||{}).modelRegistry||{}).mapping||{};
+  const raw=String(row.model||'');
+  const names=[];
+  for(const src of (source?[source]:(row.sources||[]))){
+    const hit=(reg[src]?.sources||[]).find(e=>String(e.alias||'').toLowerCase()===raw.toLowerCase());
+    if(hit&&hit.actual)names.push(hit.actual);
+  }
+  const uniq=[...new Set(names)];
+  return uniq.length===1?uniq[0]:raw;
+}
+function uTable(rows,withSources,source){
   if(!rows||!rows.length)return '<div class="empty" style="text-align:left;margin-left:6px">（该时间窗内无用量）</div>';
-  let h='<div class="utable-wrap"><table class="utable"><tr><th>模型</th>'+(withSources?'<th>来源</th>':'')+'<th>in</th><th>cache读</th><th>cache写</th><th>out</th><th>命中率</th><th>请求</th></tr>';
-  for(const m of rows){h+='<tr><td>'+esc(m.model)+'</td>'+(withSources?'<td style="color:var(--dim)">'+esc((m.sources||[]).map(x=>srcLabel({source:x})).join(' '))+'</td>':'')+'<td>'+fmtTok(m.input)+'</td><td>'+fmtTok(m.cacheRead)+'</td><td>'+fmtTok(m.cacheWrite)+'</td><td>'+fmtTok(m.output)+'</td><td>'+pct(m.hitRate)+'</td><td>'+fmtTok(m.requests)+'</td></tr>'}
+  let h='<div class="utable-wrap"><table class="utable"><tr><th>模型</th>'+(withSources?'<th>来源</th>':'')+'<th>in（含缓存读）</th><th>cache读</th><th>cache写</th><th>out</th><th>命中率</th><th>请求</th></tr>';
+  for(const m of rows){h+='<tr><td>'+esc(modelLabel(m,source))+'</td>'+(withSources?'<td style="color:var(--dim)">'+esc((m.sources||[]).map(x=>srcLabel({source:x})).join(' '))+'</td>':'')+'<td>'+fmtTok(withSources?(m.promptTokens??m.input):promptOf(m,source))+'</td><td>'+fmtTok(m.cacheRead)+'</td><td>'+fmtTok(m.cacheWrite)+'</td><td>'+fmtTok(m.output)+'</td><td>'+pct(m.hitRate)+'</td><td>'+fmtTok(m.requests)+'</td></tr>'}
   return h+'</table></div>';
 }
 function chartRows(items,key,labelFn,valueFn,formatFn,maxValue){
@@ -744,11 +753,11 @@ function usageSourceChart(view){
   const entries=SOURCE_ORDER.map(source=>({source,data:(view.bySource||{})[source]||null}))
     .filter(x=>x.data);
   if(!entries.length)return '<div class="chart-empty">当前时间范围没有 Agent 用量数据。</div>';
-  const tokenCount=x=>Number(x.data?.totals?.input||0)+Number(x.data?.totals?.output||0);
+  const tokenCount=x=>totalOf(x.data?.totals,x.source);
   const requestCount=x=>Number(x.data?.totals?.requests||0);
   return '<div class="chart-grid">'
     +'<section class="chart-panel"><h3>请求数</h3>'+chartRows(entries,x=>x.source,x=>sourceMeta(x.source).name,requestCount,fmtTok)+'</section>'
-    +'<section class="chart-panel"><h3>Token · in + out</h3>'+chartRows(entries,x=>x.source,x=>sourceMeta(x.source).name,tokenCount,fmtTok)+'</section>'
+    +'<section class="chart-panel"><h3>Token · 全量（含缓存读）</h3>'+chartRows(entries,x=>x.source,x=>sourceMeta(x.source).name,tokenCount,fmtTok)+'</section>'
     +'</div>';
 }
 function usageHtml(us,now){
@@ -760,25 +769,25 @@ function usageHtml(us,now){
   let h=calendar+'<div class="u-ranges" role="group" aria-label="用量时间范围">'+USAGE_RANGES.map(([k,l])=>'<button data-urange="'+k+'" aria-pressed="'+(range===k)+'"'+(range===k?' class="on"':'')+'>'+l+'</button>').join('')+'</div>';
   if(!view)return h+'<div class="empty">当前时间窗数据暂不可用，等待下一次扫描。</div>';
   const t=view.totals||{};
-  h+='<div class="u-tot"><span class="chip">in '+fmtTok(t.input)+'</span><span class="chip">out '+fmtTok(t.output)+'</span><span class="chip">cache读 '+fmtTok(t.cacheRead)+'</span><span class="chip">cache写 '+fmtTok(t.cacheWrite)+'</span><span class="chip">命中率 '+pct(t.hitRate)+'</span><span class="chip">请求 '+fmtTok(t.requests)+'</span>'+(us.refreshing?'<span class="chip">扫描中…</span>':'')+(rl?'<span class="chip">'+rl+'</span>':'')+'</div>';
+  h+='<div class="u-tot"><span class="chip" title="in = 全量 prompt（含缓存读）">in（含缓存读） '+fmtTok(t.promptTokens??t.input)+'</span><span class="chip">Token 全量 '+fmtTok(t.totalTokens??((Number(t.input)||0)+(Number(t.output)||0)))+'</span><span class="chip">out '+fmtTok(t.output)+'</span><span class="chip">cache读 '+fmtTok(t.cacheRead)+'</span><span class="chip">cache写 '+fmtTok(t.cacheWrite)+'</span><span class="chip">命中率 '+pct(t.hitRate)+'</span><span class="chip">请求 '+fmtTok(t.requests)+'</span>'+(us.refreshing?'<span class="chip">扫描中…</span>':'')+'<span class="chip">当前窗口：'+(rl||'全部时间')+'</span>'+'</div>';
   // 各 Agent 消耗量：claude/codex/kimi 按 CLI/桌面/IDE 形态拆行（与会话目录/软件状态页同口径）；dsh/zcode 单行
   const SRC_ORDER=['dsh','claude-code','codex','kimi-code','zcode'];
   const SRC_SPLIT={ 'claude-code':1, codex:1, 'kimi-code':1 };
-  h+='<section class="chart-section" aria-label="Agent 用量图表"><h2 class="chart-title">来源对比</h2><div class="chart-caption">图表按选定时间范围聚合；Token 以 in + out 计，缓存分项见下方明细。</div>'+usageSourceChart(view)+'</section>';
-  h+='<div class="u-src-h">各 Agent 消耗量'+(rl?'（'+rl+'）':'')+'</div><div class="utable-wrap"><table class="utable"><tr><th>Agent</th><th>in</th><th>cache读</th><th>cache写</th><th>out</th><th>命中率</th><th>请求</th><th>模型数</th></tr>';
+  h+='<section class="chart-section" aria-label="Agent 用量图表"><h2 class="chart-title">来源对比</h2><div class="chart-caption">图表按选定时间范围（'+(rl||'全部时间')+'）聚合；Token 为全量口径（prompt 含缓存读 + cache写 + out，与各 Agent 自带计数一致），缓存分项见下方明细。上方日历为「单日」口径（默认今天），与本图窗口不同，两张数不可直接相加比对。</div>'+usageSourceChart(view)+'</section>';
+  h+='<div class="u-src-h">各 Agent 消耗量'+(rl?'（'+rl+'）':'')+'</div><div class="utable-wrap"><table class="utable"><tr><th>Agent</th><th>in（含缓存读）</th><th>cache读</th><th>cache写</th><th>out</th><th>命中率</th><th>请求</th><th>模型数</th></tr>';
   for(const src of SRC_ORDER){
     const d=view.bySource&&view.bySource[src];if(!d)continue;
     const vs=(SRC_SPLIT[src]&&d.variants&&d.variants.length)?d.variants:[{variant:null,totals:d.totals}];
     for(const v of vs){
       const t2=v.totals||{};
-      h+='<tr><td>'+esc(srcLabel({source:src,variant:v.variant}))+'</td><td>'+fmtTok(t2.input)+'</td><td>'+fmtTok(t2.cacheRead)+'</td><td>'+fmtTok(t2.cacheWrite)+'</td><td>'+fmtTok(t2.output)+'</td><td>'+pct(t2.hitRate)+'</td><td>'+fmtTok(t2.requests)+'</td><td style="color:var(--dim)">'+(v.variant?'—':((d.models||[]).length+(d.partial?' · 部分':'')))+'</td></tr>';
+      h+='<tr><td>'+esc(srcLabel({source:src,variant:v.variant}))+'</td><td>'+fmtTok(promptOf(t2,src))+'</td><td>'+fmtTok(t2.cacheRead)+'</td><td>'+fmtTok(t2.cacheWrite)+'</td><td>'+fmtTok(t2.output)+'</td><td>'+pct(t2.hitRate)+'</td><td>'+fmtTok(t2.requests)+'</td><td style="color:var(--dim)">'+(v.variant?'—':((d.models||[]).length+(d.partial?' · 部分':'')))+'</td></tr>';
     }
   }
   h+='</table></div>';
   h+='<div class="u-src-h">全部来源 · 同名模型合并'+(rl?'（'+rl+'）':'')+'</div>'+uTable(view.byModel||[],true);
   for(const src of SRC_ORDER){
     const d=view.bySource&&view.bySource[src];if(!d)continue;
-    h+='<div class="u-src-h">'+esc(srcLabel({source:src}))+' · '+(d.partial?'<span style="color:var(--wait)">部分扫描（下轮续）</span>':(d.models||[]).length+' 个模型')+'</div>'+uTable(d.models||[]);
+    h+='<div class="u-src-h">'+esc(srcLabel({source:src}))+' · '+(d.partial?'<span style="color:var(--wait)">部分扫描（下轮续）</span>':(d.models||[]).length+' 个模型')+'</div>'+uTable(d.models||[],false,src);
   }
   h+='<div class="u-note">生成于 '+(us.generatedAt?new Date(us.generatedAt).toLocaleString('zh-CN'):'—')+'（60s 增量缓存）· 时间窗按本地自然日归桶 · 命中率=cacheRead/(fresh+cacheRead)，fresh 按源语义折算（Codex/ZCode 的 input 含 cache）· 形态：Claude=entrypoint / Codex=originator / Kimi=clientMetadata</div>';
   return h;
@@ -843,12 +852,12 @@ function render(snap){
   for(const s of sessionMap.values())sessionCounts[s.source||'dsh']=(sessionCounts[s.source||'dsh']||0)+1;
   const bySource=(snap.usage&&snap.usage.bySource)||{};
   const totalRequests=SOURCE_ORDER.reduce((sum,source)=>sum+Number(bySource[source]?.totals?.requests||0),0);
-  const totalTokens=SOURCE_ORDER.reduce((sum,source)=>sum+Number(bySource[source]?.totals?.input||0)+Number(bySource[source]?.totals?.output||0),0);
+  const totalTokens=SOURCE_ORDER.reduce((sum,source)=>sum+totalOf(bySource[source]?.totals,source),0);
   const metricsHtml=[
     ['主会话',fmtTok(sessionMap.size)],
     ['已连接入口',fmtTok(connected)],
     ['请求',snap.usage?.pending?'扫描中':fmtTok(totalRequests)],
-    ['Token · in + out',snap.usage?.pending?'扫描中':fmtTok(totalTokens)]
+    ['Token · 全量（含缓存读）',snap.usage?.pending?'扫描中':fmtTok(totalTokens)]
   ].map(([label,value])=>'<div class="metric"><div class="metric-label">'+label+'</div><div class="metric-value">'+value+'</div></div>').join('');
   const metricsEl=$('software-metrics');
   if(metricsEl.__petLastHtml!==metricsHtml){metricsEl.innerHTML=metricsHtml;metricsEl.__petLastHtml=metricsHtml}
@@ -860,15 +869,15 @@ function render(snap){
   const maxSessions=Math.max(0,...chartSources.map(source=>sessionCounts[source]||0));
   const sessionChart=chartSources.map(source=>{
     const meta=sourceMeta(source),count=sessionCounts[source]||0,usage=bySource[source]?.totals||{};
-    const tokenCount=Number(usage.input||0)+Number(usage.output||0);
+    const tokenCount=totalOf(usage,source);
     const statusItems=agentsList.filter(a=>(a.base||a.source||a.id)===source);
     const status=statusItems.some(a=>a.status==='connected')?'connected':statusItems.some(a=>a.status==='open-unconnected')?'open-unconnected':statusItems.some(a=>a.status==='closed')?'closed':'not-installed';
     const sessionWidth=maxSessions?Math.max(count?2:0,count/maxSessions*100):0;
-    const tokenMax=Math.max(0,...chartSources.map(x=>Number(bySource[x]?.totals?.input||0)+Number(bySource[x]?.totals?.output||0)));
+    const tokenMax=Math.max(0,...chartSources.map(x=>totalOf(bySource[x]?.totals,x)));
     const tokenWidth=tokenMax?Math.max(tokenCount?2:0,tokenCount/tokenMax*100):0;
-    return '<div class="chart-row" data-source-chart="'+esc(source)+'"><div class="chart-row-head">'+agentLogo(source)+'<span class="chart-name" title="'+esc(meta.name)+'">'+esc(meta.name)+'</span><span class="chart-state">'+(AGENT_STATUS_LABEL[status]||status)+'</span><span class="chart-value">'+count+'</span></div><div class="chart-track" title="目录会话 '+count+'"><div class="chart-fill" style="width:'+sessionWidth.toFixed(2)+'%;--bar-color:'+meta.color+'"></div></div><div class="chart-track" title="Token · in + out '+fmtTok(tokenCount)+'" style="margin-top:3px"><div class="chart-fill" style="width:'+tokenWidth.toFixed(2)+'%;--bar-color:'+meta.color+'"></div></div></div>';
+    return '<div class="chart-row" data-source-chart="'+esc(source)+'"><div class="chart-row-head">'+agentLogo(source)+'<span class="chart-name" title="'+esc(meta.name)+'">'+esc(meta.name)+'</span><span class="chart-state">'+(AGENT_STATUS_LABEL[status]||status)+'</span><span class="chart-value">'+count+'</span></div><div class="chart-track" title="目录会话 '+count+'"><div class="chart-fill" style="width:'+sessionWidth.toFixed(2)+'%;--bar-color:'+meta.color+'"></div></div><div class="chart-track" title="Token · 全量（含缓存读） '+fmtTok(tokenCount)+'" style="margin-top:3px"><div class="chart-fill" style="width:'+tokenWidth.toFixed(2)+'%;--bar-color:'+meta.color+'"></div></div></div>';
   }).join('');
-  const chartHtml='<section class="chart-panel"><h3>目录会话 / Token</h3><div class="chart-caption">上条为主会话数，下条为 Token · in + out</div><div class="chart-list">'+(sessionChart||'<div class="chart-empty">暂无 Agent 数据</div>')+'</div></section>';
+  const chartHtml='<section class="chart-panel"><h3>目录会话 / Token</h3><div class="chart-caption">上条为主会话数，下条为 Token · 全量（含缓存读，与各 Agent 自带计数一致）</div><div class="chart-list">'+(sessionChart||'<div class="chart-empty">暂无 Agent 数据</div>')+'</div></section>';
   const chartEl=$('software-chart');
   if(chartEl.__petLastHtml!==chartHtml){chartEl.innerHTML=chartHtml;chartEl.__petLastHtml=chartHtml}
   const CH_LABEL={plugin:'插件通道',event:'事件流',log:'日志通道',observe:'观察通道（只读健康）'};
@@ -1070,10 +1079,10 @@ function render(snap){
     const src=meta?(meta.source||'dsh'):'dsh';
     const label=esc((meta&&(meta.label||meta.title))||String(window.__TARGET__).slice(0,12));
     tgtEl.innerHTML=src!=='dsh'
-      ?('投递目标：<b>'+label+'</b>（'+esc(tgtHit?srcLabel(tgtHit):src.toUpperCase())+'）· '+(src==='zcode'?'经 App 内置引擎投递':'经 CLI 通道投递')+'（点击恢复自动）')
-      :('投递目标：<b>'+label+'</b>（'+esc(tgtHit?srcLabel(tgtHit):'DSH')+'）（点击恢复自动）');
+      ?('投递目标：<b>'+label+'</b>（'+esc(tgtHit?srcLabel(tgtHit):src.toUpperCase())+'）· '+(src==='zcode'?'经 App 内置引擎投递':'经 CLI 通道投递'))
+      :('投递目标：<b>'+label+'</b>（'+esc(tgtHit?srcLabel(tgtHit):'DSH')+'）');
   }else{
-    tgtEl.innerHTML='投递目标：自动 · 最近活跃主会话';
+    tgtEl.innerHTML='投递目标：请先选择会话';
   }
   const filtered=!!tgt&&!window.__VISIBLE_IDS__.includes(tgt);
   $('target-warning').hidden=!filtered;
@@ -1084,11 +1093,11 @@ function render(snap){
   updateSendButton();
   // ---- 底部：能力位 / hint / 队列（只留未完成：delivered 不再显示） ----
   $('new-session').disabled=!caps.canCreate;
-  $('new-session').title=caps.canCreate?'在当前筛选下新建会话（DSH=插件；其余=终端新窗口）':'新建通道不可用（DSH 需插件；CLI 后端需在 PATH）';
+  $('new-session').title=caps.canCreate?'新建会话并发送首条消息':'新建通道不可用（DSH 需插件；CLI 后端需在 PATH）';
   const ch=snap.inputChannel||{};
-  $('hint').textContent=tgtHit?channelLabel(tgtHit,caps):(ch.mode==='cmd'?('自动投递：'+ch.detail):ch.mode==='cli'?('DSH 进本地队列 · Claude/Codex/Kimi 直接 CLI 投递 · ZCode 经 App 内置引擎投递'):'输入进本地队列 · 可复制投递');
+  $('hint').textContent=!window.__TARGET__?'选择主会话后发送':tgtHit?channelLabel(tgtHit,caps):ch.mode==='cli'?'DSH 插件或 CLI 通道 · 目标待确认':'目标待确认';
   $('hint').title=$('hint').textContent;
-  $('input').placeholder=tgtHit&&!sourceCan(tgtHit.source||'dsh','Input',caps)&&ch.mode!=='cmd'?'输入消息，加入本地队列…':'输入消息…';
+  $('input').placeholder=!window.__TARGET__?'先选会话，再输入消息…':tgtHit&&!sourceCan(tgtHit.source||'dsh','Input',caps)?'输入消息，加入本地队列…':'输入消息…';
   const qs=(snap.inputs||[]).filter(i=>i.status&&i.status!=='delivered');
   // 按会话分队列：targetKey = sess:<id>（既有会话）| new:<source>:<cwd>（投递即新建）
   const qgroups=new Map();
@@ -1100,11 +1109,12 @@ function render(snap){
   };
   $('queue').innerHTML=[...qgroups.entries()].map(([k,list])=>{
     const items=list.map(i=>{
-      const label={queued:'待投递',pending:'待投递',failed:'失败'}[i.status]||'待投递';
+      const label={queued:'待投递',pending:'执行中',failed:'失败'}[i.status]||'待投递';
       const detail=[i.detail,i.sessionId?'目标 '+i.sessionId:'',i.via].filter(Boolean).join(' · ');
-      return '<div class="qitem"><span class="qs '+(i.status==='failed'?'failed':'queued')+'" title="'+esc(detail)+'">'+label+'</span><span class="qt" title="'+esc(i.text)+'">'+esc(i.text)+'</span>'
+      return '<div class="qitem"><span class="qs '+(i.status==='failed'?'failed':'queued')+'">'+label+'</span><span class="qcontent"><span class="qt" title="'+esc(i.text)+'">'+esc(i.text)+'</span>'
+        +'<span class="qdetail" title="'+esc(detail)+'">'+esc(detail||'等待投递通道')+'</span></span>'
         +'<button class="icon-btn qc" data-copy="'+esc(i.text)+'" title="复制消息" aria-label="复制消息">'+icon('copy')+'</button>'
-        +((i.status==='queued'||i.status==='failed')?'<button class="icon-btn qc" data-resend="'+esc(i.id)+'" title="向原目标重发" aria-label="向原目标重发">'+icon('refresh-cw')+'</button>':'')
+        +((i.status==='queued'||i.status==='failed')?'<button class="icon-btn qc" data-resend="'+esc(i.id)+'" data-accepted="'+!!i.accepted+'" title="'+(i.accepted?'可能已被接收；核对后重发':'向原目标重发')+'" aria-label="向原目标重发">'+icon('refresh-cw')+'</button>':'')
         +'<button class="icon-btn qc" data-del="'+esc(i.id)+'" title="删除队列项" aria-label="删除队列项">'+icon('x')+'</button></div>';
     }).join('');
     return '<div class="qgroup"><div class="qgroup-h"><span class="qgroup-t" title="'+esc(k)+'">'+esc(qGroupLabel(k))+'</span><span>×'+list.length+'</span>'
@@ -1134,7 +1144,7 @@ function renderInspector(s,snap){
     +'<button class="btn" data-open="'+esc(id)+'"'+(canOpen?'':' disabled')+' title="'+(canOpen?'打开 / 恢复会话':'该来源没有可用打开通道')+'">'+icon('arrow-up-right')+'打开会话</button>'
     +'<div class="channel">'+esc(channelLabel(s,caps))+'</div>'
     +'<div class="inspector-section"><div class="eyebrow">工作目录</div><div class="path">'+esc(s.cwd||((snap.catalog?.projects||[]).find(p=>p.key===s.projectKey)||{}).cwd||'未提供')+'</div></div>'
-    +(usage?'<div class="inspector-section"><div class="eyebrow">TOKEN / 当前会话</div><dl class="facts"><dt>in</dt><dd>'+fmtTok(usage.input)+'</dd><dt>out</dt><dd>'+fmtTok(usage.output)+'</dd><dt>cache读</dt><dd>'+fmtTok(usage.cacheRead)+'</dd><dt>cache写</dt><dd>'+fmtTok(usage.cacheWrite)+'</dd><dt>请求</dt><dd>'+fmtTok(usage.requests)+'</dd></dl></div>':'')
+    +(usage?'<div class="inspector-section"><div class="eyebrow">TOKEN / 当前会话</div><dl class="facts"><dt>Token 全量</dt><dd>'+fmtTok(totalOf(usage,s.source))+'</dd><dt>in（含缓存读）</dt><dd>'+fmtTok(promptOf(usage,s.source))+'</dd><dt>out</dt><dd>'+fmtTok(usage.output)+'</dd><dt>cache读</dt><dd>'+fmtTok(usage.cacheRead)+'</dd><dt>cache写</dt><dd>'+fmtTok(usage.cacheWrite)+'</dd><dt>请求</dt><dd>'+fmtTok(usage.requests)+'</dd></dl></div>':'')
     +(s.note?'<div class="inspector-section path">'+esc(s.note)+'</div>':'')
     +(event?'<div class="inspector-section"><div class="eyebrow">最近事件</div><div class="path">'+esc(event.type)+'<br>'+esc(new Date(event.ts||snap.ts).toLocaleTimeString('zh-CN'))+'</div></div>':'');
   const el=$('inspector-body');if(el.__petLastHtml!==h){el.innerHTML=h;el.__petLastHtml=h}
@@ -1149,28 +1159,27 @@ async function api(path,payload,method){
   return j;
 }
 async function send(){
-  const el=$('input');const text=el.value.trim();if(!text||window.__SENDING__)return;
-  if(window.__TARGET_MISSING__){notice('目标已不在目录中，请解除目标或等待目录恢复。','warning');return}
-  if(text.length>2000){notice('消息不能超过 2000 个字符。','warning');return}
-  const target=window.__TARGET__||undefined;
+  const el=$('input');const text=el.value.trim();if(!text||!window.__TARGET__||window.__SENDING__)return;
+  if(window.__TARGET_MISSING__||text.length>2000)return;
+  const target=window.__TARGET__;
   window.__SENDING__=true;el.value='';el.readOnly=true;saveDraft();updateSendButton();
   try{
     const j=await api('/api/input',{text,sessionId:target});
-    if(j.ok===false&&j.item)notice(j.item.status==='queued'?'已加入本地队列，等待投递。':'投递失败：'+(j.item.detail||j.item.status),j.item.status==='failed'?'error':'warning');
-    else if(j.ok===false){el.value=text;notice('被本地服务拒绝，输入已恢复：'+(j.detail||j.error||'未知'),'error')}
-    else if(j.ok===true)notice('已送达'+(j.item?.detail?' · '+j.item.detail.slice(0,100):''));
-  }catch(e){el.value=text;notice('发送失败，输入已恢复：'+e.message,'error')}
+    if(j.ok===false&&!j.item)el.value=text;   // 被拒且未入队 → 恢复输入；入队/失败结果由队列区展示
+  }catch(e){el.value=text;console.error('CodeAll send:',e)}
   finally{window.__SENDING__=false;el.readOnly=false;saveDraft();updateSendButton();el.focus()}
 }
 async function openSession(id){
   const s=(window.__ALL_SESSIONS__||[]).find(s=>(s.id||s.sessionId)===id);
-  if(!s||!sourceCan(s.source||'dsh','Open')){notice('该会话没有可用的打开通道。','warning');return}
+  if(!s||!sourceCan(s.source||'dsh','Open'))return;
   if(window.__OPENING__)return;
   window.__OPENING__=true;
   try{
     const j=await api('/api/open',{sessionId:id});
-    notice(j.ok?((j.opened===false?'已定位目录，未打开 Agent':'已打开 / 恢复会话')+' · '+(j.detail||j.via||j.reason||'')):('打开失败：'+(j.detail||j.reason||'未知')),j.ok?'info':'error');
-  }catch(e){notice('打开失败：'+e.message,'error')}
+    // 失败要可见（此前静默吞错 →「点了没反应」）：拒绝原因如实写到状态栏
+    if(j&&j.ok===false)$('note').textContent='打开失败：'+String(j.detail||j.reason||j.code||'未知原因').slice(0,120);
+  }
+  catch(e){$('note').textContent='打开失败：'+String((e&&e.message)||e).slice(0,120);console.error('CodeAll open:',e)}
   finally{window.__OPENING__=false}
 }
 $('send').onclick=send;
@@ -1243,23 +1252,77 @@ $('projects').addEventListener('click',e=>{const t=e.target.closest('[data-proj]
 $('search').addEventListener('input',()=>{window.__SEARCH__=$('search').value;if(window.__SNAP__)render(window.__SNAP__)});
 function updateNewChannel(){
   const source=$('new-source').value||'dsh',caps=(window.__SNAP__||{}).capabilities||{};
-  const available=sourceCan(source,'Create',caps);
-  $('new-dsh-fields').hidden=source!=='dsh';
-  // 模型选择：DSH（插件直传）+ 三家 CLI（claude --model / codex -m / kimi -m，本机 --help 实测）；
-  // ZCode 无启动模型参数（TUI 内 /model 切换），字段隐藏并给出提示
-  const modelSupported=source==='dsh'||source==='claude-code'||source==='codex'||source==='kimi-code';
-  $('new-model-field').hidden=!modelSupported;
-  $('new-first-field').hidden=source==='dsh';   // 首条消息=投递即新建，仅 CLI 后端（DSH 插件新建无消息通道）
+  const registry=(window.__SNAP__||{}).modelRegistry||{},entry=registry[source]||{available:false,models:[],error:'模型注册表不可用'};
+  const previousModel=$('new-model').value;
+  const sameSource=$('new-model').__petModelSource===source;
+  // 不可调用的模型（hidden：切换器没给它们配上上游模型）不出现在下拉里——新建对话框只列能选的
+  const models=(entry.models||[]).filter(m=>!m.hidden);
+  // 模型下拉显示「实际请求名」（mapping.to）：切换器（cc-switch 等）把注册名映射到上游模型时，
+  // 选择与展示都用映射后的名字，注册名只留在 title 里备查（value 不变，CLI 参数照旧）。
+  const modelHtml='<option value="" selected disabled>选择已注册模型</option>'+models.map(m=>{
+    const hint=m.mapping?(' title="'+esc('注册名 '+m.value+' → 实际请求 '+m.mapping.to+'（'+(m.mapping.via||'')+'）')+'"'):'';
+    return '<option value="'+esc(m.value)+'"'+(m.canCreate?'':' disabled')+hint+'>'+esc(m.label||m.value)+(m.canCreate?'':' · 不可新建')+'</option>';
+  }).join('');
+  if($('new-model').__petModelSource!==source||$('new-model').__petLastHtml!==modelHtml){
+    $('new-model').innerHTML=modelHtml;
+    $('new-model').__petModelSource=source;
+    $('new-model').__petLastHtml=modelHtml;
+  }
+  $('new-model').value=sameSource&&models.some(m=>m.value===previousModel&&m.canCreate)?previousModel:'';
+  const selectedModel=models.find(m=>m.value===$('new-model').value)||null;
+  const previousReasoning=$('new-reasoning').value;
+  const efforts=selectedModel?.reasoningEfforts||[];
+  const reasoningModel=source+':'+(selectedModel?.value||'');
+  const sameModel=$('new-reasoning').__petReasoningModel===reasoningModel;
+  $('new-reasoning').__petReasoningModel=reasoningModel;
+  const reasoningHtml='<option value="" selected disabled>'+ (selectedModel?'选择该模型的思考强度':'请先选择模型') +'</option>'+efforts.map(v=>'<option value="'+esc(v)+'">'+esc(v)+'</option>').join('');
+  if($('new-reasoning').__petLastHtml!==reasoningHtml){
+    $('new-reasoning').innerHTML=reasoningHtml;
+    $('new-reasoning').__petLastHtml=reasoningHtml;
+  }
+  $('new-reasoning').value=sameModel&&efforts.includes(previousReasoning)?previousReasoning:'';
+  // 工作目录（必选）：只列该 Agent 自己有主会话的项目文件夹（与 /api/new 的 cwd 校验同一集合）
+  const cwdSel=$('new-cwd');
+  const prevCwd=cwdSel.value;
+  const sameCwdSource=cwdSel.__petCwdSource===source;
+  const cwdChoices=((window.__SNAP__||{}).catalog?.projects||[]).filter(p=>p.cwd&&!p.dead&&(p.sources||[]).includes(source));
+  const cwdHtml='<option value="" selected disabled>'+(cwdChoices.length?'选择该项目文件夹':'该 Agent 暂无项目文件夹')+'</option>'
+    +cwdChoices.map(p=>'<option value="'+esc(p.cwd)+'">'+esc(p.name)+'</option>').join('');
+  if(cwdSel.__petCwdSource!==source||cwdSel.__petLastHtml!==cwdHtml){
+    cwdSel.innerHTML=cwdHtml;
+    cwdSel.__petCwdSource=source;
+    cwdSel.__petLastHtml=cwdHtml;
+  }
+  const curProj=cwdChoices.find(p=>p.key===(window.__PROJECT__||''))||null;
+  cwdSel.value=sameCwdSource&&cwdChoices.some(p=>p.cwd===prevCwd)?prevCwd:(curProj?curProj.cwd:'');
+  const cwdVal=cwdSel.value;
+  cwdSel.title=cwdChoices.length?'仅该 Agent 项目列表中的文件夹':'该 Agent 还没有项目文件夹';
+  const available=sourceCan(source,'Create',caps)&&!!entry.available&&models.some(m=>m.canCreate);
+  $('new-model-field').hidden=false;
+  const mappedCount=models.filter(m=>m.mapping).length;
+  $('new-model-label').textContent=mappedCount?'模型（必选 · 实际请求名）':'模型（必选）';
+  const hiddenCount=(entry.models||[]).filter(m=>m.hidden).length;
+  $('new-model').title=!entry.available?'该 Agent 模型注册表不可用'
+    :(mappedCount?mappedCount+' 个模型已按实际请求配置映射到上游模型名':'Agent 当前注册模型')
+      +(hiddenCount?'，另有 '+hiddenCount+' 个目录模型在当前供应商下没有上游模型，已隐藏':'');
+  $('new-first-field').hidden=false;
   $('new-model-note').hidden=source!=='zcode';
-  if(source==='zcode')$('new-model-note').textContent='ZCode 不支持启动时指定模型：会话打开后在 TUI 里用 /model 切换。';
-  $('new-model').placeholder=source==='dsh'?'沿用 DSH 默认模型':'留空 = '+srcLabel({source})+' 默认 / 上次模型';
-  const seen=[];for(const p of (((window.__SNAP__||{}).catalog||{}).projects)||[])for(const s of (p.sessions||[]))if(s&&s.source===source&&s.model&&!seen.includes(s.model))seen.push(s.model);
-  $('model-options').innerHTML=seen.slice(0,12).map(m=>'<option value="'+esc(m)+'"></option>').join('');
-  $('new-submit').disabled=!available||!!window.__NEW_BUSY__;
+  if(source==='zcode')$('new-model-note').textContent='经 ZCode app-server 管道按当前 provider 注册表创建；登录态 account:* 仅展示，不能经独立管道新建。';
+  const reason=$('new-reasoning').value;
+  const first=$('new-first').value.trim();
+  const busy=!!window.__NEW_BUSY__;
+  $('new-submit').disabled=!available||!selectedModel?.canCreate||!efforts.includes(reason)||!cwdVal||!first||busy;
+  for(const id of ['new-source','new-first'])$(id).disabled=busy;
+  $('new-cwd').disabled=busy||!cwdChoices.length;
+  $('new-model').disabled=busy||!entry.available;
+  $('new-reasoning').disabled=busy||!selectedModel||!efforts.length;
   $('new-channel').textContent=available
-    ?(source==='dsh'?'在 DSH 桌面端插件进程内创建。':source==='zcode'?'在终端经 ZCode 桌面 App 内置的 zcode 程序创建（ZCode 无独立 CLI 产品）。':'经 '+srcLabel({source})+' CLI 在终端创建，桌面端没有官方新建通道。')
-    :(source==='dsh'?'DSH 新建通道不可用：需要授权挂载 Cordis 插件。':source==='zcode'?'ZCode 新建通道不可用：需要安装 ZCode 桌面 App。':'该 CLI 不在可用通道列表中，请检查软件安装与 PATH。');
-  $('new-capabilities').innerHTML=AGENT_TABS.filter(([id])=>id).map(([source,name])=>'<p>'+name+' · '+(sourceCan(source,'Create',caps)?'可新建':source==='dsh'?'需要 DSH 插件授权':source==='zcode'?'需要 ZCode 桌面 App':'CLI 通道不可用')+'</p>').join('');
+    ?(!cwdChoices.length?'该 Agent 暂无项目文件夹：先在对应软件里对话过一次、刷新目录后再新建。':source==='dsh'?'在 DSH 插件进程内创建并发送首条消息。':source==='zcode'?'经 ZCode app-server 创建并精确投递首条消息。':'经 '+srcLabel({source})+' CLI 发送首条消息并创建会话。')
+    :(!sourceCan(source,'Create',caps)?'该 Agent 新建通道不可用。':entry.available?'没有可用于新建的已注册模型。':(entry.error||'模型注册表不可用。'));
+  $('new-capabilities').innerHTML=AGENT_TABS.filter(([id])=>id).map(([id,name])=>{
+    const r=registry[id]||{},can=sourceCan(id,'Create',caps)&&r.available&&(r.models||[]).some(m=>m.canCreate);
+    return '<p>'+name+' · '+(can?'可新建':r.error||'模型注册表不可用')+'</p>';
+  }).join('');
 }
 function showNewDialog(){
   const snap=window.__SNAP__||{};
@@ -1269,9 +1332,15 @@ function showNewDialog(){
   const choices=AGENT_TABS.filter(([id])=>id);
   $('new-source').innerHTML=choices.map(([id,name])=>'<option value="'+id+'">'+name+((id==='dsh'||id==='zcode')?' · 桌面':' · CLI')+'</option>').join('');
   $('new-source').value=window.__AGENT__||(p?.sources||[]).find(id=>sourceCan(id,'Create',caps))||choices.find(([id])=>sourceCan(id,'Create',caps))?.[0]||'dsh';
-  $('new-cwd').value=p?.cwd||'';
-  $('project-paths').innerHTML=projList.filter(p=>p.cwd&&!p.dead).map(p=>'<option value="'+esc(p.cwd)+'">'+esc(p.name)+'</option>').join('');
   $('new-error').hidden=true;
+  $('new-cwd').value='';
+  $('new-cwd').__petCwdSource='';
+  $('new-cwd').__petLastHtml='';
+  $('new-model').value='';
+  $('new-model').__petModelSource='';
+  $('new-model').__petLastHtml='';
+  $('new-reasoning').__petLastHtml='';
+  $('new-reasoning').value='';
   $('new-first').value='';
   updateNewChannel();$('new-dialog').showModal();$('new-source').focus();
 }
@@ -1280,36 +1349,42 @@ async function createSession(e){
   if(window.__NEW_BUSY__)return;
   const source=$('new-source').value,cwd=$('new-cwd').value.trim();
   if(!sourceCan(source,'Create')){updateNewChannel();return}
-  if(cwd&&!cwd.startsWith('/')&&!/^[A-Za-z]:[\\/]/.test(cwd)&&!cwd.startsWith('\\\\')){$('new-error').textContent='工作目录必须是绝对路径。';$('new-error').hidden=false;return}
+  if(!cwd){$('new-error').textContent='请选择该 Agent 的项目文件夹作为工作目录。';$('new-error').hidden=false;return}
+  if(!((window.__SNAP__||{}).catalog?.projects||[]).some(p=>p.cwd===cwd&&!p.dead&&(p.sources||[]).includes(source))){$('new-error').textContent='工作目录只能选该 Agent 项目列表里的文件夹，请重新选择。';$('new-error').hidden=false;return}
   const payload={cwd,source};
-  if($('new-model').value.trim()&&source!=='zcode')payload.model=$('new-model').value.trim();
-  if(source==='dsh'&&$('new-reasoning').value)payload.reasoningEffort=$('new-reasoning').value;
-  // 首条消息（CLI 后端）→ 投递即新建：不开终端，消息直接交给 CLI 的无头新建形态
+  const modelVal=$('new-model').value.trim();
+  if(!modelVal){$('new-error').textContent='请选择 Agent 当前注册的模型。';$('new-error').hidden=false;return}
+  const registry=(window.__SNAP__||{}).modelRegistry?.[source];
+  const selectedModel=(registry?.models||[]).find(m=>m.value===modelVal);
+  if(!registry?.available||!selectedModel?.canCreate){$('new-error').textContent='该模型未注册或不能新建，请重新选择。';$('new-error').hidden=false;return}
+  if(modelVal)payload.model=modelVal;
+  const reasoningEffort=$('new-reasoning').value;
+  if(!reasoningEffort){$('new-error').textContent='请选择思考强度，才能创建会话。';$('new-error').hidden=false;return}
+  if(!selectedModel.reasoningEfforts.includes(reasoningEffort)){$('new-error').textContent='该模型不支持所选思考强度，请重新选择。';$('new-error').hidden=false;return}
+  payload.reasoningEffort=reasoningEffort;
   const first=$('new-first').value.trim();
-  if(source!=='dsh'&&first){
-    window.__NEW_BUSY__=true;updateNewChannel();$('new-error').hidden=true;
-    try{
-      const j=await api('/api/input',{text:first.slice(0,2000),sessionId:'new:'+source+':'+cwd,model:payload.model||undefined});
-      if(!j.ok)throw new Error((j.item&&j.item.detail)||j.error||'未送达');
-      $('new-dialog').close();
-      notice('投递即新建 · '+srcLabel({source})+' · '+((j.item&&j.item.detail)||'已启动')+'，会话将在几秒内出现。');
-      await refreshCatalog(false);
-    }catch(err){$('new-error').textContent='投递即新建失败：'+err.message;$('new-error').hidden=false}
-    finally{window.__NEW_BUSY__=false;updateNewChannel()}
-    return;
-  }
+  if(!first){$('new-error').textContent='请输入首条消息，才能创建会话。';$('new-error').hidden=false;return}
+  payload.text=first;
   window.__NEW_BUSY__=true;updateNewChannel();$('new-error').hidden=true;
   try{
     const j=await api('/api/new',payload);
-    if(!j.ok)throw new Error(j.detail||j.reason||j.error||'未创建');
+    if(!j.ok&&j.sessionId){
+      $('new-dialog').close();
+      window.__QUEUE_OPEN__=true;
+      await refreshCatalog();
+      return;
+    }
+    if(!j.ok)throw new Error(j.detail||j.item?.detail||j.reason||j.error||'未创建');
     $('new-dialog').close();
-    notice('新建会话 · '+srcLabel({source})+' · '+(j.via||'已创建')+'，目录将在几秒内更新。');
-    await refreshCatalog(false);
+    await refreshCatalog();
   }catch(err){$('new-error').textContent='新建失败：'+err.message;$('new-error').hidden=false}
   finally{window.__NEW_BUSY__=false;updateNewChannel()}
 }
 $('new-session').onclick=showNewDialog;
 $('new-source').addEventListener('change',updateNewChannel);
+$('new-model').addEventListener('change',updateNewChannel);
+$('new-reasoning').addEventListener('change',updateNewChannel);
+$('new-first').addEventListener('input',updateNewChannel);
 $('new-form').addEventListener('submit',createSession);
 for(const id of ['new-close','new-cancel'])$(id).onclick=()=>{$('new-dialog').close()};
 function clearFilters(){
@@ -1326,9 +1401,9 @@ $('sessions').addEventListener('click',e=>{
   if(e.target.closest('[data-clear-filters]')){clearFilters();return}
   const op=e.target.closest('[data-open]');if(op){if(!op.disabled)openSession(op.getAttribute('data-open'));return}
   const u=e.target.closest('[data-unhide]');
-  if(u){e.stopPropagation();const id=u.getAttribute('data-unhide');delete window.__HIDDEN__[id];writePreference('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__));if(window.__SNAP__)render(window.__SNAP__);notice('已恢复显示该会话');return}
+  if(u){e.stopPropagation();const id=u.getAttribute('data-unhide');delete window.__HIDDEN__[id];writePreference('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__));if(window.__SNAP__)render(window.__SNAP__);return}
   const h=e.target.closest('[data-hide]');
-  if(h){e.stopPropagation();const id=h.getAttribute('data-hide');window.__HIDDEN__[id]=Date.now();writePreference('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__));if(window.__SNAP__)render(window.__SNAP__);notice('已隐藏，有新活动时自动恢复。');return}
+  if(h){e.stopPropagation();const id=h.getAttribute('data-hide');window.__HIDDEN__[id]=Date.now();writePreference('agent-pet-manual-hidden',JSON.stringify(window.__HIDDEN__));if(window.__SNAP__)render(window.__SNAP__);return}
   const t=e.target.closest('[data-session]');
   if(!t)return;
   selectSession(t.getAttribute('data-session'));
@@ -1366,12 +1441,12 @@ $('status-cards').addEventListener('click',e=>{
   window.__VIEW__='sessions';window.__AGENT__=b.getAttribute('data-software-source');window.__VARIANT__=b.getAttribute('data-software-variant')||'';window.__PROJECT__='';window.__FILTER__='all';window.__SEARCH__='';$('search').value='';
   if(window.__SNAP__)render(window.__SNAP__);
 });
-async function refreshCatalog(showFeedback=true){
-  try{await api('/api/catalog?refresh=1',undefined,'GET');const snap=await api('/api/state',undefined,'GET');render(snap);if(showFeedback)notice('会话目录已刷新。')}
-  catch(e){notice('刷新失败：'+e.message,'error')}
+async function refreshCatalog(){
+  try{await api('/api/catalog?refresh=1',undefined,'GET');const snap=await api('/api/state',undefined,'GET');render(snap)}
+  catch(e){console.error('CodeAll refresh:',e)}
 }
 $('refresh-data').onclick=()=>refreshCatalog();
-$('status-refresh').onclick=async()=>{try{const j=await api('/api/agents',undefined,'GET');if(window.__SNAP__){window.__SNAP__.agents=j.agents||[];render(window.__SNAP__)}notice('软件状态已更新。')}catch(e){notice('软件状态读取失败：'+e.message,'error')}};
+$('status-refresh').onclick=async()=>{try{const j=await api('/api/agents',undefined,'GET');if(window.__SNAP__){window.__SNAP__.agents=j.agents||[];render(window.__SNAP__)}}catch(e){console.error('CodeAll agents:',e)}};
 $('usage-refresh').onclick=async()=>{
   if(window.__USAGE_REFRESHING__)return;
   window.__USAGE_REFRESHING__=true;$('usage-refresh').disabled=true;
@@ -1379,40 +1454,45 @@ $('usage-refresh').onclick=async()=>{
     const j=await api('/api/usage?refresh=1',undefined,'GET');
     if(j?.ok===false)throw new Error(j.error||'重新扫描失败');
     await loadUsageCalendar(true);
-    notice('已请求重新扫描用量。');
-  }catch(e){notice('用量刷新失败：'+e.message,'error')}
+  }catch(e){console.error('CodeAll usage refresh:',e)}
   finally{window.__USAGE_REFRESHING__=false;if(window.__SNAP__)render(window.__SNAP__)}
 };
 $('queue-toggle').onclick=function(){window.__QUEUE_OPEN__=!window.__QUEUE_OPEN__;if(window.__SNAP__)render(window.__SNAP__)};
 $('queue-clear').onclick=async function(){
   if(!window.confirm('清空本地投递队列？这不会撤回已送达的消息。'))return;
-  try{const j=await api('/api/queue/clear',{});if(!j.ok)throw new Error(j.detail||j.error||'未清空');notice('本地队列已清空。')}
-  catch(e){notice('清空失败：'+e.message,'error')}
+  try{const j=await api('/api/queue/clear',{});if(!j.ok)throw new Error(j.detail||j.error||'未清空')}
+  catch(e){console.error('CodeAll queue clear:',e)}
 };
 async function copyText(text){
   if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return}
   const el=document.createElement('textarea');el.value=text;el.style.position='fixed';el.style.opacity='0';document.body.appendChild(el);el.select();
   try{if(!document.execCommand('copy'))throw new Error('剪贴板不可用')}finally{el.remove()}
 }
-// 队列操作（只对未完成项：复制/重发/删除/按会话清空）
+// 队列操作（只对未完成项：复制/重发/删除/按会话清空——组清空走服务端全量删除）
 $('queue').addEventListener('click',async e=>{
   const cg=e.target.closest('[data-clear-group]');
   if(cg){
     const k=cg.getAttribute('data-clear-group');
-    const items=((window.__SNAP__||{}).inputs||[]).filter(i=>i.status&&i.status!=='delivered'&&(i.targetKey||(i.sessionId?'sess:'+i.sessionId:'new:dsh:-'))===k);
-    if(!items.length)return;
     try{
-      for(const i of items)await api('/api/input/'+encodeURIComponent(i.id),undefined,'DELETE');
-      notice('已清空该会话的队列（'+items.length+' 条）。');
-    }catch(err){notice('清空失败：'+err.message,'error')}
+      const j=await api('/api/queue/group/clear',{key:k});
+      if(!j.ok)throw new Error(j.error||'未清空');
+    }catch(err){console.error('CodeAll queue group clear:',err)}
     return;
   }
   const c=e.target.closest('[data-copy]');
-  if(c){try{await copyText(c.getAttribute('data-copy'));notice('消息已复制。')}catch(err){notice('复制失败：'+err.message,'error')}return}
+  if(c){try{await copyText(c.getAttribute('data-copy'))}catch(err){console.error('CodeAll copy:',err)}return}
   const del=e.target.closest('[data-del]');
-  if(del){try{const j=await api('/api/input/'+encodeURIComponent(del.getAttribute('data-del')),undefined,'DELETE');if(!j.ok)throw new Error(j.error||'未删除');notice('队列项已删除。')}catch(err){notice('删除失败：'+err.message,'error')}return}
+  if(del){try{const j=await api('/api/input/'+encodeURIComponent(del.getAttribute('data-del')),undefined,'DELETE');if(!j.ok)throw new Error(j.error||'未删除')}catch(err){console.error('CodeAll queue delete:',err)}return}
   const rs=e.target.closest('[data-resend]');
-  if(rs){if(rs.disabled)return;rs.disabled=true;const id=rs.getAttribute('data-resend');try{const j=await api('/api/input/'+encodeURIComponent(id)+'/resend',{});notice(j.ok?'重发已送达。':'重发未送达：'+(j.item?.detail||j.item?.status||j.detail||j.error||'未知'),j.ok?'info':'warning')}catch(err){notice('重发失败：'+err.message,'error')}finally{rs.disabled=false}return}
+  if(rs){
+    if(rs.disabled)return;
+    const accepted=rs.getAttribute('data-accepted')==='true';
+    if(accepted&&!window.confirm('消息可能已送入目标会话。请先核对目标会话，确认仍要重发？'))return;
+    rs.disabled=true;const id=rs.getAttribute('data-resend');
+    try{const j=await api('/api/input/'+encodeURIComponent(id)+'/resend',{confirm:accepted});if(j.ok===false)console.error('CodeAll resend:',j.item?.detail||j.item?.status||j.detail||j.error||'未送达')}
+    catch(err){console.error('CodeAll resend:',err)}finally{rs.disabled=false}
+    return;
+  }
 });
 $('toggle-pet').onclick=async function(){
   // 跨窗口操作 main（迷你条）：优先 Tauri 全局 API；托盘「显示悬浮窗」是保底路径
@@ -1422,7 +1502,7 @@ $('toggle-pet').onclick=async function(){
     if(T&&T.webviewWindow&&T.webviewWindow.WebviewWindow){const w=await T.webviewWindow.WebviewWindow.getByLabel('main');if(w){const visible=await w.isVisible();await (visible?w.hide():w.show());icon.setAttribute('aria-pressed',String(!visible));return}}
     if(window.__TAURI_INTERNALS__&&window.__TAURI_INTERNALS__.invoke){const invoke=window.__TAURI_INTERNALS__.invoke;const visible=await invoke('plugin:window|is_visible',{label:'main'});await invoke(visible?'plugin:window|hide':'plugin:window|show',{label:'main'});icon.setAttribute('aria-pressed',String(!visible));return}
     window.open('/mini.html','codeall-mini','width=560,height=80');
-  }catch(e){notice('迷你条操作失败：'+e.message,'error')}
+  }catch(e){console.error('CodeAll toggle pet:',e)}
 };
 document.addEventListener('keydown',e=>{
   const key=e.key.toLowerCase();
@@ -1436,7 +1516,7 @@ document.addEventListener('keydown',e=>{
 let es=null;
 function connect(){
   es=new EventSource('/api/stream');
-  es.onmessage=e=>{try{window.__CONNECTED__=true;render(JSON.parse(e.data))}catch(err){console.error('CodeAll render:',err);notice('状态数据读取失败：'+err.message,'error')}};
+  es.onmessage=e=>{try{window.__CONNECTED__=true;render(JSON.parse(e.data))}catch(err){console.error('CodeAll render:',err)}};
   es.onerror=function(){window.__CONNECTED__=false;if(window.__SNAP__)render(window.__SNAP__);$('hint').textContent='与本地服务断开，3s 后重连…';es.close();setTimeout(connect,3000)};
 }
 connect();

@@ -1,6 +1,164 @@
 # 变更日志（文档与契约）
 
+## 2026-10-10
+### v0.1.0 收口：V05 崩溃窗口落盘 + V01–V06 实机验收全部通过
+
+- **V05 代码缺口（CORE-4，唯一写代码项）**：`demo/framed.mjs` 此前 CLI / DSH 插件 / 投递即新建三条路径都是 `await` 投递完成后才落盘——执行中被 kill -9/断电时消息可能已送达而队列无痕（插件 4s 超时窗口尤甚）。修复：`persistInput`（只追加）改为 **`upsertInput`（按 id 原位替换）**，四条真实投递路径（新建、CLI 无头、DSH 插件、失败重试原位置 pending）**执行前先落盘 pending**，终态原位更新——同一消息不产生第二条队列记录；磁盘不可写时内存态仍原位可见（维持 qa M2 口径）。重启时残留 pending 由既有启动迁移标「结果未确认」。
+- **合成回归 `demo/test-crash-window.mjs`（新）**：隔离 HOME + mock CLI（`mock-cli-create.cjs` 新增 `MOCK_CLI_MODE=hang|early-fail`，默认行为不变）+ 假插件 socket，四场景：A CLI 续会话投递中 kill -9；B 插件 4s 窗口内 kill -9（假插件已收到请求=「可能已送达」）；C 投递即新建执行中 kill -9；D cli-exit 快速失败可辨（V04）+ 重发执行中 kill -9。断言：重启后条目在、failed + 「结果未确认」、原文/目标/来源保留、文件内单条、重启后不自动重发。全套隔离回归 16 套通过（界面行为 34/34）。
+- **实机验收（专用测试会话 + 最小自检消息，证据 [qa/v0.1.0-acceptance-2026-10-10.md](../qa/v0.1.0-acceptance-2026-10-10.md)）**：**V01** 三 CLI（claude 94226702… / codex 01a124e2… / kimi session_b344fd88…）各完成「新建+首条送达+第二轮同 ID 上下文连续」，回复与转录/rollout/wire 增量逐字核对；**V02** 同 cwd 双会话标记只进 A（B 0 处），未知 ID 404、无目标 400；**V03** DSH 专用会话（session-d5311040…，flash·low）两轮 plugin:agents.followup，回复回流 turn/end(completed)、目录侧 state=idle；**V04** cli-exit 合成 + 服务重启（队列/目录/插件恢复，重启后投递 "recovered"）；**V06** 含当日修复的新包（CodeAll.app 121.78 MiB + DMG 39.84 MiB）干净安装，包内 Node（v24.18.0）自起服务，四源注册表 + 插件在线，包服务投递闭环（"packaged"）。
+- **观察项（登记，不阻塞）**：① claude-code 无头新建后 1–4 分钟内 `--resume` 偶发 `No conversation found`（CLI 侧会话索引未就绪；本轮实测 T+76s 失败、T+4min 起正常，手动/净化 env 均正常）——队列如实失败，confirm 重发即成，v0.2 调研就绪信号；② `/api/new` dsh 成功路径 item.accepted=false 与 CLI 路径不一致（审计字段，v0.1.x 小修）。
+- **文档**：docs/23 §3 CORE-1..5 全部置为已完成、§4 V01–V06 证据落位、§5 测试清单补 test-crash-window 并记录 2026-10-10 收口轮结论。
+
+## 2026-10-09
+### 用量口径统一：Token 改为「全量」口径（用户报障：本对话十几兆，面板只显示 789,088）
+
+- **现象**：用户对比 DSH 自身计数（本对话约 15M tokens）与面板 DSH 当日值（789,088，差 ~19 倍），怀疑计数器坏了。
+- **定位（不是计数错，是口径错）**：DSH/Claude/Kimi 的 `inputTokens` **不含缓存读**（Anthropic 式），Codex/ZCode 的 `input` **含缓存读**（OpenAI 式）。旧口径「Token = in + out」把两种语义混在一列：本对话实测 in 121,081 + out 106,812 = 227,893，而 cacheRead 15,139,712 完全不计 —— 而各 Agent 自己的计数器（与 DSH 官方投影 `uncachedInput+cacheRead+output+cacheWrite` 一致）是**含缓存读**的。
+- **修复（采集器 + 界面同源）**：`adapters/usage-collect.mjs` 的 `decorate()` 新增 `promptTokens`（= 全量 prompt，含缓存读：DSH/Claude/Kimi = input + cacheRead；Codex/ZCode = input）与 `totalTokens`（= promptTokens + cacheWrite + output）；`usageCalendar()` 的**日桶 tokens 改为 totalTokens**（另透出 promptTokens/freshInput/inputIncludesCache），`usageOverview` 的 totals 与跨源合并模型行同样带派生值，`serializeUsageScan` 一致。界面（日历日值、来源对比图、chips、各表 in 列、软件页 Token、会话详情）统一走 `promptOf()/totalOf()`：**in（含缓存读）/ Token 全量**，与各 Agent 自带计数可比。
+- **实测（本机，改后）**：DSH 当日 tokens 802,965 → **60,138,740**（全量）；Kimi 当日 212,381 → 1,688,221；Codex/ZCode 不变（其 input 本就含 cache）；「全部」DSH 4.5M → 335.7M、Claude 73.9M → 2,109.5M、Kimi 3.85M → 128.3M。命中率、cache 分项、freshInput 均保留，恒等式 Σ日桶 tokens = 源 totalTokens（MU10 断言）。
+- **对账**：新增 **UCE5**（两种 input 语义的折算都对）、**MU10**（五源 Σ日历日桶 tokens = 「全部」totalTokens）；UI fixture/断言同步（in 列改「in（含缓存读）」、图表标题改「Token · 全量（含缓存读）」、「Token 全量」chip）。
+
+## 2026-10-09
+### 模型名映射（续）：请求参数也用实际请求名 + 不可调用的目录项从下拉隐藏（用户追问「为什么还带 Claude 系名」／「直接隐藏，保证简洁」）
+
+- **为什么「请求名」里还有 `claude-*`**：cc-switch 的**本地代理接管**模式就是这么写的——tier 别名进 `ANTHROPIC_DEFAULT_*_MODEL`、真正上游模型进 `*_MODEL_NAME`，`ANTHROPIC_BASE_URL` 指向 `http://127.0.0.1:15721`。Claude Code 发出的 `claude-opus-5` 只存在于「CLI → 本地代理」这一跳，代理改写后上游收到 `glm-5.3-flash`（本机代理库实测：`req=claude-opus-5 → upstream=glm-5.3-flash`，200）。上游其实没有 Claude 模型，Claude 系名只是客户端一侧的路由键。
+- **改法一：请求参数直接用实际请求名**（`adapters/model-map.mjs` 的 `cliModel` 不再区分 routed/direct）——`claude --model glm-5.3-flash`、`codex -m glm-5.3`。上一版为「怕切换器路由表失配」保留别名属过度保守；本机实测背书：代理日志中 `app_type=claude` 直传 `glm-5.3-flash` 76 次、`glm-5.3` 6 次，全部 200。
+- **改法二：切换器换掉整张上游模型表时，未映射的目录项不再假装可新建**（用户报障：只配了 GLM 供应商，下拉里却仍列着 Opus 5.5 / Sonnet 5.5 / Fable 5.1 / Opus 4.8…，选中必然打不通）。`loadModelMap` 新增 `restrict`（映射后的实际模型名不属于该目录的模型家族，如 Claude 目录 → `glm-*`）：未映射项置 `canCreate:false` + `unavailableReason`（「该模型没有映射到当前供应商的上游模型」），可用的映射项排到下拉最前；`/api/state` 的 `modelRegistry.mapping[<源>].restrict` 可核对，切回官方供应商后自动恢复。
+- **改法三（用户定向：简洁优先）**：这些不可调用的目录项不再以下拉里灰着的形式出现——注册表给它们打 `hidden:true`（仍留在 `/api/state` 供诊断与队列重试给出准确原因），新建对话框直接过滤掉；工具提示改为「…另有 N 个目录模型在当前供应商下没有上游模型，已隐藏」。ZCode 登录态 `account:*` 的「仅展示、不可新建」是既有且被测的独立行为，维持不变。
+- **回归**：`demo/test-model-map.mjs` 增补断言（请求参数=实际请求名、未映射项 `hidden`、`restrict` 透出、切换器路由表口径）；`demo/test-window-actions.mjs` 增补「hidden 项不进下拉」（行为回归 34/34）；17 套隔离测试全部通过。
+
+## 2026-10-09
+### 用量口径修复：Codex「全部」总量与日历日桶对不上（用户报障）
+
+- **现象（用户截图）**：同一页面上「来源对比」图表（全部时间）Codex 459.4M / ZCode 3.65B / DSH 4.1M / Claude 73.9M，而日历当日明细 Codex ≈55.5M / ZCode 164.2M / DSH 374,905 / Claude「—」；用户判断「两个数据不统一，且可能影响日历桶的 tokens 统计」。
+- **定位**：① 窗口不同——图表按所选时间范围（默认「全部时间」）聚合，日历明细是**单日**（默认今天），两者本就不可相加比对，界面上却没有写清窗口；② 真正的账目 bug 只在 Codex：`collectCodexFile` 的会话扁平值取「最后一条 `total_token_usage`」，日桶却取 Σ`last_token_usage`，两个口径互不相容（其余四源 Σ日桶 ≡ 总量，逐字段精确）。
+- **证据（本机 43 个 rollout 独立反读）**：Σ各文件末条累计 in 456,381,625 vs Σ日桶 394,726,516（差 62.2M）。其中 Σ「继承前缀」= 93.5M——子代理/fork rollout 的首条累计 = 父会话当时累计（实测子 01a000c0 的 C0 = 20,258,011 ≈ 父 019ffed3 当时 20,273,467），逐文件求和把父会话 token 重复计入；Σlast 另被重复上报抬高 8.8%（298 条「累计值不动」的 token_count 事件，例如同一 last=141,720 连报 3 条）。
+- **修复**：`adapters/usage-collect.mjs` Codex 改为**累计值差分归日**——首条事件只认自身 `last_token_usage`（新会话实测 C0 == L0；forked 实测 L0 = 0，前缀是父会话的账），其后每条取 Δ累计（负值截 0，重复上报天然按 0 计）；`flat` 由逐事件归因累加得到，**Σ日桶 ≡ 源总量**由构造保证；`foldFile` 新增 `dayIdentityMismatched` 恒等式自检（五源通用）。
+- **对账（修复后本机实测）**：五源 Σ日桶 逐字段 == 总量；Codex in 363,559,612（旧 456,381,625，排除继承前缀 92,822,013）、requests 3,689 不变；重复上报 298 条只计请求不计 token。**MU9** 升级为「五源全部精确 + 自检零失配」，**MU2** 改为独立反读「首条 last + Δ累计」，新增 **UC-B3/UC-B4** fixture（fork 继承前缀 + 重复上报：旧口径 4600 → 新口径 2600）。
+- **顺带修**：MU3 只数「最新一条 wire」——子代理 wire 比 main 新时必然对不上（实测 main 6 行 + agent-0 12 行 = 18，却拿 6 去比），改为会话全部 wire 求和；界面把窗口写进图表标题（「全部时间」/「当日」…）并注明日历是单日口径，Codex 归日说明改为「按会话累计差分归日（Σ日桶=全量）」。
+- **生效范围**：修复在源码；`/Applications/CodeAll.app` 内是 11:36 的旧构建，需重新打包（`apps/shell/run.sh --install`）或从源码起服务才生效（README「运维口径」）。
+
+## 2026-10-09
+### 模型名按「实际请求名」展示（用户定向：Codex CLI / Claude Code CLI 经 cc-switch 映射）
+
+- **问题**：新建会话的模型下拉与会话模型列用的是 CLI 侧注册名。切换器（cc-switch 等）会把它映射成上游真实模型——Claude Code 本机实测注册名 `claude-opus-5` 实际请求 `glm-5.3-flash`（`claude-sonnet-5`→`glm-5.2`、`claude-fable-5`→`glm-5.3`），界面上看到的却是那个不存在的名字。
+- **新增 `adapters/model-map.mjs`**（只读、30s 缓存、任何失败降级为「无映射 → 原名」，不外泄凭据）：按「实际请求配置」解析注册名 → 实际请求名，优先级 ① `~/.agent-pet/model-map.json` 显式覆盖（`{"codex":{"gpt-6-sol":"glm-5.3"}}`）② Claude Code：`$CLAUDE_CONFIG_DIR|~/.claude/settings.json` 的 env 成对变量（`ANTHROPIC_DEFAULT_<TIER>_MODEL` ↔ `_MODEL_NAME`；只有 `_MODEL` 时按档位记 direct——直连模式下该值本身就是请求名）③ Codex：`~/.codex/config.toml`（model/model_provider/base_url，识别供应商是否指向本地路由代理）+ cc-switch 当前激活供应商（`~/.cc-switch/cc-switch.db` 只读）的 meta 路由表与 settings_config 的 env 成对变量。切换器 DB 里存的正文会过期（本机实测存的 `gpt-5.6-terra` vs 现网 `gpt-6-sol`），只作诊断透出、**绝不参与映射**（`demo/test-model-map.mjs` F 场景锁死）。
+- **注册表**（adapters/model-registry.mjs）：`value` 仍是注册标识（选择/校验/CLI 参数的键），`label`/`requestModel` 换成实际请求名，附 `mapping{from,to,mode,via}`；**routed 模式 CLI 参数不变**（Claude Code 请求里带的是 `ANTHROPIC_DEFAULT_*_MODEL` 的值，换成上游名会让切换器路由表失配），direct 模式才替换 `cliModel`。目录缓存键并入映射签名，配置文件一变下一轮快照即重算。
+- **会话与用量展示**（adapters/codex-adapter.mjs、adapters/claude-code-adapter.mjs、demo/window.html）：会话 `model` 输出映射后的实际请求名、原名留在 `modelRaw`（`metaSources.model` 追加指针）；新建对话框下拉按实际请求名显示并加「模型（必选 · 实际请求名）」标注、title 给出「注册名 → 实际请求」；用量表模型列同口径（合并表跨来源映射不一致时保留记录原名）。
+- **回归**：新增 `demo/test-model-map.mjs`（隔离 HOME：Claude 路由/直连两种口径、Codex 覆盖文件与切换器路由表、过期 model 不得污染、无映射降级、凭证不外泄）；全套隔离测试通过（test-model-registry / test-model-map / test-cli-create / test-input-api / test-zcode-control / test-window / test-window-actions / test-ui-fixture / test-ui-dom / test-usage-calendar / test-mini / test-open-routing / test-follow-budget / test-service-hardening / check-fixtures）。
+- **本机实测**：7799 `/api/state` 的 `modelRegistry.mapping['claude-code']` 4 条，`claude-opus-5 → glm-5.3-flash`；Codex 侧本机**没有任何映射产物**（`~/.codex/config.toml` 只有 `model="gpt-6-sol"`，cc-switch 的 codex 供应商 meta 无路由表），`mapping.codex.requestConfig` 如实透出 `model/providerId/baseUrl/catalogFile`（`baseUrl` 去凭据与查询串，测试锁死）——要把它也显示成 GLM，需在 cc-switch 里开启该供应商的模型映射（路由表/本地代理接管）或写一份覆盖文件。
+- **上线**：5 个改动文件按打包清单热更进 `/Applications/CodeAll.app/Contents/Resources/app/`（adapters 四个 + demo/window.html），App 已重启并在 7799 实测到上述映射。
+
+## 2026-10-09
+### 审查修复（续）：服务崩溃路径与心跳加固（qa M2/M4）
+
+- **M2 日志/落盘失败不再带崩服务（已修）**：`adapters/cli-control.mjs` 三处管道日志打开改为容错助手 `openControlLog`——`mkdirSync` 同步抛错与 `createWriteStream` 的**异步 open 失败**都降级为「无日志照样投递」，不再冒泡成未处理错误；`demo/framed.mjs` 的 `settleZcodeInput` 落盘包 try（失败时内存态照常更新）。另加进程级兜底：`unhandledRejection` / `uncaughtException` 记 stderr 后**保持存活**（本地服务无自愈——外壳只在启动时 ensure_server，运行中崩溃=全源中断且必须重启 App）。
+- **实测证据**：修复前把 `~/.agent-pet/cli-control` 占为普通文件再触发 ZCode 新建 → `EEXIST: mkdir` 未处理异常 → 服务进程退出、HTTP 无响应；修复后同场景返回 202 且服务继续可查。
+- **M4 SSE 心跳与 DSH 日志解耦（已修）**：`setInterval(broadcast, 2000)` 从 `startFollower()`（无 DSH 会话日志时提前返回）移到 `listen()` 回调——只装 CLI、没有 DSH 会话的机器上，计时/相对时间不再冻结。
+- **回归**：新增 `demo/test-service-hardening.mjs`（隔离 HOME + mock zcode：日志目录不可写不崩 + 无 DSH 日志时 3.2s 内至少 2 帧 SSE）。全套 12 个隔离测试通过。
+- 中危项处置口径不变：ZCode 死代码（M1）、请求体上限（M3）、外壳注入清理（M5）留在 [docs/22](./22-post-release-roadmap.md) 的 DEF 登记；本轮只修了与 V04/V06 有实质关联的两项。
+
+## 2026-10-09
+### 审查修复：打开路由按来源分流 + 跟随器文件预算 LRU 化（qa H1/H2）
+
+- **H1 `/api/open` 路由颠倒（已修）**：此前 `if (plugin.available)` 分支不区分来源，插件在线时 Claude/Codex/Kimi/ZCode 会话的「打开」全被 `POST /open` 给 DSH 插件（必然 `open-rejected`），CLI 续接分支永远轮不到；界面 `openSession` 又吞掉失败，表现为点击无反应。实测复现：同一 Claude 会话，插件在线 → `via:'plugin' ok:false` 且 osascript 未执行；插件离线 → `via:'terminal' opened:true`。**修复**：`framed.mjs` 先 `resolveSessionAny` 定位再分发——CLI 源固定走 Terminal 续接，仅 DSH 会话与目录外 ID 交插件（保留旧回落语义）。`window.html` 打开失败原因写入状态栏。
+- **H2 跟随器 80 文件预算无淘汰（已修）**：`followClaudeLogs/followCodexLogs/followKimiLogs` 触顶后直接 `return null` 且不淘汰，`listFiles()` 又按 readdir 顺序（非 mtime）占位——本机 162 个 Claude 转录里只有任意 80 个能产生实时事件，之后新建的会话文件永不进入实时跟随（「投递即新建」的新会话必中），影响「状态及回复摘要回流」必保口径与迷你条显示。实测复现：85 文件 → 恰好 80 个有事件、新会话不跟随；79 文件 → 新会话可跟随。**修复**：pump 先 stat 并按 mtime 倒序准入；触顶淘汰最久未修改的跟随项（仅当新文件更新才淘汰，防抖动）；被淘汰者记忆 offset，再活跃时从淘汰点续读，补齐缺席期间的增量。
+- **回归**：新增 `demo/test-open-routing.mjs`（隔离 HOME + 假插件 socket + osascript 桩：CLI 走 Terminal、DSH/未知 ID 交插件）与 `demo/test-follow-budget.mjs`（claude/codex/kimi 三源：触顶跟随 mtime 最新 80、新会话仍被跟随、淘汰者复活跃续读、未触顶不淘汰）。全套隔离测试（cli-create / input-api / zcode-control / model-registry / window-actions / window / mini / usage-calendar / check-fixtures + 两个新测试）通过。
+- **记录（未修，转后续任务）**：ZCode 投递串行链把 HTTP 响应也串行化——同会话第二条消息要等上一条回合终态（mock 实测 8730ms vs 基线 ~150ms），且链为全局，跨会话也排队。按范围属实验能力、不阻塞 v0.1.0，已登记为后续任务 [docs/22 DEF-1](./22-post-release-roadmap.md)（含修复方向与验收口径）；`demo/README.md` 已按现状（按来源分流）更新 API 表。
+
+## 2026-10-09
+### DSH 新建支持选任意注册模型（用户报障：新建会话选不到 pro）
+- **原因**：① 桌宠 DSH 注册表只取 `agentDefaultModel.currentSelection()` 单条当前选择（跟踪而非目录）；② 插件 `createSession` 要求请求模型与当前选择**完全相等**，否则 `model-selection-changed` 拒绝；③ 未接 DSH 真正的模型目录（`ctx.llm.listProviders/listModels/resolveModelInfo`，桌面 UI 的同一份投影）与按会话选模型 API（`sessionController.selectModel`）。
+- **插件**（plugins/dsh-pet）：`/health` 增 `modelCatalog`（provider×model×名称×思考档位，30s 缓存 + 后台刷新不阻塞 1.2s 探测窗口；只透元数据不碰凭证）；`createSession` 去掉强相等校验——有 sessionController 时 create → `selectModel({sessionId,provider,model,reasoningEffort})`（会话级安装、下一条消息生效；DSH 自身语义会同时存为新默认），失败如实返回 `model-unavailable` + 已建 sessionId；无 controller 的回退路径把所选模型直接放进 `agents.create` 的 `agentOptions`。
+- **注册表**（adapters/model-registry.mjs + demo/framed.mjs）：`dshSource` 优先用 `plugin.info.modelCatalog` 构建多模型列表（无档位模型展示但不可新建），目录不可用时回退单条当前选择；framed 把目录传入并进注册表缓存键。
+- **验证**：DSH 重启后 `/health` 实测 4 模型（deepseek-official/account × deepseek-flash/v4-pro，档位 off/low/high/max，default=high）；宠物 7799 注册表 `via: plugin:llm-catalog` 逐条一致；UI 对话框模型下拉 4 项、pro 可选、思考强度为真档位；`/diag` 确认运行态 `sessionController.selectModel` 在册。test-model-registry 新增目录/selectModel/失败保留 sessionId 断言，11 套回归全过。真机新建（选 pro 并投递首条消息）留给用户在界面点按验证。
+
+## 2026-10-09
+### 新建会话工作目录约束（用户定向：只允许当前 Agent 软件内部的项目文件夹）
+- 新建对话框的「工作目录」由自由输入（候选含全部项目）改为**必选下拉**：只列目录快照里 `sources` 含当前所选 Agent 的项目文件夹（`cwd` 存在且非 dead）；打开对话框时若左侧当前项目属于该 Agent 则预选，否则留空强制选择。切换 Agent 后工作目录随新来源重算（与模型选择同一清空口径）。
+- 服务端同步收紧：`framed.mjs` 新增 `validateCreateCwd`，`/api/new`、`/api/input` 的 `new:<source>:<cwd>` 兼容入口与队列重试（deliverInput 执行期）三处统一校验——cwd 必填、必须命中该 Agent 的已知项目文件夹；错误码 `cwd-required` / `cwd-not-registered`（带可选项提示）。不再接受任意绝对路径，`/api/new` 的 DSH 分支亦移除对不存在目录的 mkdir。
+- 回归：test-window-actions 33/33（新增：来源过滤的可选项、未选目录守卫、当前项目预选）；test-input-api 新增 cwd-required / cwd-not-registered / 旧 `new:` 入口拒绝断言；`writeModelFixture` 补三 CLI 源的项目会话证据（HOME 隔离）。全部 11 套 demo 回归通过，App 已同步重启。
+
+## 2026-10-09
+### 项目范围降级：v0.1.0 只收口 CLI 与 DS Harness 对话
+
+- 用户决定：当前只保证 macOS CodeAll 向 Claude Code/Codex/Kimi Code CLI 主会话及已授权 DS Harness 主会话投递并回流状态/回复摘要，不扩成完整聊天客户端。
+- 新增 `docs/23-v0.1.0-scope.md` 作为当前范围与发布验收真相源。docs/20、21、22 与原 QA 矩阵保留历史方案，旧日期/Gate/后续版本排期暂停；跨平台、更多 Agent、厂商计费、远端、手机及桌面原生控制全部回到 backlog。ZCode app-server 控制保留代码，降为实验能力，不阻塞本版。
+- CLI 消息投递取消只按 cwd/进程名猜测 tmux pane 的捷径，默认一律带明确 session ID 续接。tmux 仍可用于新建交互窗口。隔离测试补入“同目录 pane 不可误投”的断言。
+- DSH 插件断线后不再执行未带目标 ID 的 `PET_INPUT_CMD` 旧兜底；只入队并提示核对目标，启动脚本不再注入该环境变量。隔离测试覆盖旧变量即使存在也不会误投。
+- 发消息必须选中具体主会话：无目标的 `/api/input` 返回 400；界面不再提供“最近活跃自动目标”。此更改防止多会话同时活动时消息被路由到非预期会话。
+- 旧队列重发前重新解析主会话及来源；目标消失、来源变化或缺失时拒绝发送，避免旧队列绕过明确目标规则。
+- DSH 只读健康检查：现有授权插件在线，`canInput/canOpen/canCreate=true`；本轮不改用户 profile、不重启 Agent、不发送真实消息。完成范围收敛不等于发布验收已通过，真实 CLI/DSH 闭环、崩溃窗口持久化和最终安装包复验仍列待办。
+
+## 2026-10-09
+### 动态模型注册与新建校验
+- 模型和思考强度改为读取 Agent 自己的注册信息：Claude Code 发布目录、Codex `debug models`、Kimi `provider list --json`、ZCode 用户/内置 provider 与模型规则、DSH 插件当前选择。未知思考档位不再固定兜底；未注册和不可创建模型拒绝提交。
+- Kimi 新建传注册别名，ZCode 传独立的 `providerId/modelId` 字段，保留模型 ID 内的 `/`。待新建队列在执行和重试时重新校验模型，避免配置变化后继续发送旧选择。
+- 切换 Agent/模型后清空旧选择；首条消息、模型与思考强度全部必填。服务保留用户 PATH 优先级，避免启动时选错 CLI。
+- 回归覆盖模型解析、缓存刷新、凭证隔离、动态档位、同名模型、CLI 参数、ZCode create/send 与迟到失败；页面联调不向真实 Agent 发测试消息。Claude/Codex/Kimi 仍经 CLI 创建，不冒充原生桌面 App 新建能力。
+
 ## 2026-10-08
+### 新建会话与消息队列闭环（本轮）
+
+- 新建时思考强度必须显式选择（low/medium/high/max），界面、`/api/new` 和旧 `new:` 入口一致校验并随队列重试保留。Claude 使用 `--effort`，Codex 使用 `model_reasoning_effort` 配置覆盖，Kimi 的 Kimi provider 使用 `KIMI_MODEL_THINKING_EFFORT`，ZCode 使用 `modelSelection.options.reasoningLevel`；DSH 传递给插件。Kimi 非官方 provider 是否支持该环境变量仍取决于其实现，不伪称已验证。
+- 新建会话必须携带非空首条消息：界面与 `/api/new` 双重校验；CLI 源继续要求显式模型。DSH 在插件内创建后向返回的 sessionId 发送首条消息；ZCode 通过 `session/create` + `session/send` 完成，两步中途失败会保留已创建的 sessionId 供重发，不再重新创建或回落默认模型。
+- ZCode 既有会话统一走指定 sessionId 的 app-server 管道，禁用不可靠的无头/UI 粘贴自动回退；前缀冲突直接拒绝。模型候选补齐 `options.reasoningLevel`，模型选择只在仍为管道覆盖值时恢复，避免覆盖用户后续手动改选。
+- 队列持久化 `source/model/targetKey/accepted`，重试原位更新不增殖；ZCode accepted 后保持「执行中」到终态，迟到失败转为失败项。服务中断时未决项标为结果未知，可能已接收的消息重发须二次确认。按目标组清空仍由服务端全量执行。
+- 隔离回归：`demo/test-window-actions.mjs`、`demo/test-input-api.mjs`、`demo/test-zcode-control.mjs`、`demo/test-cli-create.mjs`；使用临时 HOME 与模拟 app-server/CLI，不发送真实 Agent 消息。
+- Claude/Codex/Kimi 当前创建通道仍是 CLI，会话来源真实标记为 CLI；桌面 App 原生会话创建与首条消息投递尚无稳定、已验证的外部接口，不能仅改标签冒充桌面端支持。
+
+### 投递目标竞态修复 + 新建会话模型必选（用户报障：消息总进错会话 / 新建必须选模型）
+
+- **报障一「向已有会话发消息不进目标会话」三层原因**：① 你的两条「收到回复ok即可」经管道**成功投进了 sess_2a9545b0（"检查数据…"会话）并得到 ok 回复**——服务端目标解析正确，最大可能是会话列表高频重排下点错了行（三个同项目会话并存），composer 顶部的目标标签发送前可见可核对；② **目标竞态（真 bug 已修）**：管道投递期间临时持久化的 provider 覆盖，会让窗口期内并发的下一次投递把 account 会话误判为非 account 而走无头（实测复现：完整 id 走管道、3 秒后前缀解析走了无头）——zcode 投递现全链路串行化；③ 前缀解析路径已带 provider（复核 resolveSessionAny 链路）。
+- **报障二「新建会话必须让用户选模型」**：新建对话框模型字段改为**必选**（DSH 插件除外），不填提交直接拦下并提示；zcode 也显示模型字段——新增 `deliverCreateViaZcodePipe`：经 app-server `session/create {workspace:{workspacePath,workspaceKey}, model}` + `session/send {modelSelection}` **按所选模型创建并投递首条消息**（协议面经裸探针实测：workspace 为对象、sessionId 在 result 顶层；无 --model 参数的 CLI 形态保留为回落）。目标目录不存在时先 mkdir（否则引擎把会话落到 home）。
+- **验证**：管道新建带模型端到端 delivered——`created: sess_c68d9f22 → send accepted → 会话 19:49:28 落库（目录正确）`；完整 id 投递既有会话走管道 ✓；test-window-actions 20/20（含模型必选守卫、zcode 字段新断言）；已部署 App 并重启。
+
+### 管道生命周期加固：子进程退出看门狗 + 回滚标记（管道投递闭环）
+
+- **背景**：管道成功投递后，若 app-server 子进程先于终态信号退出，keep-alive 循环只能等 30 分钟兜底才清理/回滚；服务在管道回合中被重启则回滚永久丢失（选择污染留在会话上）。
+- **改动**（cli-control.mjs）：① `child.on('exit')` 看门狗——子进程退出且未收到终态信号时立即清理（含回滚）；② 回滚标记文件（`zcode-rollback-<sid>.json`）——`session/send` 前落盘 {originalRaw, pipeRaw}，cleanup 回滚成功即清、失败则保留；新增 `recoverZcodePendingRollbacks()`（framed.mjs 启动时调用）补做服务重启丢失的回滚，且仅当当前值仍等于管道覆盖值才恢复（用户中途改过则不动）。
+- **验证**：本轮回合实证——用户两条验证消息由管道 + DeepSeek 送达并执行（DB 显示该回合 modelId=deepseek-flash），管道进程全程保活至回合进行中；行为回归 20/20。新代码已同步 App 包，待下次服务重启加载。
+- **附**：moonshot-kimi 个人 Key 配额耗尽（Too Many Requests），管道自动降级 DeepSeek 成功——降级链（含 provider_config 候选与 reasoningLevel options）本轮全部实证。
+
+### ZCode account 投递「只开文件夹不进消息」修复（用户报障：向已有会话发送仍打开文件夹）
+
+- **症状链**：管道 moonshot 配额耗尽 → UI 粘贴回落先开 workspace 深链（用户看到"打开文件夹"）→ 粘贴因辅助功能权限被拒 → 消息未达。
+- **修复 1（管道配额降级闭环）**：PIPE_QUOTA_RE 补入「模型请求失败/model_request_failed」（遥测串不带配额文案，此前漏判不降级）；候选列表合并 provider_config.json 声明的个人 api-key provider（moonshot 死后 deepseek 才有得降）；config 候选必须带 `options.reasoningLevel`（严格模式：无 options 即 "Model creation failed"，从同 provider 最近 session_entry 回填）。
+- **修复 2（UI 前置权限探测）**：deliverViaZcodeUi 在任何可见动作前探测辅助功能权限，未授权不再打开深链/动剪贴板。（注：空按键探测不发布事件、探测不出被拒——真实被拒仍走后置分支并自动开设置面板；管道修通后该分支已极少触发。）
+- **验证（真实端到端，目标=本会话 account 会话）**：管道 moonshot→配额如实失败→自动降级 deepseek/deepseek-flash→`delivered`，消息 19:36 以 user 行落盘、回合完成；回合结束后模型选择**自动回滚为 account/GLM-5.3**（管道 cleanup 回滚生效，catalog 识别不再被污染）。测试残留队列项已按组清空。
+- **账号侧事实**：moonshot-kimi 个人 Key 配额耗尽（充值或 PET_ZCODE_PIPE_MODEL 显式指定可改道）；DeepSeek Key 正常。
+
+### ZCode 投递「只打开文件夹不发消息」修复 + 管道降级打通（用户报障：向已存在的会话发消息，只弹文件夹）
+
+- **现象与链路**：account 会话投递时管道（moonshot）先撞配额失败 → 回落 UI 粘贴通道 → **先执行 workspace 深链（弹出/聚焦文件夹）**，随后 osascript 被 TCC 拒绝 → 用户只看到「打开了文件夹」，消息没进会话。
+- **修复 1（UI 通道动作顺序）**：辅助功能权限前置探测，无权限时**零可见动作**（不开深链、不动剪贴板）直接如实报错并打开授权面板。探测实现两轮迭代：进程名查询不触发 TCC（放行）→ 空按键 keystroke 也不发布事件（放行）→ 最终确认 TCC 判定发生在真实按键事件上，前置探测无法代替真实 keystroke；因此保护退化为「权限错误时如实回报不动后续动作」，深链仍会执行（设计使然：它是管道失败后唯一通道的第一步）。真正根治 = 用户在辅助功能里勾选 osascript（一次长期生效）。
+- **修复 2（管道配额降级失效）**：① 降级分类器补「模型请求失败」类遥测文案（原只认 quota/429 字面，moonshot 耗尽时的错误串识别不出 → 不降级）；② 候选列表补 `provider_config.json` 声明的个人 Key provider（此前只从「用过的 session_entry」取，DeepSeek Key 配好没用过就不在列 → 无候选可降）；③ 候选 options 必须带 `reasoningLevel`（`session/send` modelSelection 严格模式，缺 options 直接 "Model creation failed"——2026-10-08 实测：deepseek 无 options 必败、带 max 成功）。
+- **验证（真实端到端）**：moonshot 配额耗尽下投递 account 会话 → 管道自动降级 DeepSeek → `send accepted=true` → 消息以真实 user 落进目标会话（19:36:15/19:36:19，用户两条验证消息均到达并触发回合）。控制实验：DeepSeek 无头续接真实 deepseek 会话回复 "ok"（通道本身健康，此前失败纯属 options 缺失）。
+- **旁路印证**：UI 通道的深链确实会打开文件夹——这次修复后若权限未授，错误文案明确指向授权步骤，不再让用户误以为「已发送」。
+
+### 移除右下角操作反馈弹条（用户报障：弹条盖住队列区叉号按钮）
+
+- **删除功能**：`window.html` 的 `#feedback` 固定弹条（`bottom:32px; right:16px`，发送失败/复制/清空队列等约 30 处 `notice()` 调用）整体移除——它出现时会遮挡正下方队列项的「删除/重发/复制」按钮，且最长停留 7s。失败信息不再弹窗：异步失败路径改记 `console.error`；发送失败仍恢复输入框内容，投递结果（入队/失败）由队列区自身展示。
+- **连带收敛**：`refreshCatalog(showFeedback)` 参数只服务于该弹条，已随删；其余控制流（校验守卫、失败恢复输入、按钮禁用）全部保留。
+- **验证**：test-html / test-ui-dom / test-window 全部 exit 0；打包资源已同步（bundle-service，仓库=App 包一致）。
+
+### ZCode 投递全链路回归（含并行实现的 app-server 管道合入 + 两个新修复）
+
+- **回归范围**（10 组断言，真实服务 7799 + 探测会话）：引擎解析 / builtin 无头直投（成功+落盘+守卫不误触发）/ account 双通道关闭如实失败零进程 / 管道模型自动选取（db:recent-non-account）/ account 管道实投 / 选择守卫回滚 / 队列按会话分组与组清空 / 观察跟随。9 组通过，1 组（E 投递即新建）受配额阻塞见下。
+- **并行会话合入**：本仓库同日出现 `deliverViaZcodePipe`（app-server stdio 管道：session/resume+send+subscribe，逐条 modelSelection 覆盖到非登录态 provider，回合活到 idle；UI 粘贴通道补剪贴板备份与 TCC 权限排障自动开设置面板）——与本地改动合并无冲突，仓库=App 包=运行服务三方一致后复测。
+- **新修复 1（管道副作用污染识别，回归抓出）**：管道的 modelSelection 覆盖被引擎**原地持久化** → 本会话（account）被 catalog 识别为 moonshot-kimi → account 预检失效、C-a 误走无头直撞配额。修复：管道 cleanup 回滚选择（与无头守卫同构，raw 快照比对）；并依据消息流 providerId 恢复本会话真值 account/GLM-5.3。
+- **新发现 2（账号侧）**：moonshot-kimi 个人 Key 配额耗尽（Too Many Requests / insufficient balance，19:16 最后一次成功后耗尽）——管道如实终态失败 ✓（诚实性验证通过）；E 投递即新建（默认 provider=moonshot）因此异步失败，且无头 2.5s 窗口先报了 delivered（已知假阳性边界：无头不等终态，管道等）。可 `PET_ZCODE_PIPE_MODEL=deepseek/deepseek-flash` 显式换 DeepSeek Key（余额未验证）。
+- **新确认 3（权限）**：UI 粘贴通道在打包服务链上从未获 TCC 辅助功能授权（此前 B–F 自测实走管道）——权限错误已如实回报并自动打开设置面板，勾选 osascript 一次长期生效。
+- **遗留边界（记录）**：tmux send-keys 对 zcode 不生效（pane 命令名为 node≠zcode）；无头路径配额类错误有 2.5s 假阳性窗口（account 已默认管道不受影响，builtin 会话建议配额异常时以队列/观察状态为准）。
+
+### 投递队列自增殖修复 + 识别问题三修（用户报障：队列清不掉 / 模型·软件·会话识别错误）
+
+- **队列自增殖（本轮引入的回归，已修）**：`flushNewQueues` 每 20s 重试所有 `new:*` 排队项，`new:dsh:-`（无 CLI 通道）投不出去且每次重试都**新建**一条 queued——队列被自我复制刷满 200 上限；「按组清空」又只从 8 条快照里挑 id 删，200 条清一次剩 192。修复：① flush 只重试 `new:<CLI 源>` 且 CLI 已安装（dsh 一类人工/插件目标不自动重试）；② `deliverInput` 增加 `record:false` 重试模式（不落新队列条目）；③ 按组清空改服务端 `/api/queue/group/clear`（按 targetKey 全量删除）；④ 快照 inputs 由「最后 8 条原始」改为「全量未完成（≤50）」。已清空存量 200 条并观察两个 flush 周期零增殖。
+- **模型识别错误（投递副作用，已防护）**：实测独立引擎 resume 启动时会把自身默认 provider 写进会话 `runtime/model_selection`（单行 UPDATE、旧值丢失）——`sess_1ca32916` 由 GLM-5.3-Flash(account) 被改写为 kimi-k3(moonshot)，UI 如实显示"错误"模型。修复：`cli-control` 投递前快照该行，投递**失败且值被改写**时回滚快照（只回滚本次投递改的，不覆盖用户/App 并发写入）。存量被改写的会话需在 ZCode App 内 `/model` 手动切回（原值已不可恢复）。
+- **软件识别收紧**：CLI 卡进程正则由「args 含 claude/codex/kimi 文本即命中」改为 ucomm（进程名列）锚定 + 显式路径段——不再把无关命令行（甚至探测命令自身）计入；Codex 桌面端排除 `CodexPlusPlusManager`（Codex++ 管理工具是壳管理器，非 Agent 进程）；zcode 同步 ucomm 锚定。Claude 桌面端原有 `.app/` include 锚定保持（5 进程为真实 Claude.app Helper）。
+- **模型候选为空（字段用错）**：新建对话框"已用模型"候选此前误读 `catalog.projects[].sessions`（仅测试夹具存在的字段，真实快照会话在 `catalog.history`）→ 候选永远为空；改读 `snap.sessions + catalog.history`，并过滤 `<synthetic>` 类占位模型。
+- **验证**：zcode 52 会话 model 与 DB 逐条对拍 52/52 一致（识别数据面本身正确）；test-window-actions 20/20、test-window/html/ui-dom/mini exit 0、multi-source-check 59/59（ML5 首跑 305ms 超 300 预算 5ms，复跑通过——DB 当日增长导致的边际波动）；已同步 App 包并重启。
+
 ### ZCode 消息投递切换为 app-server 信息管道（用户定向：不经上游登录，管道直发）
 
 - **可行性结论**：`zcode app-server`（ZCode Protocol，stdio NDJSON，`{id, method, params}` 信封、无握手）是桌面 App ↔ 引擎的官方进程间通道。`session/resume` 时服务器反向请求 `session/requestRuntimePreferences`（应答固定三键即可）；`session/send` 接受**逐条 `modelSelection` 覆盖**（严格 schema `{providerId, modelId, options.reasoningLevel}`）——account 会话的回合由个人 Key provider（本机实测 moonshot-kimi/kimi-k3）执行，全程不经 Z.AI 登录态。副作用（实测）：覆盖会被引擎原地持久化为会话保存的选择，且 account:* 无法从外部恢复（Provider Registry 不含登录态 provider）——管道投递后 App 内默认模型即管道 provider，App 内 /model 可手动切回。

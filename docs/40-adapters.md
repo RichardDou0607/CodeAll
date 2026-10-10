@@ -517,17 +517,18 @@ $ node -e 'fs.watch(dir, ...)'    # 文件级变化（会话日志增长 = 有�
 |---|---|---|---|
 | DSH | `assistant/message` 的 `data.usage` | 多帧 zstd 逐帧解压（明文直读）；每调用一组直接累加；model 取行序 `request/header`；每目录只取最高代日志（pickLogFile 防双计）；∑分量=∑totalTokens 恒等式对账 | 否 |
 | Claude Code | assistant 行 `message.usage` | 按 message.id 去重（流式快照后写覆盖）；`<sid>/subagents/agent-*.jsonl` 子代理消耗归入父会话 | 否 |
-| Codex | `token_count.info.total_token_usage` | 取最后一条权威累计；单模型会话整额归属（last_token_usage 增量实测漏 ~25%） | 是 |
+| Codex | `token_count.info.total_token_usage` | **累计值差分归日**（2026-10-09 修）：首条只认自身 `last_token_usage`（fork/子代理 rollout 的首条累计继承父会话——逐文件求和会把父前缀重复计入，本机 Σ 前缀 9,282 万 token），其后每条取 Δ累计（负值截 0；重复上报的「累计值不动」事件只计请求不计 token，本机 298 条）。**Σ日桶 ≡ 源总量**（`dayIdentityMismatched` 自检）；单模型会话整额归属 | 是 |
 | Kimi Code | `usage.record`（每请求一条） | inputOther/inputCacheRead/inputCacheCreation 映射；含全部 agents/<id>/ 子代理流 | 否 |
 | ZCode | `message.data.tokens`（SQL 按 session × modelId 聚合） | 与 part.step-finish 双路一致；逐行对齐官方账本 model_usage 相等；**input 含 cacheRead**（raw_usage_json 证实：totalTokens=inputTokens+outputTokens，inputTokens 为全量 prompt）；subagent_child 计入 | 是 |
 
+- **展示口径（2026-10-09 统一）**：`promptTokens` = 全量 prompt（含缓存读）= 各厂商 UI 的 input——DSH/Claude/Kimi = `input` + `cacheRead`（Anthropic 式 input 不含 cache），Codex/ZCode = `input`（OpenAI 式已含 cache）；`totalTokens` = promptTokens + `cacheWrite` + `output`，即各 Agent 自带计数器显示的总量。日历日桶、来源对比图、软件页 Token、各类表格的 in 列全部按此口径（界面上标「in（含缓存读）」「Token · 全量」）。原始 `input/cacheRead/cacheWrite/output` 分项与 `freshInput` 原样保留，供命中率与下钻使用。
 - DSH 的 title 生成小额消耗无 usage 事件、不计（成文边界）。
 - 跨源同名模型**小写归并**；子代理/子链路消耗一律计入总量（真实消耗口径）；子代理会话行不单列（只进源级合计）。
-- **三个展示维度（二期，2026-10-07）**：① 时间窗——本地自然日分桶（绝对口径，缓存跨天正确），切 当日/7日/30日/全部；② 形态——Claude(entrypoint)/Codex(originator)/Kimi(clientMetadata) 文件级归属 CLI/桌面/IDE（全量=byVariantFlat 恒等；Codex 时间窗内为增量近似）；③ 缓存命中率——cacheRead/(fresh+cacheRead)，fresh 按源 input 含 cache 语义折算（**Codex 与 ZCode 含**），跨源合并行经 freshInput 累计同样可算。
+- **三个展示维度（二期，2026-10-07）**：① 时间窗——本地自然日分桶（绝对口径，缓存跨天正确），切 当日/7日/30日/全部；② 形态——Claude(entrypoint)/Codex(originator)/Kimi(clientMetadata) 文件级归属 CLI/桌面/IDE（全量=byVariantFlat 恒等；2026-10-09 起五源 Σ日桶 逐字段 ≡ 总量，Codex 时间窗不再有增量近似这一例外，仅「Δ 落在哪一天」按事件边界近似）；③ 缓存命中率——cacheRead/(fresh+cacheRead)，fresh 按源 input 含 cache 语义折算（**Codex 与 ZCode 含**），跨源合并行经 freshInput 累计同样可算。
 
 **输出面**：framed 快照 `usage` 块（totals/byModel/bySource + ranges 时间窗 + 会话行 `usage` 字段）、`/api/usage` 明细端点、UI「用量」页（时间窗切换器 + **各 Agent 消耗量表（形态拆分 + 命中率列）** + 模型表 + 会话行 `tok in/out`）；CLI `node adapters/usage-collect.mjs [--json|--refresh]`。
 
-**复现**：`node scripts/multi-source-check.mjs` 看 MU1–MU9（独立对账：Claude 去重证明 / Codex 权威值反读 / Kimi 原始行计数 / ZCode 双路互证 / DSH 恒等式+独立解压重数 / 形态归属恒等 / 日桶对账与单调性 / framed 端到端）。**证据等级 [A]**。
+**复现**：`node scripts/multi-source-check.mjs` 看 MU1–MU9（独立对账：Claude 去重证明 / Codex 文件自有量反读（首条 last + Δ累计）/ Kimi 原始行计数（会话全部 wire）/ ZCode 双路互证 / DSH 恒等式+独立解压重数 / 形态归属恒等 / 日桶逐字段=总量+单调性 / framed 端到端）。**证据等级 [A]**。
 
 ---
 

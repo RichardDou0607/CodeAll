@@ -1,20 +1,20 @@
 # CodeAll（Agent 工作框 / 桌宠）
 
-> 一个常驻桌面的**工作框 / Agent 总控**：统一**观察与控制**本机各个 AI Agent（DeepSeek Harness、Claude Code、Codex、Kimi Code、ZCode），统计各厂商 Coding Plan 的 Token 用量，并经 AgentOS 连接远端服务器与「原生AI操作系统」（终局方向，[docs/21 §6](./docs/21-multi-agent-adoption-plan.md)）；宠物形象是框内的**可选**陪伴元素。
+> 一个常驻桌面的**工作框 / Agent 总控**。当前开发目标是与 Claude Code、Codex、Kimi Code 的 CLI 会话及已授权的 DeepSeek Harness 会话对话；已有的多源观察、用量和 ZCode 实验能力保留。跨平台、计费、远端 AgentOS 与手机端是暂停排期的方向，不属于当前交付承诺。
 >
-> 当前版本：**v0.1.0-alpha（2026-10-08，alpha 测试版）**——功能可用但仍在快速迭代，接口与数据格式可能调整。后续计划见 [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md)。
+> 当前已发布：**v0.1.0（2026-10-10）**，v0.1.0-alpha（2026-10-08）之后按 [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) 收口 **macOS 的 CLI 与 DS Harness 对话闭环**，V01–V06 发布验收已全部通过（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)）。已有观察/用量等功能仍在，但不构成新增开发承诺。
 
 ## 〇、下载安装（macOS · Apple Silicon）
 
 从 [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) 下载 `CodeAll_0.1.0_aarch64.dmg`，拖入 /Applications 即用：**安装包自带本地服务与 Node 运行时，不依赖源码仓库，也无需先装 Node 或其它任何依赖**（各家 Agent 软件本体当然需要各自安装并登录）。
 
 ```bash
-# 首次打开：当前为 alpha 测试版、未做开发者证书签名，macOS 会拦截一次——任选其一：
+# 首次打开：安装包未做开发者证书签名，macOS 会拦截一次——任选其一：
 xattr -cr /Applications/CodeAll.app     # 方式一：终端执行后正常打开
 # 方式二：在「应用程序」里右键 CodeAll → 打开 → 再点「打开」
 ```
 
-观察五源会话、用量统计开箱即用；向会话投递/新建/打开走 CLI 通道（需要对应 Agent 的 CLI 可用）；DSH 自动投递属进阶功能（需挂载插件，见 demo/README）。开发模式（从源码运行）见下节。
+观察会话与用量仍可用；本轮重点是 Claude Code/Codex/Kimi Code **CLI 主会话**与 DSH 已授权插件会话的定向对话。DSH 未挂插件时仅观察/入队，不宣称已投递；ZCode app-server 控制为实验能力，不列入 v0.1.0 必过通道。开发模式（从源码运行）见下节。
 
 ## 一、已实现的能力（v0.1.0，全部本机实测）
 
@@ -32,10 +32,10 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端执行后正常打�
 
 | 能力 | 说明 |
 |---|---|
-| **CLI 投递通道 ×4** | Claude Code / Codex / Kimi Code / ZCode：向既有会话无头投递（ZCode 显式 `--mode build` 压掉无头默认 yolo）；2.5s 快速失败检测，不谎报「已投递」 |
-| **新建 / 打开会话** | tmux window 或 Terminal 新窗口打开对应 CLI（`--resume` / `-S`）；新建落指定项目目录 |
+| **CLI 定向投递** | Claude Code / Codex / Kimi Code：向明确 session ID 续接；2.5s 启动快速失败检测。进程启动不等于回合成功，终态与回复仍需核对；ZCode 独立管道保留为实验能力 |
+| **新建 / 打开会话** | 已有 CLI 与 DSH 插件路径保留；不是 v0.1.0 的核心发布门槛，也不等于桌面 App 原生创建 |
 | **输入队列** | 本地队列（`~/.agent-pet/input-queue.jsonl`，0600、自动轮转）只留未完成项，可复制/重发/删除/清空 |
-| **DSH 投递（需授权）** | 挂载 dsh-pet 插件（只增不删配置）+ `PET_INPUT_CMD` 接线后自动送达；未挂载时只入队列、绝不绕凭证 |
+| **DSH 投递（需授权）** | 挂载 dsh-pet 插件（只增不删配置），服务直连插件向指定会话投递；插件离线时只入队列，绝不绕凭证或执行无目标命令 |
 
 ### 用量与计费地基
 
@@ -69,8 +69,11 @@ open http://127.0.0.1:7799/           # 迷你条；/window.html = App 界面（
 node demo/test-window.mjs             # App 界面渲染自检（85 项断言）
 node demo/test-window-actions.mjs     # 交互行为回归（14 项）
 node demo/test-mini.mjs               # 迷你条渲染自检（12 项）
+node demo/test-open-routing.mjs       # 打开路由回归（CLI 走 Terminal、DSH/未知 ID 交插件）
+node demo/test-follow-budget.mjs      # 跟随器预算回归（mtime 优先 + LRU 淘汰，claude/codex/kimi）
+node demo/test-service-hardening.mjs  # 服务健壮性（日志目录不可写不崩 + 无 DSH 日志仍有 2s 心跳）
 node demo/test-usage-calendar.mjs     # 用量日历自检
-node scripts/multi-source-check.mjs --live  # 多源适配验收（63 项，--live 含四家真实投递闭环）
+node scripts/multi-source-check.mjs         # 扩展多源检查（含 ZCode 性能阈值；非当前发布门槛）
 node scripts/catalog-check.mjs        # 会话目录验收（16 项）
 node adapters/local-agents.mjs        # 软件四态探测（CLI 表格 / --json）
 node adapters/cli-control.mjs --selftest   # 控制通道自检（投递·新建·打开）
@@ -81,7 +84,9 @@ node scripts/check-fixtures.mjs       # 契约一致性（16/16 type、6 状态�
 node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 ```
 
-**运维口径**：`demo/framed.mjs` 代码更新后**必须重启服务/应用**才生效（外壳只在端口无监听时拉起，页面自动刷新不覆盖 Node 进程内存）；从 Spotlight 直开 App 时 DSH 自动投递（`PET_INPUT_CMD`）不会接线，需经 `run.sh --restart-server` 或挂载插件后用 run.sh 启动——这是 [docs/22](./docs/22-post-release-roadmap.md) 待办之一。
+`multi-source-check.mjs --live` 会向真实 Agent 会话投递并消耗模型额度，**不作为默认自检**；本轮最小发布验收与安全测试命令见 [docs/23](./docs/23-v0.1.0-scope.md)。
+
+**运维口径**：`demo/framed.mjs` 代码更新后**必须重启服务/应用**才生效（外壳只在端口无监听时拉起，页面自动刷新不覆盖 Node 进程内存）。DSH 投递由服务直接探测已授权插件，不依赖 `PET_INPUT_CMD`；旧安装包不自动获得源码修复，需完成最终包复验。
 
 ## 三、文档索引
 
@@ -91,7 +96,8 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 | [docs/10-architecture.md](./docs/10-architecture.md) | 总体架构、ADR、模块拆分、NFR |
 | [docs/20-roadmap.md](./docs/20-roadmap.md) | 原始两阶段里程碑（M0–M10）、关键路径、SDK 冻结锚点 |
 | [docs/21-multi-agent-adoption-plan.md](./docs/21-multi-agent-adoption-plan.md) | **多 Agent 接入计划 v3**：接入里程碑 M-A…M-U、§6 双域模型（本地直控 + 远端 AgentOS） |
-| [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md) | **v0.1.0 后续构建任务**：计费展示 / OpenCode·Qoder·Cursor / Windows·Linux / 远端 AgentOS / 手机端 |
+| [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md) | 原后续构建任务，现已暂停排期 |
+| [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) | **当前真相源**：CLI + DSH 对话范围、优先级与发布验收 |
 | [docs/40-adapters.md](./docs/40-adapters.md) | 后端适配矩阵（含 Cursor/Copilot/ACP 行）、观测能力与降级 |
 | [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | 产品规格、工作框三形态、人机交互总体方案 |
 | [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri 外壳实现（双窗口、Space 行为、内存口径） |
@@ -99,16 +105,6 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 | [demo/README.md](./demo/README.md) | 演示说明与「诚实边界」（输入如何送达 DSH 等） |
 | [spikes/](./spikes/README.md) | 技术栈验证（Swift/AppKit、Tauri v2、Electron） |
 
-## 四、后续开发计划（摘要，详见 [docs/22](./docs/22-post-release-roadmap.md)）
+## 四、当前开发任务
 
-| 工作流 | 主题 | 首个里程碑 |
-|---|---|---|
-| **W1 BILL** | 各厂商 Coding Plan 计费展示：官方 API（DeepSeek balance 先行）+ 本地规则估算双路，额度环 / 窗口倒计时 / 预警 / 多账号 | BILL-1 计划配置模型 + 计费页（v0.4） |
-| **W2 AGT** | OpenCode（ACP 通道，恢复注册行）、Qoder（spike 先行）、Cursor（hooks 观察）、Copilot CLI（可选） | AGT-1 ACP 统一通道（v0.3） |
-| **W3 PLAT** | Windows / Linux 适配：平台抽象层（路径/进程/版本/终端）→ 双平台全功能 + 安装包 + CI 矩阵 | PLAT-1 平台抽象（v0.2） |
-| **W4 RMT** | 远端能力：本地 AgentOS 观察 → SSH 远端观察（`agentos@<host>` 主机分组）→ 远端控制（子命令白名单，凭证零存储）；对接「原生AI操作系统」 | RMT-1 本地 AgentOS（v0.5） |
-| **W5 MOB** | 手机端：移动 PWA（二维码配对）→ 原生壳 + 审批/额度推送 → 经自管 AgentOS 主机外网中继 | MOB-1 PWA（v0.5） |
-
-版本节奏（单人折算，2026-10-08 重排）：**v0.2** Windows + Linux 跨平台适配 → **v0.3** Cursor / OpenCode / Qoder 等软件接入 → **v0.4** 厂商 Coding Plan 监控（额度 / 用量 / 预警）→ **v0.5** 远端控制 + 本地 AgentOS + PWA → **v1.0** 原生手机壳 + 外网中继 + 适配器 SDK 冻结。
-
-原则不变：**能力落地才进软件列表**（v0.1.0 首发 AgentOS/OpenCode 即按此移除，接入后回归注册表）。
+[v0.1.0 对话收口](./docs/23-v0.1.0-scope.md) 的 V01–V06 已于 2026-10-10 全部验收通过（CLI 指定会话收发、DSH 授权插件收发、误投/失败/重发保护、崩溃窗口记录与最终 macOS 安装包复验）。跨平台、更多 Agent、计费、远端和手机端仍保留在 [历史待办](./docs/22-post-release-roadmap.md)，**目前没有版本或日期承诺**。原则不变：能力落地且完成验收，才进入对外保证。

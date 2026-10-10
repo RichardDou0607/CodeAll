@@ -358,9 +358,10 @@ export function followKimiLogs(opts = {}) {
   const intervalMs = opts.intervalMs ?? 1200;
   const maxFiles = opts.maxFiles ?? 80;
   const onEvent = opts.onEvent ?? (() => {});
-  const files = new Map();          // wireFile -> {offset, ctx, sessionId, cwd}
+  const files = new Map();          // wireFile -> {offset, ctx, sessionId, cwd, mtimeMs}
+  const evictedOffsets = new Map(); // 被淘汰文件的 offset（再准入时续读）
   let stopped = false;
-  const stats = { files: 0, lines: 0, events: 0, parseErrors: 0, resamples: 0, subagentSkipped: 0 };
+  const stats = { files: 0, lines: 0, events: 0, parseErrors: 0, resamples: 0, subagentSkipped: 0, evictions: 0 };
 
   function listWires() {
     const out = [];
@@ -388,18 +389,44 @@ export function followKimiLogs(opts = {}) {
     } catch { return { sessionId: path.basename(entry.sessionDir), cwd: undefined }; }
   }
 
+  /** 预算准入（maxFiles）：触顶淘汰最久未修改的跟随项；被淘汰者再活跃时从淘汰点续读（防抖 + 不漏增量）。 */
+  function admit(entry, st) {
+    const existing = files.get(entry.file);
+    if (existing) return existing;
+    if (files.size >= maxFiles) {
+      let victimFile = null, victim = null;
+      for (const [key, item] of files) {
+        if (!victim || (item.mtimeMs ?? 0) < (victim.mtimeMs ?? 0)) { victim = item; victimFile = key; }
+      }
+      if (!victim || (victim.mtimeMs ?? 0) >= st.mtimeMs) return null;
+      files.delete(victimFile);
+      evictedOffsets.set(victimFile, victim.offset);
+      if (evictedOffsets.size > maxFiles * 2) evictedOffsets.delete(evictedOffsets.keys().next().value);
+      stats.evictions++;
+    }
+    if (entry.agentId !== 'main') { files.set(entry.file, { offset: st.size, subagent: true, mtimeMs: st.mtimeMs }); stats.subagentSkipped++; return null; }
+    const d = describe(entry);
+    const resume = evictedOffsets.get(entry.file);
+    evictedOffsets.delete(entry.file);
+    const offset = opts.fromStart ? 0 : (resume !== undefined && st.size >= resume ? resume : st.size);
+    const fresh = { offset, ctx: { sessionId: d.sessionId, seq: 0 }, cwd: d.cwd, hello: false, mtimeMs: st.mtimeMs };
+    files.set(entry.file, fresh);
+    return fresh;
+  }
+
   function pump() {
     if (stopped) return;
+    // 先统一 stat 并按 mtime 倒序：最近写入的会话优先占预算
+    const entries = [];
     for (const entry of listWires()) {
       let st; try { st = fs.statSync(entry.file); } catch { continue; }
-      let f = files.get(entry.file);
-      if (!f) {
-        if (entry.agentId !== 'main') { files.set(entry.file, { offset: st.size, subagent: true }); stats.subagentSkipped++; continue; }
-        const d = describe(entry);
-        if (files.size >= maxFiles) continue;
-        f = { offset: opts.fromStart ? 0 : st.size, ctx: { sessionId: d.sessionId, seq: 0 }, cwd: d.cwd, hello: false };
-        files.set(entry.file, f);
-      }
+      entries.push({ entry, st });
+    }
+    entries.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
+    for (const { entry, st } of entries) {
+      const f = admit(entry, st);
+      if (!f) continue;
+      f.mtimeMs = st.mtimeMs;
       if (f.subagent) continue;
       if (st.size < f.offset) { f.offset = 0; stats.resamples++; }
       if (st.size <= f.offset) continue;

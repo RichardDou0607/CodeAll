@@ -1,12 +1,14 @@
 # v0.1.0 后续构建任务（Post-Release Build Plan）
 
+> **2026-10-09 当前裁决：本文五条工作流及 v0.2-v1.0 排期全部降为未排期待办。当前只执行 [23-v0.1.0-scope.md](./23-v0.1.0-scope.md)：macOS v0.1.0 的 CLI 与 DS Harness 对话闭环。下文保留历史方案供后续恢复，不再是当前开发承诺；文末「DEF · 审查遗留缺陷」为本次代码审查的缺陷登记（同样未排期、不阻塞当前收口）。**
+
 > 制定日期：2026-10-08（用户定向）；**版本节奏重排：2026-10-08（用户定向）——v0.2 = Windows/Linux 跨平台（W3 提前），v0.3 = Cursor / OpenCode / Qoder 等软件接入（W2），v0.4 = 厂商 Coding Plan 监控（W1），W4 后移 v0.5 起**。定位：**CodeAll v0.1.0 首发之后的产品续作计划**，不替代 [20-roadmap](./20-roadmap.md)（原始两阶段计划）与 [21-multi-agent-adoption-plan.md](./21-multi-agent-adoption-plan.md)（多 Agent 接入，§6 双域模型仍是远端架构的真相源）；本文把五条新工作流落成可排期的任务，遵循 v0.1.0 确立的收敛原则——**能力落地才进软件列表，宣传不跑在实现前面**。
 >
 > 估算口径：单人全职折算人日；[U] = 未验证，需 spike 先行。
 
 ## 0. 总览与目标版本
 
-| 工作流 | 主题 | 关键产出 | 建议目标版本 |
+| 工作流 | 主题 | 关键产出 | 原建议版本（当前暂停） |
 |---|---|---|---|
 | W1 BILL | **Coding Plan 计费展示** | 计费页：官方 API + 本地规则估算双路 | **v0.4**（BILL-4 多账号报表 v0.5） |
 | W2 AGT | **更多 Agent 软件** | ACP 通道、OpenCode、Qoder、Cursor | **v0.3** |
@@ -104,9 +106,21 @@
 
 ---
 
-## 排期建议（单人全职折算，目标版本制而非日历制）
+## DEF · 审查遗留缺陷（未排期；缺陷修复项，非新功能）
 
-| 版本 | 内容 | 累计新增人日 |
+> 来源：2026-10-09 全量代码审查。本轮已修并带回归：H1（打开路由按来源分流）、H2（跟随器预算 mtime 优先 + LRU 淘汰）、M2（日志/落盘失败不再带崩服务 + 进程级兜底）、M4（SSE 心跳与 DSH 日志解耦）——见 [CHANGELOG](./CHANGELOG.md) 与 [23 §5](./23-v0.1.0-scope.md)。本节只收「已定位、暂缓执行」的项：**不阻塞当前 v0.1.0 收口（V01–V06），随收口后恢复排期时一并处理**。ZCode 相关项按 [23 §1](./23-v0.1.0-scope.md) 的裁决属实验能力，不进入必过清单。
+
+| ID | 任务 | 触发条件 | 实测证据 | 修复方向 | 验收 | 估时 |
+|---|---|---|---|---|---|---|
+| **DEF-1** | **ZCode 投递链把 HTTP 响应一并串行化**（审查 H3）：`demo/framed.mjs` 的 `zcodeDeliveryChain` 让下一条投递等待上一条回合的 `settle`（回合终态，上限 30min），而 `deliverInput` 直接 `return next`——响应被挂在整条链上。表现为：同一 ZCode 会话连发第二条时发送按钮/HTTP 长时间无响应；`/api/new` 的 ZCode 路径、`flushNewQueues` 重试同样被串；链为全局，发给另一个 ZCode 会话也会排队；与 demo/README「accepted 后返回 202 执行中」的文档语义不符 | 任一 ZCode 回合进行中再发一条（同会话或跨会话） | mock app-server（8.5s 迟到失败回合）：回合进行中发出的第二条 `POST /api/new` 响应 **8730ms**（对照基线 ~150ms）；静态复核 `return next` 与链上 `await item.settle` 同链 | 把「投递串行化」与「响应时机」拆开：`/api/input`、`/api/new` 入链后立即返回 202/pending（条目落 queued/pending），`settle` 与 `settleZcodeInput` 只在后台链完成；顺带评估把串行范围收窄为「按会话」而非全局，消除跨会话无谓排队 | `demo/test-zcode-control.mjs` 增并发用例：回合进行中发第二条，响应 ≤1s 且条目为 pending；终态后按既有语义移除/标失败；跨会话两条不互相阻塞 | 0.5～1 人日 |
+
+补充说明：本次审查另记录若干中危/低危项——`adapters/cli-control.mjs` 中 `deliverViaZcodeUi`/account 回落分支/`selectionBefore` 回滚/`createViaZcodePipe` 等 WIP 死代码与失效的 `PET_ZCODE_UI_DELIVER` 开关（M1）；`/api/open`+`/api/new` 请求体无大小上限（`/api/input` 有 8KB/413，M3）；外壳注入脚本对当前 UI 空转与 `restore_window` 高度钳制（M5）；`demo/frame.mjs` 的 `.replaces?.('', '')` 拼写（当前恰好退化为原值）。这些项是否立项同样留待恢复排期时决定，默认不阻塞 v0.1.0。（原列的「缺进程级 unhandledRejection 兜底」已随 M2 修复，见表外说明。）
+
+---
+
+## 历史排期（2026-10-09 起暂停，保留估算）
+
+| 原版本 | 内容 | 历史估算新增人日 |
 |---|---|---|
 | **v0.2** | PLAT-1/2/3（平台抽象 + Windows + Linux 全功能 + 安装包）+ PLAT-4（CI，视建仓时机） | ~15–24 |
 | **v0.3** | AGT-1/2（ACP + OpenCode）+ AGT-4（Cursor hooks 观察）+ AGT-3 spike 与适配（Qoder） | ~14–22 |

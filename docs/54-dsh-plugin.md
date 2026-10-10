@@ -31,10 +31,10 @@
 
 | 方法 + 路径 | 请求体 | 响应 |
 |---|---|---|
-| `GET /health` | — | `{ok, contract, source, pid, socket, startedAt, subscribers, events, unknownEvents, capabilities}` |
+| `GET /health` | — | `{ok, contract, source, pid, socket, startedAt, subscribers, events, unknownEvents, capabilities, modelSelection, modelCatalog?, codeVersion}`（`modelCatalog`：DSH llm 注册表投影 provider×model×思考档位，30s 缓存后台刷新；未就绪时省略） |
 | `GET /events` | — | **长连 NDJSON**：先一条 `ctl:hello`，随后是契约 v1.3 事件帧 |
 | `POST /input` | `{"text":"…","sessionId"?,"mode"?:"followup"|"steer"}` | `{ok, via, sessionId, mode, sessionSource}` 或 `{ok:false, code, detail}` |
-| `POST /new` | `{"cwd":"/abs/path"}` | `{ok, via, sessionId}` |
+| `POST /new` | `{"cwd":"/abs/path","provider"?,"model"?,"reasoningEffort"?}` | `{ok, via, sessionId}`；带模型时：有 sessionController → create 后 `selectModel`（会话级安装，下一条消息生效，DSH 同时存为新默认）；无 controller 的回退路径直接进 `agents.create` 的 `agentOptions`。selectModel 失败 → `{ok:false, code:'model-unavailable', sessionId}`（会话已建、模型未生效） |
 | `POST /open` | `{"sessionId":"…"}` | `{ok, via, sessionId, live?}` |
 | `POST /ctl` | `{"ctl":"catalog.get"|"session.open"|"session.new"|"ack"}` | 对应结果；`catalog.get` 同时向所有 `/events` 订阅者广播 `ctl:catalog` |
 | `POST /diag` | — | 运行时诊断：各服务句柄（sessionController/agents/…）的方法表 + prompt 调用形态试验 |

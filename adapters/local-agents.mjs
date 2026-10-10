@@ -56,7 +56,7 @@ export const LOCAL_AGENTS = Object.freeze([
       path.join(HOME, '.local/bin/claude'), '/usr/local/bin/claude', '/opt/homebrew/bin/claude',
       '/usr/local/lib/node_modules/@anthropic-ai/claude-code',
     ],
-    processRe: /(^|\/)claude(\s|$)|@anthropic-ai\/claude-code/,
+    processRe: /^\s*\d+\s+claude\s|\/claude(\s|$)|@anthropic-ai\/claude-code/,  // ucomm 锚定：不再误伤 args 里出现的 “claude ” 文本
     processExclude: /\.app\/|Claude-3p/,                 // 排除桌面 App 的内置 CLI
     activity: [{ dir: path.join(HOME, '.claude', 'projects'), depth: 2, fileRe: /\.jsonl$/ }],
     note: '命令行版：~/.local/bin/claude（npm）',
@@ -73,7 +73,7 @@ export const LOCAL_AGENTS = Object.freeze([
   {
     id: 'codex-cli', name: 'Codex CLI', source: 'codex', base: 'codex', variantTag: 'cli',
     installPaths: [path.join(HOME, '.local/bin/codex'), '/usr/local/bin/codex', '/opt/homebrew/bin/codex', path.join(HOME, '.codex')],
-    processRe: /(^|\/)codex(\s|$)/,
+    processRe: /^\s*\d+\s+codex\s|\/codex(\s|$)/,  // ucomm 锚定（同 claude）
     processExclude: /Codex\+\+|\.app\//,
     activity: [{ dir: path.join(HOME, '.codex', 'sessions'), depth: 4, fileRe: /^rollout-.*\.jsonl$/ }],
     note: '命令行版：~/.local/bin/codex（npm）',
@@ -83,13 +83,14 @@ export const LOCAL_AGENTS = Object.freeze([
     installPaths: ['/Applications/Codex++.app', '/Applications/Codex++ 2.app'],
     appBundle: '/Applications/Codex++.app',
     processRe: /Codex\+\+/,
+    processExclude: /CodexPlusPlusManager/,             // “Codex++ 管理工具”是壳的管理器，不是 Agent 本体进程
     activity: [{ dir: path.join(HOME, '.codex', 'sessions'), depth: 4, fileRe: /^rollout-.*\.jsonl$/ }],
     note: '桌面版：Codex++ 壳（rollout originator=Codex Desktop）',
   },
   {
     id: 'kimi-cli', name: 'Kimi CLI', source: 'kimi-code', base: 'kimi-code', variantTag: 'cli',
     installPaths: [path.join(HOME, '.kimi-code', 'bin', 'kimi'), path.join(HOME, '.kimi-code')],
-    processRe: /(^|\/)kimi(\s|$)|\.kimi-code\/bin\/kimi/,
+    processRe: /^\s*\d+\s+kimi\s|\.kimi-code\/bin\/kimi/,  // ucomm 锚定（同 claude）
     activity: [{ dir: path.join(HOME, '.kimi-code', 'sessions'), depth: 4, fileRe: /(wire\.jsonl|state\.json)$/ }],
     note: '命令行版：~/.kimi-code/bin/kimi（与桌面共用数据目录）',
   },
@@ -107,7 +108,7 @@ export const LOCAL_AGENTS = Object.freeze([
     appBundle: '/Applications/ZCode.app',
     // 进程特征：App 包路径 / 裸 CLI / 桌面 App 的 zcode-cli、zcode-host-local-1 辅助进程
     //（大写 ZCode 只认 .app 路径段，避免误伤 Application Support/ZCode 之外的普通词）
-    processRe: /ZCode\.app\/|(^|[\/\s])zcode(\.cjs|-cli|-host-local-1)?(\s|$)/,
+    processRe: /ZCode\.app\/|^\s*\d+\s+zcode(\.cjs|-cli|-host-local-1)?\s|(^|\/)zcode\.cjs(\s|$)/,  // ucomm 锚定 + App 路径
     activity: [{ dir: path.join(HOME, '.zcode', 'cli', 'db'), depth: 1, fileRe: /^db\.sqlite(-wal|-shm)?$/ }],
     note: 'GLM 系桌面 Agent：观察 = sqlite 只读（WAL 并发读）',
   },

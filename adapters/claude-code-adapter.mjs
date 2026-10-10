@@ -28,6 +28,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { categoryOf } from '../demo/frame.mjs';
+import { loadModelMap, mapModelName } from './model-map.mjs';
 
 /** 与 demo/frame.mjs 的 RISK_BY_CATEGORY 同表（那边未导出；保持一致，勿分叉） */
 const RISK_BY_CATEGORY = { exec: 2, write: 2, net: 1, read: 0, other: 1 };
@@ -126,7 +127,7 @@ export function parseClaudeSession(file, opts = {}) {
   const base = {
     sessionId, dirName: name, agentName: AGENT_NAME, source: SOURCE,
     dir: path.dirname(file), projectDir: path.dirname(file), projectDirName: path.basename(path.dirname(file)),
-    title: null, titleRaw: null, provider: null, model: null, reasoningEffort: null, agentPreset: null,
+    title: null, titleRaw: null, provider: null, model: null, modelRaw: null, reasoningEffort: null, agentPreset: null,
     agentVersion: null, state: 'unknown', stateSource: null, live: false,
     createdAt: null, updatedAt: null, bytes: st?.size ?? 0, logFile: file, logName: name,
     origin: null, parentSession: null, delegationDepth: null, isSeeded: null, kind: 'main', label: null,
@@ -158,6 +159,13 @@ export function parseClaudeSession(file, opts = {}) {
     else if (l.type === 'ai-title' && typeof l.aiTitle === 'string' && !customTitle && !aiTitle) { aiTitle = l.aiTitle; metaSources.title = metaSources.title ?? 'ai-title'; }
     else if (l.type === 'agent-name' && typeof l.agentName === 'string') agentNameTitle = l.agentName;
     if (l.type === 'assistant' && typeof l.message?.model === 'string') { model = l.message.model; metaSources.model = 'assistant.message.model'; }
+  }
+  // 模型名映射（用户定向 2026-10-09）：转录里可能记的是 Claude Code 侧注册名（切换器的别名），
+  // 展示统一用实际请求名（~/.claude/settings.json 的 *_MODEL_NAME 成对变量）。
+  let modelRaw = null;
+  if (model) {
+    const hit = mapModelName(loadModelMap({ source: SOURCE }), model);
+    if (hit.mapped) { modelRaw = model; model = hit.actual; metaSources.model += '→model-map(' + (hit.via || 'actual-request-config') + ')'; }
   }
   let coarse = coarseStateFromLines(tail.length ? tail : lines);
   // 时效修正：thinking/running 是中间态——尾部最后事件超 5 分钟仍停在该状态 = 会话被中断/废弃，
@@ -195,7 +203,7 @@ export function parseClaudeSession(file, opts = {}) {
     titleRaw: customTitle ?? aiTitle ?? agentNameTitle ?? null, metaSources,
     cwd: cwd ?? decodeClaudeProjectDir(base.projectDirName),
     cwdSource: cwd ? 'line:cwd' : 'dir-name(lossy)',
-    createdAt, updatedAt, model,
+    createdAt, updatedAt, model, modelRaw,
     agentVersion: version,
     gitBranch, entrypoint, variant,
     state: coarse.state, stateSource: coarse.stateSource,
@@ -340,9 +348,10 @@ export function followClaudeLogs(opts = {}) {
   const intervalMs = opts.intervalMs ?? 1200;
   const maxFiles = opts.maxFiles ?? 80;
   const onEvent = opts.onEvent ?? (() => {});
-  const files = new Map();          // file -> {offset, ctx, sessionId, sessionStarted}
+  const files = new Map();          // file -> {offset, ctx, sessionId, sessionStarted, mtimeMs}
+  const evictedOffsets = new Map(); // 被淘汰文件的 offset（再准入时续读）
   let stopped = false;
-  const stats = { files: 0, lines: 0, events: 0, parseErrors: 0, resamples: 0 };
+  const stats = { files: 0, lines: 0, events: 0, parseErrors: 0, resamples: 0, evictions: 0 };
 
   function listFiles() {
     const out = [];
@@ -358,23 +367,48 @@ export function followClaudeLogs(opts = {}) {
     return out;
   }
 
-  function ensure(file, size) {
-    let f = files.get(file);
-    if (!f) {
-      if (files.size >= maxFiles) return null;                     // 预算封顶：最老的文件不再跟随
-      f = { offset: opts.fromStart ? 0 : size, ctx: { sessionId: path.basename(file).replace(/\.jsonl$/, ''), seq: 0 }, sessionStarted: false };
-      files.set(file, f);
+  /**
+   * 预算准入（maxFiles）：触顶时淘汰**最久未修改**的跟随项，而不是让新文件永远进不来——
+   * 此前固定 80 槽位无淘汰，本机 162 个转录文件之外（含之后新建）的会话拿不到任何实时事件。
+   * 仅当新文件更新才淘汰（更旧的文件维持现状，避免抖动）；被淘汰者记忆 offset，
+   * 再次活跃时从淘汰点续读，补齐缺席期间的增量（否则醒来后的首批事件会被跳过）。
+   */
+  function admit(file, st) {
+    const existing = files.get(file);
+    if (existing) return existing;
+    if (files.size >= maxFiles) {
+      let victimFile = null, victim = null;
+      for (const [key, entry] of files) {
+        if (!victim || (entry.mtimeMs ?? 0) < (victim.mtimeMs ?? 0)) { victim = entry; victimFile = key; }
+      }
+      if (!victim || (victim.mtimeMs ?? 0) >= st.mtimeMs) return null;
+      files.delete(victimFile);
+      evictedOffsets.set(victimFile, victim.offset);
+      if (evictedOffsets.size > maxFiles * 2) evictedOffsets.delete(evictedOffsets.keys().next().value);
+      stats.evictions++;
     }
-    return f;
+    const resume = evictedOffsets.get(file);
+    evictedOffsets.delete(file);
+    const offset = opts.fromStart ? 0 : (resume !== undefined && st.size >= resume ? resume : st.size);
+    const fresh = { offset, ctx: { sessionId: path.basename(file).replace(/\.jsonl$/, ''), seq: 0 }, sessionStarted: false, mtimeMs: st.mtimeMs };
+    files.set(file, fresh);
+    return fresh;
   }
 
   function pump() {
     if (stopped) return;
     const now = Date.now();
+    // 先统一 stat 并按 mtime 倒序：最近写入的会话优先占预算（活跃/新会话不再被老文件挤掉）
+    const entries = [];
     for (const file of listFiles()) {
       let st; try { st = fs.statSync(file); } catch { continue; }
-      const f = ensure(file, st.size);
+      entries.push({ file, st });
+    }
+    entries.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
+    for (const { file, st } of entries) {
+      const f = admit(file, st);
       if (!f) continue;
+      f.mtimeMs = st.mtimeMs;
       if (st.size < f.offset) { f.offset = 0; stats.resamples++; }  // 文件被截断/重建：从头重读
       if (st.size <= f.offset) continue;
       // 按字节增量读（offset 是字节偏移；绝不能整文件转字符串再切片——字符/字节偏移在

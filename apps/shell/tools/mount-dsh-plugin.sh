@@ -96,9 +96,8 @@ do_mount() {
     say "插件已上线："
     say "${h}"
     hr "下一步（让悬浮窗输入真的能送达）"
-    say "1) 重启悬浮窗外壳，并带上投递通道："
-    say "   PET_INPUT_CMD='node ${ROOT}/apps/shell/tools/pet-input-send.mjs' ${ROOT}/apps/shell/run.sh --restart-server"
-    say "2) 在悬浮窗里发一条消息，日志会变成 status=delivered"
+    say "1) 让 CodeAll 服务重新探测插件（已运行的服务 30s 内自动检测）；代码更新后需重启服务。"
+    say "2) 在 CodeAll 中明确选择一个 DSH 主会话后发送；无需 PET_INPUT_CMD。"
     return 0
   fi
 

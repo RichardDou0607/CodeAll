@@ -17,12 +17,21 @@
  * 各源 usage 口径（全部本机实测，2026-10-07）：
  *   DSH          assistant/message 的 data.usage（每调用一组）累加；input 不含 cache；
  *                model 取行序 request/header；每目录只取最高代日志（pickLogFile 防双计）。
+ *                官方投影对账：session_projcache 的 tokenUsage.totals（uncachedInput+cacheRead+
+ *                output+cacheWrite）与本模块逐 token 一致（2026-10-09 全量 40 会话，39 精确；
+ *                余 1 为活跃会话在途：采集领先官方投影 1 步）。
  *   Claude Code  assistant 行 message.usage：同一条消息（message.id 相同）在流式分块中
  *                出现多行快照 → 按 message.id 去重、**后写覆盖**（最终快照）；input_tokens
  *                不含 cache。sidechain 行与 <sid>/subagents/agent-*.jsonl 都计入（归入父会话）。
- *   Codex        event_msg.token_count：info.total_token_usage 是**会话累计值**（取最后一条，
- *                权威）；last_token_usage 是事件增量（实测比权威少 ~25%）→ 单模型会话整额归属。
- *                input 含 cache。日桶/模型桶只能用事件增量（成文近似）。
+ *   Codex        event_msg.token_count：info.total_token_usage 是**会话累计值**（权威）→ 逐事件
+ *                取差分归日（Δ累计，负值截 0）：Σ日桶 == 源总量 == Σ文件增量，由构造保证。
+ *                两个反例必须按累计值处理（2026-10-09 用户报障「图表 459.4M vs 日历 397.2M」）：
+ *                ① 首条事件的累计可能继承父会话前缀（子代理/fork rollout 的 C0 = 父会话当时累计，
+ *                   本机 Σ 继承前缀 9,350 万 token ≈ 扁平口径虚高额）→ 首条只认自身 last_token_usage
+ *                   （新会话实测 C0 == L0；forked 实测 L0 = 0）；
+ *                ② last_token_usage 会被重复上报（同一累计值连出多条事件，本机 67+ 例）→ 逐条求和
+ *                   比累计差分虚高 8.8%（Σlast/ΣΔC = 1.088）。
+ *                input 含 cache。
  *   Kimi Code    usage.record：每次请求一条，直接累加；inputOther→input、inputCacheRead→
  *                cacheRead、inputCacheCreation→cacheWrite；含全部 agents/<id>/ 子代理流。
  *   ZCode        message 表 data JSON 的 tokens（与 part.step-finish 双路实测一致）：
@@ -122,8 +131,14 @@ function recordTool(calls, id, name, timestamp) {
 function freshInputOf(u, includesCache) { return includesCache ? Math.max(0, fin(u.input) - fin(u.cacheRead)) : fin(u.input); }
 function decorate(u, includesCache) {
   const fresh = freshInputOf(u, includesCache);
-  const denom = fresh + fin(u.cacheRead);
-  return { ...u, freshInput: fresh, hitRate: denom > 0 ? fin(u.cacheRead) / denom : null };
+  const cacheRead = fin(u.cacheRead), cacheWrite = fin(u.cacheWrite), output = fin(u.output);
+  const denom = fresh + cacheRead;
+  // 展示口径（2026-10-09 用户报障「本对话十几兆 vs 面板 789,088」后统一）：
+  //   promptTokens = 全量 prompt（含缓存读）= 各厂商 UI 里的 input（Anthropic 式 input 不含 cache，OpenAI 式含）；
+  //   totalTokens  = promptTokens + cacheWrite + output = 该源自带计数器显示的总量。
+  // 于是五源同列可比：DSH/Claude/Kimi 的 prompt = input + cacheRead，Codex/ZCode 的 prompt = input（已含 cache）。
+  const promptTokens = fresh + cacheRead;
+  return { ...u, freshInput: fresh, promptTokens, totalTokens: promptTokens + cacheWrite + output, hitRate: denom > 0 ? cacheRead / denom : null };
 }
 
 /** 文件级增量缓存：path → {size, mtimeMs, result}；跨轮常驻（进程内）。 */
@@ -357,7 +372,9 @@ async function collectCodexFile(file, o) {
   let curModel = null, variant = null, requests = 0, aborted = false, lineCnt = 0, parseErrors = 0, skippedLines = 0;
   const byModel = new Map(), modelDays = new Map(), days = new Map();
   const calls = newCalls();
-  let finalTotal = null;                               // 最后一条 total_token_usage（会话累计，权威）
+  const flat = newUsage();                             // 逐事件归因累加（与 days 同源 → Σ日桶 ≡ 源总量）
+  let prevTotal = null;                                // 上一条 total_token_usage（会话累计，权威）
+  let inheritedPrefix = 0, duplicateReports = 0, missingTotals = 0;
   const deadline = Date.now() + o.softBudgetMs;
   try {
     const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
@@ -377,33 +394,60 @@ async function collectCodexFile(file, o) {
         else if (j?.type === 'event_msg' && p.type === 'thread_settings_applied' && typeof p.thread_settings?.model === 'string') curModel = p.thread_settings.model;
         else if (isTok && j?.type === 'event_msg' && p.type === 'token_count') {
           const last = p.info?.last_token_usage ?? {};
-          const d = {
+          const tot = p.info?.total_token_usage;
+          const hasTot = !!tot && Number.isFinite(tot.input_tokens);
+          const own = {
             input: fin(last.input_tokens), output: fin(last.output_tokens),
-            cacheRead: fin(last.cached_input_tokens), cacheWrite: fin(last.cache_write_input_tokens), requests: 1,
+            cacheRead: fin(last.cached_input_tokens), cacheWrite: fin(last.cache_write_input_tokens),
           };
+          let d;
+          if (!prevTotal) {
+            // 首条事件：total 可能是继承的父会话/fork 前缀（子代理 rollout 的 C0 = 父会话当时累计），
+            // 只认本条自己的 last_token_usage——新会话实测 C0 == L0；forked 实测 L0 = 0（前缀是父会话的账）。
+            d = { ...own, requests: 1 };
+            if (hasTot) inheritedPrefix = Math.max(0, fin(tot.input_tokens) - own.input);
+          } else if (hasTot) {
+            // 其后每条：累计值差分（权威）。last_token_usage 会被重复上报（同一累计值连出多条事件），
+            // 逐条求和会虚高；差分天然把重复上报按 0 计。
+            const delta = {
+              input: fin(tot.input_tokens) - fin(prevTotal.input_tokens),
+              output: fin(tot.output_tokens) - fin(prevTotal.output_tokens),
+              cacheRead: fin(tot.cached_input_tokens) - fin(prevTotal.cached_input_tokens),
+              cacheWrite: fin(tot.cache_write_input_tokens) - fin(prevTotal.cache_write_input_tokens),
+            };
+            d = {
+              input: Math.max(0, delta.input), output: Math.max(0, delta.output),
+              cacheRead: Math.max(0, delta.cacheRead), cacheWrite: Math.max(0, delta.cacheWrite), requests: 1,
+            };
+            if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) duplicateReports++;
+          } else {
+            // 已见过累计值却缺累计值的事件（异常/旧格式）：不按 last 计 token，避免与后续 Δ累计 双计。
+            d = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 1 };
+            missingTotals++;
+          }
+          if (hasTot) prevTotal = tot;
           const day = dayKeyOf(Date.parse(j.timestamp) || Date.now());
+          addInto(flat, d);
           bumpDay(days, day, d);
           bumpModelDay(modelDays, curModel || '(unknown)', day, d);
           requests++;
-          const tot = p.info?.total_token_usage;
-          if (tot && Number.isFinite(tot.input_tokens)) finalTotal = tot;
         }
       }
     } finally { try { rl.close(); } catch { /* 已关闭 */ } }
   } catch { return { skipped: true }; }
   if (aborted) return { aborted: true };
-  // 会话扁平口径取权威累计值（per-model 增量归属可能有 turn_context 之前的盲区）
-  const flat = finalTotal
-    ? { input: fin(finalTotal.input_tokens), output: fin(finalTotal.output_tokens), cacheRead: fin(finalTotal.cached_input_tokens), cacheWrite: fin(finalTotal.cache_write_input_tokens), requests }
-    : (() => { const u = newUsage(); for (const v of days.values()) addInto(u, v); return u; })();
-  // 增量桶回填 per-model 全量（供 byModel）：单模型会话整额归属（增量实测漏 ~25%）
+  // flat 已是「首条自有增量 + 其后 Δ累计」之和：Σdays ≡ flat ≡ 文件自有消耗（不含继承前缀）。
+  // per-model 全量（供 byModel）：单模型会话整额归属；多模型会话按日桶增量归属。
   for (const [model, dm] of modelDays) {
     const u = newUsage();
-    if ([...modelDays.keys()].length === 1) Object.assign(u, flat); else for (const v of dm.values()) addInto(u, v);
+    if (modelDays.size === 1) Object.assign(u, flat); else for (const v of dm.values()) addInto(u, v);
     byModel.set(model, u);
   }
   if (!byModel.size && (flat.input || flat.output)) bumpModel(byModel, '(unknown)', flat);
-  const result = { flat, days, callDays: calls.days, models: byModel, modelDays, variant, stats: { tokenEvents: requests, parseErrors, skippedLines, undatedCalls: calls.undated } };
+  const result = {
+    flat, days, callDays: calls.days, models: byModel, modelDays, variant,
+    stats: { tokenEvents: requests, parseErrors, skippedLines, undatedCalls: calls.undated, inheritedPrefix, duplicateReports, missingTotals },
+  };
   codexFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
   return result;
 }
@@ -428,11 +472,16 @@ export async function scanCodexUsage(opts = {}) {
     acc.stats.parseErrors += r.stats.parseErrors;
     acc.stats.skippedLines += r.stats.skippedLines;
     acc.stats.undatedCalls += r.stats.undatedCalls;
+    // 口径诊断（对账用）：继承前缀 = 被排除的父会话 token；重复上报 = 累计值不动的 token_count 事件
+    acc.stats.inheritedPrefix += r.stats.inheritedPrefix || 0;
+    acc.stats.duplicateReports += r.stats.duplicateReports || 0;
+    acc.stats.missingTotals += r.stats.missingTotals || 0;
     try { acc.stats.readBytes += fs.statSync(f).size; } catch { /* 文件消失 */ }
     foldFile(acc, r, threadIdOf(f));
   }
   acc.stats.sessions = acc.bySession.size;
-  // Codex 日桶来自事件增量（成文近似）：Σdays 可能小于权威总量
+  // 日桶现由累计值差分归日：Σdays ≡ 总量（foldFile 恒等式自检）。dayApproximate 仍为 true——
+  // 总量精确，但「一条 Δ 落在哪一天」按事件时间戳切分，跨午夜的回合会在边界上近似。
   return finishScan('codex', acc, t0, { inputIncludesCache: true, dayApproximate: true });
 }
 
@@ -605,11 +654,15 @@ function newAcc() {
   return {
     bySession: new Map(), byModel: new Map(), byDay: new Map(), callsByDay: new Map(), byModelDay: new Map(), byVariantDay: new Map(), byVariantFlat: new Map(),
     totals: newUsage(),
-    stats: { files: 0, cachedFiles: 0, sessions: 0, readBytes: 0, parseErrors: 0, skippedLines: 0, skippedFiles: 0, undatedCalls: 0, partial: false, identityMismatched: 0 },
+    stats: { files: 0, cachedFiles: 0, sessions: 0, readBytes: 0, parseErrors: 0, skippedLines: 0, skippedFiles: 0, undatedCalls: 0, partial: false, identityMismatched: 0, dayIdentityMismatched: 0, inheritedPrefix: 0, duplicateReports: 0, missingTotals: 0 },
   };
 }
 /** 把一个「文件结果」（统一形状 {flat, days, models, modelDays, variant}）折叠进 scan 累加器。 */
 function foldFile(acc, r, sid) {
+  // 自检恒等式：Σ日桶 ≡ 文件扁平值（五源通用）。破坏它 = 日历日桶与「全部」总量对不上
+  // （2026-10-09 Codex 双口径即为此：Σdays 397.2M vs 总量 459.4M）。
+  const bucketSum = (m) => { let s = 0; for (const u of m.values()) s += fin(u.input) + fin(u.output) + fin(u.cacheRead) + fin(u.cacheWrite); return s; };
+  if (bucketSum(r.days) !== fin(r.flat.input) + fin(r.flat.output) + fin(r.flat.cacheRead) + fin(r.flat.cacheWrite)) acc.stats.dayIdentityMismatched++;
   const row = acc.bySession.get(sid) ?? newUsage();
   addInto(row, r.flat);
   acc.bySession.set(sid, row);
@@ -623,8 +676,8 @@ function foldFile(acc, r, sid) {
     for (const [day, u] of dm) bumpDay(tgt, day, u);
   }
   const v = r.variant ?? null;
-  // 形态是文件级属性：全量口径直接归权威 flat（Codex 的日桶增量会低估，全量必须精确）；
-  // 时间窗口径仍走 byVariantDay（Codex 近似，成文）
+  // 形态是文件级属性：全量口径直接归权威 flat（= Σ日桶，2026-10-09 起五源恒等）；
+  // 时间窗口径仍走 byVariantDay（两者现已等值，保留双路径是因为窗口要按日切）
   bumpModel(acc.byVariantFlat, v, r.flat);
   let vm = acc.byVariantDay.get(v);
   if (!vm) { vm = new Map(); acc.byVariantDay.set(v, vm); }
@@ -688,7 +741,7 @@ export function usageOverview(scansByKey, nowMs = Date.now()) {
     const bySource = {};
     const merged = new Map();
     const totals = newUsage();
-    let mergedFresh = 0;
+    let mergedFresh = 0, mergedPrompt = 0, mergedTotal = 0;
     for (const [, sc] of Object.entries(scans)) {
       if (!sc || sc.degraded) continue;
       const view = dayPred ? scanRangeView(sc, dayPred) : { totals: sc.totals, byModel: sc.byModel, byVariant: variantTotalsOf(sc) };
@@ -702,22 +755,28 @@ export function usageOverview(scansByKey, nowMs = Date.now()) {
       };
       for (const [model, u] of view.byModel) {
         let m = merged.get(model);
-        if (!m) { m = { ...newUsage(), sources: [], freshInput: 0 }; merged.set(model, m); }
+        if (!m) { m = { ...newUsage(), sources: [], freshInput: 0, promptTokens: 0, totalTokens: 0 }; merged.set(model, m); }
         addInto(m, u);
-        m.freshInput += freshInputOf(u, sc.inputIncludesCache);
+        const dec = decorate(u, sc.inputIncludesCache);
+        m.freshInput += dec.freshInput;
+        m.promptTokens += dec.promptTokens;
+        m.totalTokens += dec.totalTokens;
         if (!m.sources.includes(sc.source)) m.sources.push(sc.source);
       }
       addInto(totals, view.totals);
-      mergedFresh += freshInputOf(view.totals, sc.inputIncludesCache);
+      const dec = decorate(view.totals, sc.inputIncludesCache);
+      mergedFresh += dec.freshInput;
+      mergedPrompt += dec.promptTokens;
+      mergedTotal += dec.totalTokens;
     }
     const denom = mergedFresh + totals.cacheRead;
     return {
-      totals: { ...totals, freshInput: mergedFresh, hitRate: denom > 0 ? totals.cacheRead / denom : null },
+      totals: { ...totals, freshInput: mergedFresh, promptTokens: mergedPrompt, totalTokens: mergedTotal, hitRate: denom > 0 ? totals.cacheRead / denom : null },
       bySource,
       byModel: [...merged.entries()].map(([model, m]) => {
-        const { sources, freshInput, ...u } = m;
+        const { sources, freshInput, promptTokens, totalTokens, ...u } = m;
         const d = freshInput + u.cacheRead;
-        return { model, sources, ...u, hitRate: d > 0 ? u.cacheRead / d : null };
+        return { model, sources, ...u, freshInput, promptTokens, totalTokens, hitRate: d > 0 ? u.cacheRead / d : null };
       }).sort(byTotalDesc),
     };
   }
@@ -755,7 +814,9 @@ export function serializeUsageScan(sc) {
   for (const [day, u] of sc.byDay) byDay[day] = { ...u };
   return {
     source: sc.source, generatedAt: sc.generatedAt, elapsedMs: sc.elapsedMs,
-    totals: { ...sc.totals }, inputIncludesCache: !!sc.inputIncludesCache, dayApproximate: !!sc.dayApproximate,
+    // totals 附展示口径派生值（promptTokens/totalTokens），与日历/图表同源
+    totals: { ...sc.totals, ...(() => { const d = decorate(sc.totals, sc.inputIncludesCache); return { freshInput: d.freshInput, promptTokens: d.promptTokens, totalTokens: d.totalTokens, hitRate: d.hitRate }; })() },
+    inputIncludesCache: !!sc.inputIncludesCache, dayApproximate: !!sc.dayApproximate,
     byModel: [...sc.byModel.entries()].map(([model, u]) => ({ model, ...u })).sort(byTotalDesc),
     byVariant: [...variantTotalsOf(sc).entries()].map(([variant, u]) => ({ variant, totals: { ...u } })),
     byDay, callsByDay: Object.fromEntries(sc.callsByDay || []),
@@ -768,15 +829,21 @@ export function serializeUsageScan(sc) {
 export function usageCalendar(scans) {
   const sources = {};
   for (const [key, source] of [['dsh', 'dsh'], ['cc', 'claude-code'], ['cx', 'codex'], ['km', 'kimi-code'], ['zc', 'zcode']]) {
-    const sc = scans[key], days = {};
-    for (const [day, u] of sc?.byDay || []) days[day] = { ...u, tokens: fin(u.input) + fin(u.output), toolCalls: 0, mcpCalls: 0 };
-    for (const [day, counts] of sc?.callsByDay || []) days[day] = { ...(days[day] ?? { ...newUsage(), tokens: 0 }), ...counts };
+    const sc = scans[key], days = {}, includesCache = !!sc?.inputIncludesCache;
+    // 日桶 tokens = 全量口径（prompt 含缓存读 + cacheWrite + output），与各 Agent 自带计数一致；
+    // promptTokens/freshInput 一并透出，供下钻表与对账用（2026-10-09 口径统一）。
+    for (const [day, u] of sc?.byDay || []) {
+      const d = decorate(u, includesCache);
+      days[day] = { ...u, tokens: d.totalTokens, promptTokens: d.promptTokens, freshInput: d.freshInput, toolCalls: 0, mcpCalls: 0 };
+    }
+    for (const [day, counts] of sc?.callsByDay || []) days[day] = { ...(days[day] ?? { ...newUsage(), tokens: 0, promptTokens: 0, freshInput: 0 }), ...counts };
     const stats = sc?.stats ?? {};
     sources[source] = {
       days, available: !!sc && !sc.degraded,
       partial: !!(stats.partial || stats.parseErrors || stats.skippedLines || stats.skippedFiles || stats.undatedCalls),
       dayApproximate: !!sc?.dayApproximate,
       undatedCalls: stats.undatedCalls || 0,
+      inputIncludesCache: includesCache,
     };
   }
   return { sources, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
