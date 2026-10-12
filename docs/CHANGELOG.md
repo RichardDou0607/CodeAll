@@ -1,6 +1,15 @@
 # 变更日志（文档与契约）
 
 ## 2026-10-10
+### v0.2.0 开发计划立项（用户定向：跨平台 Win/Linux）
+
+- **方向裁决**：v0.1.0 收口后按 docs/23 留话「v0.2 恢复顺序需重新确认」征询用户，定向沿用 docs/22 历史排期——**v0.2.0 = W3/PLAT 跨平台**；v0.1.0 验收登记的遗留小修（claude-code `--resume` 就绪信号调研、`/api/new` dsh 审计字段、DEF-1、M1/M3/M5 与 frame.mjs 拼写）**排 v0.2.1**。
+- **Linux 架构口径（用户问询后确认）**：适配代码架构无关（全仓唯一 arch 引用是 session-catalog.mjs:157 的 DSH flock addon 参数化命名；服务纯 JS，Node/Tauri 双架构一等支持，bundle-service 从构建机复制 node 天然 per-arch）——按 Ubuntu Desktop LTS 24.04 单基线适配，v0.2.0 验收锁单一架构（默认 amd64、以物理机为准），另一架构仅 CI 出包并标注未实机验证；Linux 真实风险轴是 webkit2gtk/Ubuntu 版本与 X11-Wayland，非 CPU 架构（docs/24 §1/§6）。
+- **新增 [docs/24-v0.2.0-scope.md](./24-v0.2.0-scope.md)（v0.2.0 真相源）**：源可用性矩阵（各 CLI/DSH/ZCode 按平台实测接线，无发行版诚实标注）；DSH 插件桥按发行版决定（unix socket → Windows 命名管道，flock addon 平台参数化是积极信号）；ZCode 维持实验；外壳降级阶梯（Windows 不透明迷你条、Wayland 声明）。开发顺序 PLAT-0（验证机先行，新增）→ PLAT-1 平台抽象层 → PLAT-2 Windows → PLAT-3 Linux → PLAT-4 CI（remote 已建，docs/22「当前无远程」前提已满足），合计 17～27 人日、不做日期承诺。发布门槛 W01–W07（macOS 零回归 + 双平台安装即用/观察/控制/外壳 + 三平台收口）；验证纪律明确 VM 只做冒烟、窗口行为与安装包验收须物理机。
+- **技术盘点依据**（写进 docs/24 §2 的四个差异点 + 一处收编）：`local-agents.mjs`（ps/PlistBuddy/安装路径）、`cli-control.mjs`（osascript 终端链）、`framed.mjs:49`（插件 unix socket + TMPDIR）、`lib.rs`（`#[cfg(target_os="macos")]` 窗口行为块）、`session-catalog.mjs:158`（DSH addon 回退路径写死 /Applications）；Tauri 打包目标目前仅 app+dmg。
+- **同步**：docs/23 头部标注真相源移交 docs/24；docs/22 头部/PLAT-4 前提/DEF 节更新（W3 恢复、其余继续暂停、DEF 排 v0.2.1）；README 前言、文档索引、§四当前开发任务同步。
+
+## 2026-10-10
 ### v0.1.0 收口：V05 崩溃窗口落盘 + V01–V06 实机验收全部通过
 
 - **V05 代码缺口（CORE-4，唯一写代码项）**：`demo/framed.mjs` 此前 CLI / DSH 插件 / 投递即新建三条路径都是 `await` 投递完成后才落盘——执行中被 kill -9/断电时消息可能已送达而队列无痕（插件 4s 超时窗口尤甚）。修复：`persistInput`（只追加）改为 **`upsertInput`（按 id 原位替换）**，四条真实投递路径（新建、CLI 无头、DSH 插件、失败重试原位置 pending）**执行前先落盘 pending**，终态原位更新——同一消息不产生第二条队列记录；磁盘不可写时内存态仍原位可见（维持 qa M2 口径）。重启时残留 pending 由既有启动迁移标「结果未确认」。

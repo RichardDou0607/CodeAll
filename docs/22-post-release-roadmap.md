@@ -1,6 +1,7 @@
 # v0.1.0 后续构建任务（Post-Release Build Plan）
 
-> **2026-10-09 当前裁决：本文五条工作流及 v0.2-v1.0 排期全部降为未排期待办。当前只执行 [23-v0.1.0-scope.md](./23-v0.1.0-scope.md)：macOS v0.1.0 的 CLI 与 DS Harness 对话闭环。下文保留历史方案供后续恢复，不再是当前开发承诺；文末「DEF · 审查遗留缺陷」为本次代码审查的缺陷登记（同样未排期、不阻塞当前收口）。**
+> **2026-10-09 裁决：本文五条工作流及 v0.2-v1.0 排期全部降为未排期待办。当前只执行 [23-v0.1.0-scope.md](./23-v0.1.0-scope.md)：macOS v0.1.0 的 CLI 与 DS Harness 对话闭环。**
+> **2026-10-10 更新：v0.1.0 已收口发布（V01–V06 全过）。用户定向恢复 W3/PLAT 为 v0.2.0（真相源 [24-v0.2.0-scope.md](./24-v0.2.0-scope.md)，含新增 PLAT-0 验证机先行）；W1/W2/W4/W5 继续暂停未排期。文末「DEF · 审查遗留缺陷」及中低危项随 2026-10-10 裁决排入 v0.2.1（docs/24 §1），仍不阻塞开发。**
 
 > 制定日期：2026-10-08（用户定向）；**版本节奏重排：2026-10-08（用户定向）——v0.2 = Windows/Linux 跨平台（W3 提前），v0.3 = Cursor / OpenCode / Qoder 等软件接入（W2），v0.4 = 厂商 Coding Plan 监控（W1），W4 后移 v0.5 起**。定位：**CodeAll v0.1.0 首发之后的产品续作计划**，不替代 [20-roadmap](./20-roadmap.md)（原始两阶段计划）与 [21-multi-agent-adoption-plan.md](./21-multi-agent-adoption-plan.md)（多 Agent 接入，§6 双域模型仍是远端架构的真相源）；本文把五条新工作流落成可排期的任务，遵循 v0.1.0 确立的收敛原则——**能力落地才进软件列表，宣传不跑在实现前面**。
 >
@@ -76,7 +77,7 @@
 | PLAT-1 | **平台抽象层 `adapters/platform.mjs`**：installPaths 按 OS 给候选（Windows：%LOCALAPPDATA%/Programs、winget shim；Linux：/usr/bin、~/.local/share、flatpak/snap/AppImage）；进程快照（mac `ps axo` / Linux 同 / Windows `tasklist` 或 PowerShell CIM）；版本读取（PlistBuddy → PE 元数据 / .desktop）；终端启动链 | 3～4 人日 | 接口先行：所有适配器只调平台层，不写死 OS 分支 |
 | PLAT-2 | **Windows 全功能**：cli-control 终端 → `wt.exe`/`start`；ZCode/Claude/Codex/Kimi 的 Windows 路径与进程特征；透明+置顶+点击穿透在 Win11 实测（README §六.3 的验证机要求仍有效）；NSIS/MSI 包 | 6～10 人日 | 命名管道（`\\.\pipe\agent-pet-*`）替代 unix socket 的桥接层 |
 | PLAT-3 | **Linux 全功能**：终端链 xdg-terminal-exec → gnome-terminal → kitty；deb + AppImage；X11/Wayland 置顶与 skip-taskbar 差异实测；桌面自启（.desktop） | 5～8 人日 | Wayland 下点击穿透/置顶是最大不确定项，spike 先行 |
-| PLAT-4 | **CI 矩阵与安装包流水线**：三平台构建 + 全量回归（远端仓库建立后上 GitHub Actions matrix） | 2～3 人日 | 依赖：仓库发布（当前无 remote） |
+| PLAT-4 | **CI 矩阵与安装包流水线**：三平台构建 + 全量回归（远端仓库建立后上 GitHub Actions matrix） | 2～3 人日 | 依赖：仓库发布——remote 已建（github.com/RichardDou0607/CodeAll，2026-10-10 确认），前提满足 |
 
 ---
 
@@ -108,7 +109,7 @@
 
 ## DEF · 审查遗留缺陷（未排期；缺陷修复项，非新功能）
 
-> 来源：2026-10-09 全量代码审查。本轮已修并带回归：H1（打开路由按来源分流）、H2（跟随器预算 mtime 优先 + LRU 淘汰）、M2（日志/落盘失败不再带崩服务 + 进程级兜底）、M4（SSE 心跳与 DSH 日志解耦）——见 [CHANGELOG](./CHANGELOG.md) 与 [23 §5](./23-v0.1.0-scope.md)。本节只收「已定位、暂缓执行」的项：**不阻塞当前 v0.1.0 收口（V01–V06），随收口后恢复排期时一并处理**。ZCode 相关项按 [23 §1](./23-v0.1.0-scope.md) 的裁决属实验能力，不进入必过清单。
+> 来源：2026-10-09 全量代码审查。本轮已修并带回归：H1（打开路由按来源分流）、H2（跟随器预算 mtime 优先 + LRU 淘汰）、M2（日志/落盘失败不再带崩服务 + 进程级兜底）、M4（SSE 心跳与 DSH 日志解耦）——见 [CHANGELOG](./CHANGELOG.md) 与 [23 §5](./23-v0.1.0-scope.md)。本节只收「已定位、暂缓执行」的项：**不阻塞 v0.1.0 收口（已通过）；2026-10-10 用户定向将其排入 v0.2.1**（见 [24 §1](./24-v0.2.0-scope.md)）。ZCode 相关项按 [23 §1](./23-v0.1.0-scope.md) 的裁决属实验能力，不进入必过清单。
 
 | ID | 任务 | 触发条件 | 实测证据 | 修复方向 | 验收 | 估时 |
 |---|---|---|---|---|---|---|

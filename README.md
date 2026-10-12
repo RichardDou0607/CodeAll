@@ -1,6 +1,6 @@
 # CodeAll（Agent 工作框 / 桌宠）
 
-> 一个常驻桌面的**工作框 / Agent 总控**。当前开发目标是与 Claude Code、Codex、Kimi Code 的 CLI 会话及已授权的 DeepSeek Harness 会话对话；已有的多源观察、用量和 ZCode 实验能力保留。跨平台、计费、远端 AgentOS 与手机端是暂停排期的方向，不属于当前交付承诺。
+> 一个常驻桌面的**工作框 / Agent 总控**。当前开发目标是与 Claude Code、Codex、Kimi Code 的 CLI 会话及已授权的 DeepSeek Harness 会话对话；已有的多源观察、用量和 ZCode 实验能力保留。**跨平台（Windows/Linux）是当前开发方向（v0.2.0 进行中，见 [docs/24](./docs/24-v0.2.0-scope.md)，未发布不构成承诺）**；计费、远端 AgentOS 与手机端仍是暂停排期的方向，不属于当前交付承诺。
 >
 > 当前已发布：**v0.1.0（2026-10-10）**，v0.1.0-alpha（2026-10-08）之后按 [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) 收口 **macOS 的 CLI 与 DS Harness 对话闭环**，V01–V06 发布验收已全部通过（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)）。已有观察/用量等功能仍在，但不构成新增开发承诺。
 
@@ -97,7 +97,8 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 | [docs/20-roadmap.md](./docs/20-roadmap.md) | 原始两阶段里程碑（M0–M10）、关键路径、SDK 冻结锚点 |
 | [docs/21-multi-agent-adoption-plan.md](./docs/21-multi-agent-adoption-plan.md) | **多 Agent 接入计划 v3**：接入里程碑 M-A…M-U、§6 双域模型（本地直控 + 远端 AgentOS） |
 | [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md) | 原后续构建任务，现已暂停排期 |
-| [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) | **当前真相源**：CLI + DSH 对话范围、优先级与发布验收 |
+| [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) | v0.1.0 真相源（已收口）：CLI + DSH 对话范围、优先级与发布验收 |
+| [docs/24-v0.2.0-scope.md](./docs/24-v0.2.0-scope.md) | **当前真相源（v0.2.0）**：Windows/Linux 跨平台范围、优先级与发布验收 |
 | [docs/40-adapters.md](./docs/40-adapters.md) | 后端适配矩阵（含 Cursor/Copilot/ACP 行）、观测能力与降级 |
 | [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | 产品规格、工作框三形态、人机交互总体方案 |
 | [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri 外壳实现（双窗口、Space 行为、内存口径） |
@@ -107,4 +108,4 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 
 ## 四、当前开发任务
 
-[v0.1.0 对话收口](./docs/23-v0.1.0-scope.md) 的 V01–V06 已于 2026-10-10 全部验收通过（CLI 指定会话收发、DSH 授权插件收发、误投/失败/重发保护、崩溃窗口记录与最终 macOS 安装包复验）。跨平台、更多 Agent、计费、远端和手机端仍保留在 [历史待办](./docs/22-post-release-roadmap.md)，**目前没有版本或日期承诺**。原则不变：能力落地且完成验收，才进入对外保证。
+[v0.1.0 对话收口](./docs/23-v0.1.0-scope.md) 的 V01–V06 已于 2026-10-10 全部验收通过（CLI 指定会话收发、DSH 授权插件收发、误投/失败/重发保护、崩溃窗口记录与最终 macOS 安装包复验）。**当前开发：v0.2.0 Windows/Linux 跨平台**（[docs/24](./docs/24-v0.2.0-scope.md)，2026-10-10 用户定向恢复历史排期 W3）：平台抽象层 → 双平台全功能 → 三平台安装包，发布门槛 W01–W07；v0.1.0 验收登记的遗留小修排 v0.2.1。更多 Agent、计费、远端和手机端仍保留在 [历史待办](./docs/22-post-release-roadmap.md)。原则不变：能力落地且完成验收，才进入对外保证。
