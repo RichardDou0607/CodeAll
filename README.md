@@ -1,17 +1,28 @@
-# CodeAll（Agent 工作框 / 桌宠）
+# CodeAll（Agent 工作框 / 总控）
 
 > 一个常驻桌面的**工作框 / Agent 总控**。当前开发目标是与 Claude Code、Codex、Kimi Code 的 CLI 会话及已授权的 DeepSeek Harness 会话对话；已有的多源观察、用量和 ZCode 实验能力保留。**跨平台（Windows/Linux）是当前开发方向（v0.2.0 进行中，见 [docs/24](./docs/24-v0.2.0-scope.md)，未发布不构成承诺）**；计费、远端 AgentOS 与手机端仍是暂停排期的方向，不属于当前交付承诺。
 >
-> 当前已发布：**v0.1.0（2026-10-10）**，v0.1.0-alpha（2026-10-08）之后按 [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) 收口 **macOS 的 CLI 与 DS Harness 对话闭环**，V01–V06 发布验收已全部通过（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)）。已有观察/用量等功能仍在，但不构成新增开发承诺。
+> 当前对外可下载：**v0.1.0-alpha（2026-10-08，独立安装包）**。CLI 与 DS Harness 对话闭环的 v0.1.0 收口验收（V01–V06）已在源码层完成（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)），正式版本待跨平台（v0.2.0）与整体形态完成后发布。已有观察/用量等功能仍在，但不构成新增开发承诺。
+
+## English
+
+CodeAll is a resident desktop **work-frame / agent cockpit** for macOS (Apple Silicon). It observes your local AI agents (DeepSeek Harness, Claude Code, Codex, Kimi Code, ZCode) read-only, and lets you send messages to an explicitly selected CLI session or an authorized DSH plugin session — plus per-agent token usage tracking. It does not read credentials.
+
+- **Download**: the current public build is **v0.1.0-alpha** — get `CodeAll_0.1.0_aarch64.dmg` from [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) and drag it into /Applications. The bundle ships its own local service and Node runtime; no Node installation required.
+- **First launch**: the app is ad-hoc signed and not notarized, so macOS Gatekeeper will block it once. Either run `xattr -cr /Applications/CodeAll.app` in Terminal, or right-click the app in Finder → Open → Open (on newer macOS, if still blocked: System Settings → Privacy & Security → Open Anyway).
+- **What works now**: read-only five-source session overview; per-agent four-state panel; CLI directed delivery (Claude Code / Codex / Kimi Code); authorized DSH plugin delivery; input queue with crash-window persistence; token usage, cache-hit rates and calendar. ZCode control is experimental.
+- **What's next**: Windows / Linux cross-platform is the current direction (v0.2.0, in progress — see [docs/24](./docs/24-v0.2.0-scope.md); not a commitment until released). Billing, remote AgentOS and mobile remain paused.
+- **License**: [PolyForm Noncommercial License 1.0.0](./LICENSE) — free for any noncommercial use (source-available, not OSI open source). Third-party agent logos are trademarks of their respective owners.
 
 ## 〇、下载安装（macOS · Apple Silicon）
 
-从 [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) 下载 `CodeAll_0.1.0_aarch64.dmg`，拖入 /Applications 即用：**安装包自带本地服务与 Node 运行时，不依赖源码仓库，也无需先装 Node 或其它任何依赖**（各家 Agent 软件本体当然需要各自安装并登录）。
+从 [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) 下载 **v0.1.0-alpha** 的 `CodeAll_0.1.0_aarch64.dmg`，拖入 /Applications 即用：**安装包自带本地服务与 Node 运行时，不依赖源码仓库，也无需先装 Node 或其它任何依赖**（各家 Agent 软件本体当然需要各自安装并登录）。
 
 ```bash
-# 首次打开：安装包未做开发者证书签名，macOS 会拦截一次——任选其一：
-xattr -cr /Applications/CodeAll.app     # 方式一：终端执行后正常打开
+# 首次打开：应用为 ad-hoc 签名、未经过 Apple 公证，macOS 门禁会拦截一次——任选其一：
+xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性后正常打开
 # 方式二：在「应用程序」里右键 CodeAll → 打开 → 再点「打开」
+# 较新 macOS 若仍拦截：系统设置 → 隐私与安全性 → 仍要打开
 ```
 
 观察会话与用量仍可用；本轮重点是 Claude Code/Codex/Kimi Code **CLI 主会话**与 DSH 已授权插件会话的定向对话。DSH 未挂插件时仅观察/入队，不宣称已投递；ZCode app-server 控制为实验能力，不列入 v0.1.0 必过通道。开发模式（从源码运行）见下节。
