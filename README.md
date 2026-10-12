@@ -4,15 +4,7 @@
 >
 > 当前对外可下载：**v0.1.0-alpha（2026-10-08，独立安装包）**。CLI 与 DS Harness 对话闭环的 v0.1.0 收口验收（V01–V06）已在源码层完成（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)），正式版本待跨平台（v0.2.0）与整体形态完成后发布。已有观察/用量等功能仍在，但不构成新增开发承诺。
 
-## English
-
-CodeAll is a resident desktop **work-frame / agent cockpit** for macOS (Apple Silicon). It observes your local AI agents (DeepSeek Harness, Claude Code, Codex, Kimi Code, ZCode) read-only, and lets you send messages to an explicitly selected CLI session or an authorized DSH plugin session — plus per-agent token usage tracking. It does not read credentials.
-
-- **Download**: the current public build is **v0.1.0-alpha** — get `CodeAll_0.1.0_aarch64.dmg` from [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) and drag it into /Applications. The bundle ships its own local service and Node runtime; no Node installation required.
-- **First launch**: the app is ad-hoc signed and not notarized, so macOS Gatekeeper will block it once. Either run `xattr -cr /Applications/CodeAll.app` in Terminal, or right-click the app in Finder → Open → Open (on newer macOS, if still blocked: System Settings → Privacy & Security → Open Anyway).
-- **What works now**: read-only five-source session overview; per-agent four-state panel; CLI directed delivery (Claude Code / Codex / Kimi Code); authorized DSH plugin delivery; input queue with crash-window persistence; token usage, cache-hit rates and calendar. ZCode control is experimental.
-- **What's next**: Windows / Linux cross-platform is the current direction (v0.2.0, in progress — see [docs/24](./docs/24-v0.2.0-scope.md); not a commitment until released). Billing, remote AgentOS and mobile remain paused.
-- **License**: [PolyForm Noncommercial License 1.0.0](./LICENSE) — free for any noncommercial use (source-available, not OSI open source). Third-party agent logos are trademarks of their respective owners.
+> English readers: see the full **English version → [English](#english)** at the bottom of this page.
 
 ## 〇、下载安装（macOS · Apple Silicon）
 
@@ -120,3 +112,124 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 ## 四、当前开发任务
 
 [v0.1.0 对话收口](./docs/23-v0.1.0-scope.md) 的 V01–V06 已于 2026-10-10 全部验收通过（CLI 指定会话收发、DSH 授权插件收发、误投/失败/重发保护、崩溃窗口记录与最终 macOS 安装包复验）。**当前开发：v0.2.0 Windows/Linux 跨平台**（[docs/24](./docs/24-v0.2.0-scope.md)，2026-10-10 用户定向恢复历史排期 W3）：平台抽象层 → 双平台全功能 → 三平台安装包，发布门槛 W01–W07；v0.1.0 验收登记的遗留小修排 v0.2.1。更多 Agent、计费、远端和手机端仍保留在 [历史待办](./docs/22-post-release-roadmap.md)。原则不变：能力落地且完成验收，才进入对外保证。
+
+## 五、许可证
+
+本项目采用 [PolyForm Noncommercial License 1.0.0](./LICENSE)（源码可用 · 非商业用途免费；不属于 OSI 开源定义）。界面中的各家 Agent 图标为其各自所有者的商标。
+
+## English
+
+> CodeAll is a resident desktop **work-frame / agent cockpit**. The current development goal is conversation with Claude Code, Codex and Kimi Code CLI sessions, plus authorized DeepSeek Harness sessions; existing multi-source observation, usage tracking and ZCode experimental capabilities are retained. **Cross-platform (Windows/Linux) is the current direction (v0.2.0 in progress, see [docs/24](./docs/24-v0.2.0-scope.md); not a commitment until released)**; billing, remote AgentOS and mobile remain paused and are not part of the current delivery promise.
+>
+> Current public download: **v0.1.0-alpha (2026-10-08, standalone installer)**. The v0.1.0 acceptance for the CLI & DS Harness conversation loop (V01–V06) is complete at source level (evidence: [qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)); a formal release comes after cross-platform (v0.2.0) and the overall product shape are done. Existing observation/usage features remain available but are not a new development commitment.
+
+### 0 · Download & Install (macOS · Apple Silicon)
+
+Download the **v0.1.0-alpha** `CodeAll_0.1.0_aarch64.dmg` from [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) and drag it into /Applications: **the installer ships its own local service and Node runtime** — no repo checkout or Node installation required (each agent product itself still needs to be installed and signed in by you).
+
+```bash
+# First launch: the app is ad-hoc signed and not notarized, macOS Gatekeeper blocks it once — pick one:
+xattr -cr /Applications/CodeAll.app     # Option 1: remove the quarantine attribute in Terminal
+# Option 2: right-click CodeAll in Applications → Open → Open
+# On newer macOS, if still blocked: System Settings → Privacy & Security → Open Anyway
+```
+
+Session observation and usage tracking remain available; the focus is directed conversation with Claude Code / Codex / Kimi Code **CLI main sessions** and authorized DSH plugin sessions. With no DSH plugin mounted, DSH is observe/queue only — delivery is never claimed; ZCode app-server control is experimental and not part of the v0.1.0 guaranteed path. For development mode (running from source), see the next section.
+
+### 1 · Implemented Capabilities (v0.1.0, all verified on this machine)
+
+#### Observe (read-only, zero intrusion, no credentials touched)
+
+| Capability | Description |
+|---|---|
+| **Five-source session view** | DSH (workspace registry) / Claude Code (transcript JSONL) / Codex (rollout) / Kimi Code (state.json + wire event stream) / ZCode (sqlite WAL, read-only, concurrent) — unified directory, status, title, model, thinking tier |
+| **Four-state software panel** | One row per product: not downloaded → not running → running · not connected → running · connected; CLI and desktop apps are **split into separate rows** (processes distinguished by path), with version, process count, session count and liveness |
+| **Three-tier session views** | Active / done / hidden (auto-archived after 1 h idle; manual hiding stacks, with a "manual" badge and one-click restore); sub-agent sessions are excluded and never inflate counts |
+| **Session form labels** | End-to-end CLI / desktop / IDE labeling (session level + software row level); form filter drives the project sidebar |
+| **Live event stream** | Turn boundaries, tool calls/results, approval requests (Kimi native approval pairs, Claude/Codex equivalent mapping) → visible on the mini bar and App UI within seconds |
+
+#### Control (explicitly no overreach)
+
+| Capability | Description |
+|---|---|
+| **CLI directed delivery** | Claude Code / Codex / Kimi Code: continue an explicit session ID; 2.5 s fast-fail detection on launch. Process start ≠ turn success — final state and reply still need verification; the ZCode pipeline remains experimental |
+| **New / open sessions** | Existing CLI and DSH plugin paths are kept; not a core v0.1.0 release gate, and not the same as desktop-app-native creation |
+| **Input queue** | Local queue (`~/.agent-pet/input-queue.jsonl`, 0600, auto-rotated) keeps only unfinished items; copy / resend / delete / clear |
+| **DSH delivery (authorized)** | With the dsh-pet plugin mounted (adds config only, never removes), the service talks to the plugin directly for the selected session; when the plugin is offline, messages only queue — credentials are never bypassed and no target-less command ever runs |
+
+#### Usage & Billing Foundation
+
+| Capability | Description |
+|---|---|
+| **Five-source token counting** | Precise accumulation by Agent × model × calendar day × form (60 s slow cache + file-level increments; 1.1 GB transcripts stay off the hot path); sub-agent consumption is attributed to the parent session |
+| **Cache hit rates** | Per source / per model hit rate (input semantics split by vendor: Anthropic excludes cache / OpenAI includes), reconciled against official UIs (ZCode "today's consumption" baseline) |
+| **Time windows + calendar** | Today / 7 d / 30 d switching; usage calendar heatmap with daily detail; per-session tok in/out rows |
+
+#### Desktop Shell (Tauri v2)
+
+| Capability | Description |
+|---|---|
+| **Two coexisting windows** | Mini bar (transparent, draggable, rotating single-line) + App window (native traffic lights), both resident; ⤢ to summon / ✕ to collapse, neither quits |
+| **Fullscreen coexistence** | Mini bar uses `CanJoinAllSpaces + FullScreenAuxiliary` — when the App goes native fullscreen the mini bar stays on the desktop (floats above fullscreen when pinned 📌) |
+| **Tactical terminal theme** | Light / dark / follow system; CodeAll branding and the five original product icons |
+| **One-click install** | `apps/shell/run.sh --install` installs into /Applications; daily launch via Spotlight; the shell auto-starts the local service |
+
+#### Security Red Lines (throughout the implementation)
+
+All write endpoints require a token (`~/.agent-pet/token`, 0600, auto-injected by pages) plus Host validation; all observation is read-only (write-to-store probes are explicitly rejected and asserted); headless delivery never escalates privileges (build tier); user prompt text is never read (Kimi lastPrompt is not read); queue and schedule files are 0600.
+
+### 2 · Quick Start
+
+```bash
+apps/shell/run.sh --install           # First time: build and install into /Applications; afterwards just Spotlight "CodeAll"
+node demo/framed.mjs --port 7799    # Local service: five-source observation + CLI control channel + SSE (manual start when the shell is not running)
+open http://127.0.0.1:7799/           # Mini bar; /window.html = App UI (same-origin accessible from a browser)
+
+# Regression & acceptance (current baseline all green)
+node demo/test-window.mjs             # App UI render self-check (85 assertions)
+node demo/test-window-actions.mjs     # Interaction behavior regression (14 items)
+node demo/test-mini.mjs               # Mini bar render self-check (12 items)
+node demo/test-open-routing.mjs       # Open-routing regression (CLI → Terminal; DSH/unknown IDs → plugin)
+node demo/test-follow-budget.mjs      # Follower budget regression (mtime-first + LRU eviction; claude/codex/kimi)
+node demo/test-service-hardening.mjs  # Service hardening (unwritable log dir doesn't crash; 2 s heartbeat without DSH logs)
+node demo/test-usage-calendar.mjs     # Usage calendar self-check
+node scripts/multi-source-check.mjs         # Extended multi-source check (incl. ZCode perf threshold; not a current release gate)
+node scripts/catalog-check.mjs        # Session catalog acceptance (16 items)
+node adapters/local-agents.mjs        # Four-state software probe (CLI table / --json)
+node adapters/cli-control.mjs --selftest   # Control channel self-test (deliver · new · open)
+
+# Other demos
+node demo/frame.mjs                   # Terminal live work-frame; --replay for offline playback
+node scripts/check-fixtures.mjs       # Contract consistency (16/16 types, 6 states)
+node scripts/replay-check.mjs --selftest   # State-machine replay + negative cases
+```
+
+`multi-source-check.mjs --live` sends messages to real agent sessions and consumes model quota — **it is not a default self-check**; the minimal release acceptance and safety test commands are in [docs/23](./docs/23-v0.1.0-scope.md).
+
+**Ops note**: after `demo/framed.mjs` code changes you **must restart the service/app** for them to take effect (the shell only starts the service when the port is free; page auto-refresh does not reload the Node process). DSH delivery is handled by the service probing the authorized plugin directly — it does not depend on `PET_INPUT_CMD`; old installers do not automatically receive source fixes — final package re-verification is required.
+
+### 3 · Docs Index
+
+| File | Content |
+|---|---|
+| [docs/00-interface-contract.md](./docs/00-interface-contract.md) | **Spec event contract v1.2** (frozen): event/control frames, state-machine truth table, transport |
+| [docs/10-architecture.md](./docs/10-architecture.md) | Overall architecture, ADRs, module split, NFRs |
+| [docs/20-roadmap.md](./docs/20-roadmap.md) | Original two-phase milestones (M0–M10), critical path, SDK freeze anchors |
+| [docs/21-multi-agent-adoption-plan.md](./docs/21-multi-agent-adoption-plan.md) | **Multi-agent adoption plan v3**: milestones M-A…M-U, §6 dual-domain model (local direct control + remote AgentOS) |
+| [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md) | Original follow-up build tasks, scheduling now paused |
+| [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) | v0.1.0 truth source (closed out): CLI + DSH conversation scope, priorities and release acceptance |
+| [docs/24-v0.2.0-scope.md](./docs/24-v0.2.0-scope.md) | **Current truth source (v0.2.0)**: Windows/Linux cross-platform scope, priorities and release acceptance |
+| [docs/40-adapters.md](./docs/40-adapters.md) | Backend adapter matrix (incl. Cursor/Copilot/ACP rows), observation capabilities and degradation |
+| [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | Product spec, work-frame three forms, human-machine interaction plan |
+| [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri shell implementation (dual windows, Spaces behavior, memory accounting) |
+| [docs/CHANGELOG.md](./docs/CHANGELOG.md) | Changelog (per day, per feature, incl. acceptance records) |
+| [demo/README.md](./demo/README.md) | Demo notes and "honesty boundaries" (how input reaches DSH, etc.) |
+| [spikes/](./spikes/README.md) | Tech-stack validation (Swift/AppKit, Tauri v2, Electron) |
+
+### 4 · Current Development
+
+The v0.1.0 conversation loop ([docs/23](./docs/23-v0.1.0-scope.md)) passed all V01–V06 acceptances on 2026-10-10 (CLI directed send/receive, DSH authorized plugin send/receive, mis-delivery/failure/resend protection, crash-window records and final macOS installer re-verification). **Current work: v0.2.0 Windows/Linux cross-platform** ([docs/24](./docs/24-v0.2.0-scope.md), direction set by the owner on 2026-10-10 per the historical schedule W3): platform abstraction layer → full functionality on both platforms → three-platform installers, release gates W01–W07; leftover fixes registered in the v0.1.0 acceptance are scheduled for v0.2.1. More agents, billing, remote and mobile remain in the [historical backlog](./docs/22-post-release-roadmap.md). Unchanged principle: a capability enters the public guarantee only after it is implemented and accepted.
+
+### License
+
+[PolyForm Noncommercial License 1.0.0](./LICENSE) — free for any noncommercial use (source-available, not OSI open source). Third-party agent logos are trademarks of their respective owners.
