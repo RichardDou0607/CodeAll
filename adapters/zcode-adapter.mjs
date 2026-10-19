@@ -48,6 +48,17 @@ export const DEFAULT_OPTS = Object.freeze({
 const RISK_BY_CATEGORY = { exec: 2, write: 2, net: 1, read: 0, other: 1 };
 function clip(s, n) { s = String(s ?? '').replace(/\s+/g, ' '); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
+/** 用户手动停止的签名：ZCode 中断时把在飞工具置 state.status='error'，错误文本固定带
+ *  cancelled/interrupted（实测 2026-10-19 全库分布：「Agent was cancelled before the subagent…」
+ *  「Bash was cancelled and the child process was asked to stop」「TaskOutput was cancelled…」
+ *  「WebFetch was cancelled…」「MCP tool … was cancelled」「Tool execution was interrupted during
+ *  streaming recovery…」）。真错误（File has been modified / fetch failed / …）不含这些词。 */
+const CANCELLED_TOOL_RE = /cancell?ed|interrupted/i;
+export function isCancelledToolError(errValue) {
+  const text = typeof errValue === 'string' ? errValue : String(errValue?.message ?? '');
+  return !!text && CANCELLED_TOOL_RE.test(text);
+}
+
 /** 主会话判定：task_type='subagent_child' 为子代理；'selection_side_chat' 为划词问答（瞬态 UI 产物，
  *  ZCode 自身会话列表不视为对话——计入 stats.sideChats，不进列表，2026-10-07 修正计数口径）。 */
 const SIDE_CHAT = 'selection_side_chat';
@@ -89,7 +100,7 @@ export function coarseStateFromZcodeRows(rows, { now = Date.now(), staleProgress
         const fin = String(d.finish ?? '');
         if (fin === 'stop' || fin === 'completed') { state = 'done'; stateSource = 'assistant:' + fin; }
         else if (fin === 'failed') { state = 'error'; stateSource = 'assistant:failed'; }
-        else if (fin === 'interrupted') { state = 'idle'; stateSource = 'assistant:interrupted'; }
+        else if (fin === 'interrupted') { state = 'aborted'; stateSource = 'assistant:interrupted'; }
         else if (fin === 'tool-calls') { state = 'running'; stateSource = 'assistant:tool-calls'; }
         else { state = 'thinking'; stateSource = 'assistant:streaming'; }   // finish 未落 = 正在流式输出
       }
@@ -99,13 +110,21 @@ export function coarseStateFromZcodeRows(rows, { now = Date.now(), staleProgress
         const st = String(d.state?.status ?? '');
         if (st === 'running') { state = 'running'; stateSource = 'tool:running'; }
         else if (st === 'completed' || st === 'error') { state = 'running'; stateSource = 'tool:' + st; }
+        // 被用户取消的工具（"… was cancelled"）= 手动停止：中断后 ZCode 不再写回合终态，
+        // 该行即会话最后显著行——映射 aborted，与「真错误后 agent 继续」的 running 区分开
+        if (st === 'error' && isCancelledToolError(d.state?.error)) { state = 'aborted'; stateSource = 'tool:cancelled'; }
       } else if (t === 'step-start') { state = 'thinking'; stateSource = 'step-start'; }
       // step-finish 不认领：它落盘晚于消息终态（实测 dump：msg 完成 923043 → step-finish 929905），
       // 若认领 running 会把已完成回合顶回「进行中」。text/timeline/compaction/file：不单独定性
     }
   }
-  // 时效修正：thinking/running 超 5min 无新行 → idle（进程被杀/会话被弃）
+  // 时效修正：thinking/running 超 5min 无新行 → idle（进程被杀/会话被弃）。
+  // 例外：窗口内最后的工具行是「被用户取消」（… was cancelled）→ aborted——中断后 ZCode 不写
+  // 回合终态，最后显著行常是早几毫秒的 tool-calls 消息，取消行被埋在其下（2026-10-19 实测）。
   if ((state === 'thinking' || state === 'running') && lastTs !== null && now - lastTs > staleProgressMs) {
+    const lastTool = rows.find(r => r.data?.type === 'tool');   // rows 按 time_updated 倒序：首个 tool 行即最新
+    if (lastTool && String(lastTool.data.state?.status ?? '') === 'error' && isCancelledToolError(lastTool.data.state?.error))
+      return { state: 'aborted', stateSource: stateSource + ':stale>5min→aborted(tool-cancelled)' };
     return { state: 'idle', stateSource: stateSource + ':stale>5min→idle' };
   }
   return { state, stateSource };
@@ -274,7 +293,8 @@ export function mapZcodeRow(row, ctx) {
     if (st === 'running') {
       return [{ ...base, type: 'tool.call', data: { callId: d.callID ?? ('call-' + seq), toolName, category, risk: RISK_BY_CATEGORY[category], summary: '' } }];
     }
-    return [{ ...base, type: 'tool.result', data: { callId: d.callID ?? ('call-' + seq), status: st === 'completed' ? 'ok' : 'error' } }];
+    // 非完成态分流：被用户取消（"… was cancelled"）→ aborted（手动停止）；其余 → error（真错误）
+    return [{ ...base, type: 'tool.result', data: { callId: d.callID ?? ('call-' + seq), status: st === 'completed' ? 'ok' : isCancelledToolError(d.state?.error) ? 'aborted' : 'error' } }];
   }
   // step-start/step-finish 不映射（v1.1）：step 边界落盘晚于消息终态（finish=stop 是行内 UPDATE、
   // step-finish 随后 INSERT），迟到的 step.end 会把 turn.end 已置的 done 拉回 running——

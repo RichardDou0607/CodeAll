@@ -474,11 +474,11 @@ function applyEvent(ev) {
     // 新建的空闲会话永远显示「思考中」，2026-10-05 实测踩坑）
     case 'session.start': setState(s, 'idle', '空闲'); break;
     case 'turn.start': setState(s, 'thinking', '思考中'); state.counters.thinking++; break;
-    case 'turn.end': setState(s, d.status === 'ok' ? 'done' : d.status === 'error' ? 'error' : 'idle', d.status === 'ok' ? '已完成' : d.status === 'error' ? '本轮出错' : '空闲'); if (d.status === 'ok') state.counters.done++; break;
-    case 'session.end': setState(s, d.reason === 'error' ? 'error' : d.reason === 'done' ? 'done' : 'idle', d.reason === 'error' ? '会话出错' : d.reason === 'done' ? '已完成' : '空闲'); break;
-    case 'step.start': case 'step.end': setState(s, d.status === 'error' ? 'transient-error' : 'running', d.status === 'error' ? '步骤出错（自动恢复）' : '运行中'); break;
+    case 'turn.end': setState(s, d.status === 'ok' ? 'done' : d.status === 'error' ? 'error' : d.status === 'aborted' ? 'aborted' : 'idle', d.status === 'ok' ? '已完成' : d.status === 'error' ? '本轮出错' : d.status === 'aborted' ? '已手动停止' : '空闲'); if (d.status === 'ok') state.counters.done++; break;
+    case 'session.end': setState(s, d.reason === 'error' ? 'error' : d.reason === 'done' ? 'done' : d.reason === 'aborted' ? 'aborted' : 'idle', d.reason === 'error' ? '会话出错' : d.reason === 'done' ? '已完成' : d.reason === 'aborted' ? '已手动停止' : '空闲'); break;
+    case 'step.start': case 'step.end': setState(s, d.status === 'error' ? 'transient-error' : d.status === 'aborted' ? 'aborted' : 'running', d.status === 'error' ? '步骤出错（自动恢复）' : d.status === 'aborted' ? '已手动停止' : '运行中'); break;
     case 'tool.call': setState(s, 'running', CATEGORY_TEXT[d.category] || '调用工具'); state.counters.running++; break;
-    case 'tool.result': if (d.status === 'error') { setState(s, 'transient-error', '命令出错'); state.counters.errors++; } else if (d.status === 'denied') { setState(s, 'running', '命令被拒绝'); } break;
+    case 'tool.result': if (d.status === 'error') { setState(s, 'transient-error', '命令出错'); state.counters.errors++; } else if (d.status === 'aborted') { setState(s, 'aborted', '已手动停止'); } else if (d.status === 'denied') { setState(s, 'running', '命令被拒绝'); } break;
     case 'approval.request': case 'user.question': { s.pending++; setState(s, 'waiting', ev.type === 'approval.request' ? '等待你批准' : '等你回答'); break; }
     case 'approval.resolved': case 'user.answer': { s.pending = Math.max(0, s.pending - 1); if (d.decision === 'timeout') setState(s, 'transient-error', '审批超时'); else setState(s, 'running', '继续运行'); break; }
     case 'agent.status': setState(s, d.state, '后端上报'); break;
@@ -607,11 +607,11 @@ function snapshot() {
     return isProgressState(st);
   };
   // 聚合状态改用修正后的实时行计算（hub.agg() 是另一套状态机，曾出现「新建空闲会话 agg=思考中」的不一致）
-  const AGG_PRIORITY = { waiting: 5, 'transient-error': 4, error: 3, working: 2, running: 2, delegated: 2, thinking: 1, done: 0, idle: -1 };
+  const AGG_PRIORITY = { waiting: 5, 'transient-error': 4, error: 3, working: 2, running: 2, delegated: 2, thinking: 1, done: 0, aborted: 0, idle: -1 };
   let agg = 'idle';
   for (const s of live) { const st = hostStateOf(s); const aggSt = st === 'delegated' ? 'running' : st; if ((AGG_PRIORITY[aggSt] ?? -1) > (AGG_PRIORITY[agg] ?? -1)) agg = aggSt; }
   // 当前状态计数（顶部 chips 用；counters 是累计事件数，只作诊断，不能再当“当前 N 个在跑”展示）
-  const stateCounts = { thinking: 0, running: 0, delegated: 0, waiting: 0, errors: 0, done: 0 };
+  const stateCounts = { thinking: 0, running: 0, delegated: 0, waiting: 0, errors: 0, done: 0, aborted: 0 };
   for (const s of live) {
     const st = hostStateOf(s);
     if (st === 'thinking') stateCounts.thinking++;
@@ -620,6 +620,7 @@ function snapshot() {
     else if (st === 'waiting') stateCounts.waiting++;
     else if (st === 'error' || st === 'transient-error') stateCounts.errors++;
     else if (st === 'done' && nowMs - (s.since || 0) <= 600_000) stateCounts.done++;
+    else if (st === 'aborted' && nowMs - (s.since || 0) <= 600_000) stateCounts.aborted++;
   }
 
   // ---- 会话列表（多源合并，docs/21 M-C「按 cwd 归一」）----

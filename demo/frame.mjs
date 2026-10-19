@@ -26,9 +26,9 @@ const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 const DSH_ROOT = process.env.DSH_SESSIONS || path.join(os.homedir(), '.dsh', 'sessions');
 
 // ---------- 规范事件状态机（契约 §3/§4/§4.7 的实现，与 adapters/_reference/hub-minimal.mjs 同规则） ----------
-const PRIORITY = { waiting: 5, 'transient-error': 4, error: 3, working: 2, thinking: 1, done: 0, idle: -1 };
-const STATE_LABEL = { idle: '空闲', thinking: '思考中', working: '工作中', waiting: '等待你', 'transient-error': '出错', error: '错误', done: '已完成' };
-const STATE_COLOR = { idle: 90, thinking: 36, working: 32, waiting: 33, 'transient-error': 33, error: 31, done: 35 };
+const PRIORITY = { waiting: 5, 'transient-error': 4, error: 3, working: 2, thinking: 1, done: 0, aborted: 0, idle: -1 };
+const STATE_LABEL = { idle: '空闲', thinking: '思考中', working: '工作中', waiting: '等待你', 'transient-error': '出错', error: '错误', done: '已完成', aborted: '已停止' };
+const STATE_COLOR = { idle: 90, thinking: 36, working: 32, waiting: 33, 'transient-error': 33, error: 31, done: 35, aborted: 35 };
 const TOOL_ICON = { read: '📖', write: '✍️ ', exec: '⌨️ ', net: '📡', other: '🔧' };
 const CATEGORY_BY_TOOL = [
   [/^(read|glob|grep|list|search_files|view)/i, 'read'],
@@ -75,12 +75,13 @@ export function createHub() {
     const d = ev.data ?? {};
     switch (ev.type) {
       case 'session.start': case 'turn.start': set(s, 'thinking', ev.type); break;
-      case 'turn.end': set(s, d.status === 'ok' ? 'done' : d.status === 'error' ? 'error' : 'idle', 'turn.end:' + d.status); break;
-      case 'session.end': set(s, d.reason === 'error' ? 'error' : d.reason === 'done' ? 'done' : 'idle', 'session.end:' + d.reason); break;
-      case 'step.start': case 'step.end': set(s, d.status === 'error' ? 'transient-error' : 'working', ev.type); break;
+      case 'turn.end': set(s, d.status === 'ok' ? 'done' : d.status === 'error' ? 'error' : d.status === 'aborted' ? 'aborted' : 'idle', 'turn.end:' + d.status); break;
+      case 'session.end': set(s, d.reason === 'error' ? 'error' : d.reason === 'done' ? 'done' : d.reason === 'aborted' ? 'aborted' : 'idle', 'session.end:' + d.reason); break;
+      case 'step.start': case 'step.end': set(s, d.status === 'error' ? 'transient-error' : d.status === 'aborted' ? 'aborted' : 'working', ev.type); break;
       case 'tool.call': s.lastTool = (d.summary || d.toolName || '').replaces?.('', '') ?? (d.summary || d.toolName || ''); set(s, 'working', 'tool:' + (d.toolName || '')); break;
       case 'tool.result':
         if (d.status === 'error') { counters.recoveredErrors++; set(s, 'transient-error', 'tool error'); }
+        else if (d.status === 'aborted') set(s, 'aborted', 'tool cancelled');
         break;
       case 'approval.request': case 'user.question': {
         const rid = d.requestId ?? d.questionId ?? ('anon-' + (ev.seq));
@@ -114,7 +115,7 @@ function describe(ev) {
   const d = ev.data ?? {};
   switch (ev.type) {
     case 'tool.call': return '调用 ' + (d.toolName || '?') + (d.summary ? ' · ' + clip(d.summary, 34) : '');
-    case 'tool.result': return '工具' + (d.status === 'ok' ? '成功' : d.status === 'error' ? '失败' : '被拒') + (d.durationMs ? ' · ' + d.durationMs + 'ms' : '');
+    case 'tool.result': return '工具' + (d.status === 'ok' ? '成功' : d.status === 'error' ? '失败' : d.status === 'aborted' ? '被取消' : '被拒') + (d.durationMs ? ' · ' + d.durationMs + 'ms' : '');
     case 'step.start': return '第 ' + (d.index ?? '?') + ' 步开始';
     case 'step.end': return '第 ' + (d.index ?? '?') + ' 步结束';
     case 'assistant/message': case 'message.assistant': return '回复：' + clip(d.text || '', 34);

@@ -49,14 +49,14 @@ const DATA_ENUMS = {
   'turn.end': { status: ['ok', 'aborted', 'error'] },
   'step.end': { status: ['ok', 'error', 'aborted'] },
   'tool.call': { category: ['read', 'write', 'exec', 'net', 'other'] },
-  'tool.result': { status: ['ok', 'error', 'denied'] },
+  'tool.result': { status: ['ok', 'error', 'denied', 'aborted'] },
   'approval.request': { kind: ['command', 'file-write', 'network', 'permission', 'other'] },
   'approval.resolved': { decision: ['allow', 'deny', 'timeout'] },
   'agent.status': { state: ['idle', 'thinking', 'working', 'waiting', 'error'] },
   'error.raised': { scope: ['session', 'tool', 'llm', 'adapter'] },
 };
 const CONTROL_CTLS = new Set(['hello', 'ack', 'decide', 'snapshot']);
-const PRIORITY = { waiting: 1, error: 2, 'transient-error': 2, working: 3, thinking: 4, done: 5, idle: 6 };
+const PRIORITY = { waiting: 1, error: 2, 'transient-error': 2, working: 3, thinking: 4, done: 5, aborted: 5, idle: 6 };
 const MAX_EVENT_BYTES = 8 * 1024;
 const HEARTBEAT_MS = 15_000;
 const OFFLINE_MS = 45_000;
@@ -283,7 +283,7 @@ class Hub {
       case 'step.start': setSession('working', 'step.start → working', { hit: '§4.2 step.start' }); break;
       case 'step.end':
         if (d.status === 'error') { this.hit('§4.2 step.end(error) → transient'); if (!escalateIfNeeded()) setSession('transient-error', 'step.end(error) → transient-error（TTL 2 s）', { ttl: TTL.transient, hit: 'transient' }); else this.recompute(ctx, 'step.end(error) 升级持久 error'); }
-        else if (d.status === 'aborted') { this.hit('§4.2 step.end(aborted) 会话级例外'); setSession('idle', 'step.end(aborted) → 会话 idle（例外条款，不打散其他会话 waiting）'); }
+        else if (d.status === 'aborted') { this.hit('§4.2 step.end(aborted) 会话级例外'); setSession('aborted', 'step.end(aborted) → 会话 aborted（手动停止，v1.4；例外条款，不打散其他会话 waiting）'); }
         else { this.counters.noop++; this.hit('§7.3 no-op'); }
         break;
       case 'message.assistant': this.counters.noop++; this.hit('§7.3 no-op'); break;
@@ -294,18 +294,20 @@ class Hub {
           const risk3 = (d.risk === 3);
           if (risk3 || escalateIfNeeded()) { S().state = 'error'; S().stable = 'error'; S().expireAt = null; if (risk3) { this.counters.escalatedErrors++; this.hit('§4.7 risk=3 → 持久 error'); } this.recompute(ctx, 'tool.result(error) → 持久 error（risk=3 或连击）'); }
           else setSession('transient-error', 'tool.result(error) → transient-error（TTL 2 s）', { ttl: TTL.transient, hit: 'transient' });
-        } else if (d.status === 'denied') { this.counters.noop++; this.hit('§7.3 no-op'); }
+        } else if (d.status === 'aborted') { this.hit('§4.2 tool.result(aborted) → 手动停止（v1.4）'); setSession('aborted', 'tool.result(aborted) → 会话 aborted（手动停止，不计错误）'); }
+        else if (d.status === 'denied') { this.counters.noop++; this.hit('§7.3 no-op'); }
         else { S().fails = []; S().state = S().stable = ['error', 'transient-error'].includes(S().state) ? 'working' : S().state; S().expireAt = null; this.counters.noop++; this.hit('§4.7 成功事件清除持久错误'); this.recompute(ctx, 'tool.result(ok) → no-op（并清除持久错误）'); }
         break;
       case 'turn.end':
         if (d.status === 'ok') { this.hit('§4.2 turn.end(ok) → done'); S().fails = []; setSession('done', 'turn.end(ok) → done（2 s → idle）', { ttl: TTL.done, stable: 'idle', hit: 'done' }); }
         else if (d.status === 'error') { this.hit('§4.2 turn.end(error) → 持久 error'); S().state = 'error'; S().stable = 'error'; S().expireAt = null; S().lastChangeTs = ev.ts; this.recompute(ctx, 'turn.end(error) → 持久 error（直到成功事件/离线清理）'); }
-        else { this.hit('§4.2 turn.end(aborted) 会话级例外'); setSession('idle', 'turn.end(aborted) → 会话 idle（例外条款）'); }
+        else { this.hit('§4.2 turn.end(aborted) 会话级例外'); setSession('aborted', 'turn.end(aborted) → 会话 aborted（手动停止，v1.4；例外条款）'); }
         break;
       case 'session.end':
         if (d.reason === 'error') { this.hit('§4.2 session.end(error)'); S().state = 'error'; S().stable = 'idle'; S().expireAt = ev.ts + TTL.sessionEndError; S().lastChangeTs = ev.ts; this.timers.push({ at: ev.ts + TTL.sessionEndError, kind: 'sessionEndError', key }); this.recompute(ctx, 'session.end(error) → error 3 s → idle'); }
         else if (d.reason === 'done') { this.hit('§4.2 session.end(done) → done 2 s'); for (const [id, p] of [...this.pending]) if (p.key === key) this.pending.delete(id); setSession('done', 'session.end(done) → 会话 done（2 s → idle）', { ttl: TTL.done, stable: 'idle', hit: 'done' }); }
-        else { this.hit('§4.2 session.end(aborted|unknown) 会话级例外'); for (const [id, p] of [...this.pending]) if (p.key === key) this.pending.delete(id); this.sessions.delete(key); this.recompute(ctx, 'session.end(' + d.reason + ') → 移除会话（例外条款）'); }
+        else if (d.reason === 'aborted') { this.hit('§4.2 session.end(aborted) 会话级例外'); for (const [id, p] of [...this.pending]) if (p.key === key) this.pending.delete(id); setSession('aborted', 'session.end(aborted) → 会话 aborted（手动停止，v1.4；例外条款）'); }
+        else { this.hit('§4.2 session.end(unknown) 会话级例外'); for (const [id, p] of [...this.pending]) if (p.key === key) this.pending.delete(id); this.sessions.delete(key); this.recompute(ctx, 'session.end(' + d.reason + ') → 移除会话（例外条款）'); }
         break;
       case 'pet.heartbeat': this.counters.noop++; this.hit('§4.2/§4.5 心跳 no-op（不刷新状态超时）'); break;
       case 'approval.request': {

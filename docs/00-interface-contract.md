@@ -1,6 +1,7 @@
-# 00 · Agent 悬浮窗事件接口契约 v1.3（Phase 1 / Phase 2 共用）
+# 00 · Agent 悬浮窗事件接口契约 v1.4（Phase 1 / Phase 2 共用）
 
-> 状态：**FROZEN v1.3**（2026-10-05，Lead 冻结）。上一版：v1.2（同日）。
+> 状态：**FROZEN v1.4**（2026-10-19）。上一版：v1.3（2026-10-05）。
+> **v1.4 变更（手动停止 ≠ 出错）**：`aborted` 由「落 `idle`」改为独立会话态 **`aborted`（手动停止）**——用户中断（ESC / 停止按钮）此前在实现里被工具取消错误顶成 `transient-error` 永不过期，观感即「一直出错」。`tool.result` 的 `status` 词汇新增 `aborted`（工具被用户取消，如 ZCode 的 `"… was cancelled"` 错误文本）；`turn.end` / `step.end` / `session.end` 的 `aborted` 分支统一置会话态 `aborted`。`aborted` 为中性终态：优先级与 `done` 同级、不计入错误、非进行中。渲染层文案「手动停止」。
 > **v1.3 变更（多项目 / 多会话）**：新增两个事件类型 —— `session.meta`（Agent 软件名 / 模型 / 思考程度 / 预设 / 标题）与 `session.activity`（**粗粒度**活动摘要，禁止步骤明细）；控制帧新增 `catalog.get` / `catalog` / `session.open` / `session.new`；`ack` 增加 `canCatalog` / `canOpen` / `canCreate` 能力位；§8 增加目录视图所需契约保证。
 > 说明：事件里的 `v` 仍为 **1**（纯增量字段，向后兼容）。
 > **v1.2 新增用户方向**：桌宠的**主界面是「工作框（Work Frame）」**——常驻小窗，主职责是**显示 agent 状态与进度**，宠物形象是框内的可选陪伴元素（详见 [50-product-spec.md](./50-product-spec.md)）。契约因此补充：`session.start` 携带 `startedAt`、`session.end` 携带 `endedAt`（供工作框显示时长/计时）；`sessionIdle` 语义明确为「会话级 idle」。
@@ -78,7 +79,7 @@
 | type | data 载荷（`*` 必填 / `?` 可选） | 触发语义 | 桌宠行为 |
 |---|---|---|---|
 | `session.start` | `nativeSessionId*`, `startedAt*`（Unix ms）, `workspace?`, `agentName?`, `agentVersion?`, `title?` | 一个新会话出现 | 工作框新增一行会话卡片并开始计时；宠物唤醒动画（可关） |
-| `session.end` | `nativeSessionId*`, `endedAt*`（Unix ms）, `reason*`: `done\|aborted\|error\|unknown`, `durationMs?`, `summary?` | 会话结束 | 工作框结束计时并归档该卡片；`reason=error` → **持久 `error`**（§4.7，非 3 s 瞬态）；`done` → `done` 2 s 后 `idle`；`aborted`/`unknown` → `idle` |
+| `session.end` | `nativeSessionId*`, `endedAt*`（Unix ms）, `reason*`: `done\|aborted\|error\|unknown`, `durationMs?`, `summary?` | 会话结束 | 工作框结束计时并归档该卡片；`reason=error` → **持久 `error`**（§4.7，非 3 s 瞬态）；`done` → `done` 2 s 后 `idle`；`aborted` → `aborted`（**手动停止**，v1.4）；`unknown` → `idle` |
 | `pet.heartbeat` | `nativeSessionId?`（可为 `null`）, `load?`: 0..1（缺省 0），`sessionCount?` | 保活 / 负载上报 | 呼吸节奏随 `load` 微调；**不改变状态、不计入状态超时**（§4.5） |
 
 ### 3.2 推理与步骤
@@ -86,12 +87,12 @@
 | type | data 载荷 | 触发语义 | 桌宠行为 |
 |---|---|---|---|
 | `turn.start` | `turnId*`, `inputKind*`: `user\|system\|webhook\|unknown` | 一轮对话开始 | → `thinking`，出现「思考云」 |
-| `turn.end` | `turnId*`, `status*`: `ok\|aborted\|error`, `durationMs?`, `summary?` | 一轮结束 | `ok` → `done` → 2 s 后回 `idle`；`error` → `error`；`aborted` → `idle` |
+| `turn.end` | `turnId*`, `status*`: `ok\|aborted\|error`, `durationMs?`, `summary?` | 一轮结束 | `ok` → `done` → 2 s 后回 `idle`；`error` → `error`；`aborted` → `aborted`（**手动停止**，v1.4） |
 | `step.start` | `turnId*`, `stepId*`, `index*` | 模型单步（一个工具批次）开始 | → `working`；进度环计数 |
-| `step.end` | `turnId*`, `stepId*`, `index*`, `status*`: `ok\|error\|aborted`, `durationMs?` | 单步结束 | `status=error` → `error`；否则停留当前状态 |
+| `step.end` | `turnId*`, `stepId*`, `index*`, `status*`: `ok\|error\|aborted`, `durationMs?` | 单步结束 | `status=error` → `error`；`aborted` → `aborted`（**手动停止**，v1.4）；否则停留当前状态 |
 | `message.assistant` | `turnId*`, `text*`（**已截断/脱敏** ≤280 字符）, `truncated*`: bool | 助手输出 | 气泡显示（节流 ≥1.5 s/次），打字机效果；**不改变状态** |
 | `tool.call` | `callId*`, `toolName*`, `category*`: `read\|write\|exec\|net\|other`, `risk*`: 0..3, `summary?` | 工具开始执行 | → `working`；按 `category` 播动作（exec=敲键盘 / read=翻书 / write=写字 / net=天线） |
-| `tool.result` | `callId*`, `status*`: `ok\|error\|denied`, `durationMs?`, `summary?` | 工具结束 | `ok` → 星星特效；`error` → 乌云 2 s + `error` 状态；`denied` → 摊手（**不改变状态**） |
+| `tool.result` | `callId*`, `status*`: `ok\|error\|denied\|aborted`, `durationMs?`, `summary?` | 工具结束 | `ok` → 星星特效；`error` → 乌云 2 s + `error` 状态；`denied` → 摊手（**不改变状态**）；`aborted`（v1.4）→ `aborted`（**手动停止**：工具被用户取消——适配器据错误签名判定，如 ZCode 的 `"… was cancelled"`） |
 
 ### 3.3 审批与提问（强提醒）
 
@@ -113,7 +114,7 @@
 | `agent.status` | `state*`: `idle\|thinking\|working\|waiting\|error`, `detail?`, `force?`: bool（缺省 false） | 后端**主动**给出的粗粒度状态。**覆盖规则**：仅在 (a) 10 s 内有效、(b) 其优先级 **≥** 当前聚合优先级，或 `force=true` 时生效；被拒绝时计 `overrideRejected`。**不支持** `done`/`blocked`（`done` 是本地过渡态，见 §4.1）；**不改变会话元信息**（模型/思考程度用 `session.meta`） |
 | `session.meta`（v1.3 新增） | `agentName?`, `agentVersion?`, `provider?`, `model?`, `reasoningEffort?`, `agentPreset?`, `title?`, `nativeSessionId*` | 会话的**元信息**：Agent 软件名、模型、思考程度、预设、标题。同一字段可重复上报（后者覆盖前者）。**不改变状态机状态**（no-op 语义），只更新工作框头部展示与目录条目 |
 | `session.activity`（v1.3 新增） | `nativeSessionId*`, `text*`（≤80 字符摘要）, `kind*`: `thinking\|tool\|reply\|waiting\|error\|done` | **粗粒度活动摘要**（示例：「运行命令」「读取文件」「思考中」）。契约明确：**不得包含步骤序号、工具参数、命令原文、文件内容**；工作框的会话行只显示该摘要，不显示步骤明细 |
-| `session.end` | `nativeSessionId*`, `endedAt*`（Unix ms）, `reason*`: `done\|aborted\|error\|unknown`, `durationMs?`, `summary?` | 会话结束 | 工作框结束计时并归档该卡片；`reason=error` → **持久 `error`**（§4.7，非 3 s 瞬态）；`done` → `done` 2 s 后 `idle`；`aborted`/`unknown` → `idle` |
+| `session.end` | `nativeSessionId*`, `endedAt*`（Unix ms）, `reason*`: `done\|aborted\|error\|unknown`, `durationMs?`, `summary?` | 会话结束 | 工作框结束计时并归档该卡片；`reason=error` → **持久 `error`**（§4.7，非 3 s 瞬态）；`done` → `done` 2 s 后 `idle`；`aborted` → `aborted`（**手动停止**，v1.4）；`unknown` → `idle` |
 | `error.raised` | `scope*`: `session\|tool\|llm\|adapter`, `message*`（截断）, `code?`, `fatal*`: bool | `fatal=true` → 桌宠显示「离线」角标并置该 source 为 `error`；`fatal=false` → 记录但不改变状态 |
 
 > **不做**（v1 明确排除）：token 逐字流、完整对话正文、文件内容、shell 全量 stdout、账号/密钥类信息。
@@ -125,8 +126,9 @@
 > 渲染层**没有**业务状态：它只渲染 Hub 广播的快照（`pet.snapshot`，§5.3）。这与 `docs/10-architecture.md` ADR-2 一致。
 
 ### 4.1 状态集合
-六个展示状态：`idle`、`thinking`、`working`、`waiting`、`error`、`done`。
+六个展示状态：`idle`、`thinking`、`working`、`waiting`、`error`、`done`；另有一个**中性终态** `aborted`（v1.4：用户手动停止，优先级与 `done` 同级、不计错误、非进行中）。
 - `done` 是**本地过渡态**（由 `turn.end(ok)` 触发，2 s 后自动回 `idle`），后端不能用 `agent.status` 直接设置它。
+- `aborted` 由 `turn.end` / `step.end` / `tool.result` 的 `aborted` 分支与 `session.end(reason=aborted)` 置位，直到该会话出现下一轮事件；渲染为「手动停止」。
 - 后端能上报的状态集合是 §3.4 的 5 个（不含 `done`）。
 
 ### 4.2 完整真值表（type × 分支 → 状态）
@@ -135,22 +137,24 @@
 |---|---|---|
 | `session.start` | — | 该**会话** → `thinking`；聚合状态取各会话最高优先级（§4.3） |
 | `session.end` | `done` | 该**会话** → `done`（2 s → `idle`）；聚合按 §4.3 重算 |
-| `session.end` | `aborted`/`unknown` | 该**会话** → `idle`（立即；**不得**因此打断其他会话的 `waiting`，聚合按 §4.3 重算） |
+| `session.end` | `aborted` | 该**会话** → `aborted`（**手动停止**，v1.4；**不得**因此打断其他会话的 `waiting`，聚合按 §4.3 重算） |
+| `session.end` | `unknown` | 该**会话** → `idle`（立即；聚合按 §4.3 重算） |
 | `session.end` | `error` | 该**会话** → `error`（3 s → `idle`） |
 | `pet.heartbeat` | 任意 | **no-op**（不改变状态） |
 | `turn.start` | — | → `thinking` |
 | `turn.end` | `ok` | → `done`（2 s → `idle`） |
 | `turn.end` | `error` | → **持久 `error`**（该会话；直到下一轮成功事件或 45 s 离线清理） |
-| `turn.end` | `aborted` | 该**会话** → `idle`（立即；**例外条款**：会话级状态变更不走优先级比较，聚合状态按 §4.3 重算。这样「用户按 ESC 中断」不会把其他会话的 `waiting` 顶掉） |
+| `turn.end` | `aborted` | 该**会话** → `aborted`（**手动停止**，v1.4；**例外条款**：会话级状态变更不走优先级比较，聚合状态按 §4.3 重算。「用户按 ESC 中断」不会把其他会话的 `waiting` 顶掉，也不显示为错误） |
 | `step.start` | — | → `working` |
 | `step.end` | `ok` | no-op |
 | `step.end` | `error` | → `transient-error`（**TTL 2 s**，随后自动回该会话上一个稳定状态；见 §4.7） |
-| `step.end` | `aborted` | 该会话 → `idle`（同 `turn.end(aborted)` 的例外条款） |
+| `step.end` | `aborted` | 该会话 → `aborted`（**手动停止**，v1.4；同 `turn.end(aborted)` 的例外条款） |
 | `message.assistant` | — | **no-op** |
 | `tool.call` | — | → `working` |
 | `tool.result` | `ok` | no-op |
 | `tool.result` | `error` | → `transient-error`（TTL 2 s → 上一个稳定状态；`risk=3` 或连续 3 次失败时升级为**持久 `error`**，直到出现成功事件） |
 | `tool.result` | `denied` | no-op（摊手特效） |
+| `tool.result` | `aborted`（v1.4） | → `aborted`（**手动停止**：工具被用户取消——如 ZCode 中断时在飞工具落盘 `"… was cancelled"` 错误签名；**不计错误、不触发瞬态/持久 error**） |
 | `approval.request` | — | → `waiting`（登记未决） |
 | `approval.resolved` | `allow`/`deny` | → 回到登记前状态（缺省 `working`） |
 | `approval.resolved` | `timeout` | → `error`（1.5 s → 登记前状态） |

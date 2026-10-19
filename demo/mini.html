@@ -75,10 +75,11 @@ button[aria-pressed=true]{color:var(--acc);background:var(--selected)}
 </div>
 <script>
 window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
-const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错',error:'错误',waiting:'等你',done:'完成',ended:'结束',unknown:'未知'};
-const COLOR={idle:'var(--idle)',thinking:'var(--think)',running:'var(--run)',working:'var(--run)','transient-error':'var(--wait)',error:'var(--err)',waiting:'var(--wait)',done:'var(--done)',ended:'var(--done)',unknown:'var(--idle)'};
+const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中','transient-error':'出错',error:'错误',waiting:'等你',done:'完成',ended:'结束',aborted:'手动停止',unknown:'未知'};
+const COLOR={idle:'var(--idle)',thinking:'var(--think)',running:'var(--run)',working:'var(--run)','transient-error':'var(--wait)',error:'var(--err)',waiting:'var(--wait)',done:'var(--done)',ended:'var(--done)',aborted:'var(--done)',unknown:'var(--idle)'};
 // 动态机制的优先级：等你确认 > 出错 > 运行 > 思考 > 完成；同级按状态变更时间取最新
-const RANK={waiting:0,'transient-error':1,error:2,running:3,working:3,thinking:4,done:5,idle:6};
+// aborted=用户手动停止：中性终态，与完成同级——不紧急、不抢占显示（与「出错」区分）
+const RANK={waiting:0,'transient-error':1,error:2,running:3,working:3,thinking:4,done:5,aborted:5,idle:6};
 const $=id=>document.getElementById(id);
 function applyTheme(){
   let mode='light';try{mode=localStorage.getItem('agent-pet-theme')||'light'}catch(_){}
@@ -178,7 +179,7 @@ function render(snap){
     const proj=projNameOf(sel,projList);
     sub=(proj||'未归入项目')+(sel.model?' · '+sel.model:'');
     tip=String(sel.cwd||'')||proj;
-    tm=sel.state==='idle'?'--':sel.state==='done'?'完成':mmss(sel.elapsedMs||0);
+    tm=sel.state==='idle'?'--':sel.state==='done'?'完成':sel.state==='aborted'?'停止':mmss(sel.elapsedMs||0);
     pend=sel.pending||0;
   }else{
     state=STATE_LABEL[snap.agg||'idle']||snap.agg;col=COLOR[snap.agg]||COLOR.idle;

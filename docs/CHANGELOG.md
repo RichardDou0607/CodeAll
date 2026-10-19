@@ -1,5 +1,16 @@
 # 变更日志（文档与契约）
 
+## 2026-10-19（三）
+### 手动停止 ≠ 出错【v0.1.3 · 契约 v1.4】：用户中断的会话不再永久显示「出错」（用户反馈）
+
+- **问题（用户反馈：被中断的对话在 mini 条一直显示「出错」）**：ZCode 被用户停止时把在飞工具行落盘为 `state.status='error'` + 固定取消签名错误文本（`"Agent was cancelled…"` / `"Bash was cancelled and the child process was asked to stop"` / `"TaskOutput was cancelled…"` / `"WebFetch was cancelled…"` / `"MCP tool … was cancelled"`，2026-10-19 本机全库实测分布），**且不再写回合终态**——跟随链 `mapZcodeRow` 把它映射成 `tool.result(error)` → `transient-error`；而 `transient-error` 在 `PINNED_PROGRESS` 里永不过期、目录结论也修正不了它（`effectiveState` 只修正 TIMED_PROGRESS），mini 条从此常驻「出错」。
+- **修复（三层口径，契约 v1.4）**：新增会话态 **`aborted`（手动停止，中性终态）**——优先级与 `done` 同级、不计入错误、非进行中：
+  ① `zcode-adapter`：`isCancelledToolError()`（/cancell?ed|interrupted/）识别取消签名——`mapZcodeRow` 里取消工具 → `tool.result(aborted)`（真错误仍 `error`）；粗状态 `finish=interrupted` → `aborted`；**滞留修正回看窗口内最后工具行**（真实形态：中断会话尾部 `tool-calls` 消息比取消工具行晚 ~5ms、盖住取消行——`stale>5min` 时最后的工具行是取消 → `aborted` 而非 `idle`）。
+  ② 状态机：`framed.mjs` `applyEvent` 与 `demo/frame.mjs` hub 的 `turn.end`/`session.end`/`step.end`/`tool.result` 的 `aborted` 分支统一置 `aborted`（此前 `turn.end(aborted)` 落 `idle`）；`aborted` 不进 `PINNED_PROGRESS`/`TIMED_PROGRESS`，24h 退役照常。
+  ③ 前端：mini 条与主界面显示「手动停止」（`--done` 色系）、时间位「停止」、排序/优先级与完成同级（不抢占 waiting/running/error 的显示）；主界面 chips 有 `aborted` 会话时追加「停止 N」，会话归类与 `done` 同档（短暂展示后进完成档）。
+- **验证**：新增 `demo/test-aborted-state.mjs`（21 项：签名识别 3 + 映射分流 4 + 目录粗状态 7 + hub 3 + mini 渲染 4，全绿）；真实库回归——本机 4 个被中断会话（含当日 07:01「分析实验课需求评估…」、03:24「结束子代理后暂停执行」）现正确标 `aborted`；demo 全部 23 个测试 exit 0。**注意：已安装的 `/Applications/CodeAll.app` 内打包副本需重打包（`tauri build` 自动经 bundle-service 复制）或从源码 `run.sh --restart-server` 才能生效。**
+- **文档**：契约 [docs/00](./00-interface-contract.md) 升 **v1.4**（`tool.result` 词汇新增 `aborted`；§4.1 状态集合补中性终态；§4.2 真值表 `turn.end`/`step.end`/`session.end`/`tool.result` 的 `aborted` 行）；`scripts/replay-check.mjs`（契约校验器）同步 `aborted` 分支与 `PRIORITY`；真相源 [docs/28（v0.1.3）](./28-v0.1.3-scope.md)。
+
 ## 2026-10-19（二）
 ### PERF-7 用量扫描四级增量【v0.1.2】：P0 修正 2 + 让出 + 检查点 + 尾读 + ZCode 水位（评审驱动，perf-verify 17/17）
 

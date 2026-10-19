@@ -472,8 +472,8 @@ dialog::backdrop{background:#0008}
 </dialog>
 <script>
 window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
-const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中',delegated:'等待子代理','transient-error':'出错（自动恢复）',error:'连接错误',waiting:'等待你',done:'已完成',ended:'已结束',unknown:'未知'};
-const COLOR={idle:'var(--idle)',thinking:'var(--think)',running:'var(--run)',working:'var(--run)',delegated:'var(--acc)','transient-error':'var(--wait)',error:'var(--err)',waiting:'var(--wait)',done:'var(--done)',ended:'var(--done)',unknown:'var(--idle)'};
+const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中',delegated:'等待子代理','transient-error':'出错（自动恢复）',error:'连接错误',waiting:'等待你',done:'已完成',ended:'已结束',aborted:'手动停止',unknown:'未知'};
+const COLOR={idle:'var(--idle)',thinking:'var(--think)',running:'var(--run)',working:'var(--run)',delegated:'var(--acc)','transient-error':'var(--wait)',error:'var(--err)',waiting:'var(--wait)',done:'var(--done)',ended:'var(--done)',aborted:'var(--done)',unknown:'var(--idle)'};
 const AGENT_STATUS_LABEL={connected:'已连接','open-unconnected':'已打开 · 未连接',closed:'未打开','not-installed':'未下载'};
 const AGENT_STATUS_COLOR={connected:'var(--run)','open-unconnected':'var(--wait)',closed:'var(--idle)','not-installed':'var(--dim)'};
 const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI'],['zcode','ZCODE']];
@@ -541,8 +541,8 @@ function classifySession(s, now){
   if (Number(s && s.subagentRunning) > 0) return 'all';
   if (PROGRESS_STATES.includes(st)) return 'all';
   const fresh = now - (s.lastActiveMs ?? s.updatedAt ?? s.since ?? 0) < ACTIVE_MS;
-  // ended=正常结束（DSH 目录口径），与 done 同档
-  if (st === 'done' || st === 'ended') return (now - (s.since ?? s.updatedAt ?? 0) <= DONE_GRACE_MS) ? 'all' : 'done';
+  // ended=正常结束（DSH 目录口径），与 done 同档；aborted=用户手动停止，同样短暂展示后进完成档
+  if (st === 'done' || st === 'ended' || st === 'aborted') return (now - (s.since ?? s.updatedAt ?? 0) <= DONE_GRACE_MS) ? 'all' : 'done';
   return fresh ? 'all' : 'hidden';   // idle / error / unknown
 }
 const VARIANT_LABEL={cli:'CLI',desktop:'桌面',ide:'IDE'};
@@ -829,7 +829,7 @@ function render(snap){
   $('agg-text').textContent=STATE_LABEL[agg]||agg;$('agg-text').style.color=COLOR[agg]||COLOR.idle;
   // 顶部 chips = 当前状态计数（stateCounts，每快照重算）；counters 是累计事件数（只增不减），不能当“当前在跑”展示
   const c=snap.stateCounts||{};
-  $('chips').innerHTML=[['思考中',c.thinking],['运行',c.running],['子代理',c.delegated],['等待',c.waiting],['出错',c.errors],['完成',c.done]].map(kv=>'<span class="chip"><strong>'+Number(kv[1]||0)+'</strong>'+kv[0]+'</span>').join('');
+  $('chips').innerHTML=[['思考中',c.thinking],['运行',c.running],['子代理',c.delegated],['等待',c.waiting],['出错',c.errors],['完成',c.done],...(c.aborted?[['停止',c.aborted]]:[])].map(kv=>'<span class="chip"><strong>'+Number(kv[1]||0)+'</strong>'+kv[0]+'</span>').join('');
   $('connection').dataset.connected=String(window.__CONNECTED__!==false);
   $('connection-dot').style.background=window.__CONNECTED__===false?'var(--wait)':'var(--run)';
   $('connection-label').textContent=window.__CONNECTED__===false?'连接中断 · 数据已冻结':'实时连接';
@@ -950,7 +950,7 @@ function render(snap){
   // ⑤ 其余（空闲/持久错误 超 1 小时无消息）→ 隐藏（未活跃）
   // 返回 'all'（=活跃档，对应 all 视图键）/ 'done' / 'hidden' —— 与 filter 键同名，计数与过滤共用
   const classify = (s) => classifySession(s, now);   // 常量/实现已抽到 render 外（tick 用同一口径判断时间边界）
-  const SORT_RANK = { waiting: 0, error: 1, 'transient-error': 1, running: 2, working: 2, delegated: 2, thinking: 3, done: 4, ended: 4, idle: 6, unknown: 7 };
+  const SORT_RANK = { waiting: 0, error: 1, 'transient-error': 1, running: 2, working: 2, delegated: 2, thinking: 3, done: 4, ended: 4, aborted: 4, idle: 6, unknown: 7 };
   // ---- 手动隐藏（叠加在自动三档之上）----
   // 记录 {sessionId: hiddenAt}；被隐藏会话一旦有新活动（lastActiveMs/updatedAt > hiddenAt）自动解除
   if (!window.__HIDDEN__) { try { window.__HIDDEN__ = JSON.parse(localStorage.getItem('agent-pet-manual-hidden') || '{}') } catch (e) { window.__HIDDEN__ = {} } }
