@@ -38,8 +38,10 @@ try {
     const targeted = await deliverControl('codex', {sessionId:'target-session', cwd:${JSON.stringify(home)}}, 'targeted');
     console.log(JSON.stringify({bad:bad.error, results:results.map(r=>r.ok), targeted:targeted.ok}));`;
   const run = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    // PERF-5：适配器层无头投递并发上限默认 2——本用例并发 4 新建 + 1 续投递，测的是参数与环境而非限流，
+    // 显式抬高（限流行为由 demo/test-headless-cap.mjs 专测）
     env: { ...process.env, HOME: home, PATH: binDir + path.delimiter + process.env.PATH,
-      MOCK_CLI_CALLS: callsFile, MOCK_TMUX_CALLS: tmuxCalls, MOCK_TMUX_CWD: home },
+      MOCK_CLI_CALLS: callsFile, MOCK_TMUX_CALLS: tmuxCalls, MOCK_TMUX_CWD: home, PET_HEADLESS_CAP: '6' },
     encoding: 'utf8', timeout: 12000,
   });
   assert.equal(run.status, 0, run.stderr || run.stdout);

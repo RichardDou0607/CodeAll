@@ -1,5 +1,88 @@
 # 变更日志（文档与契约）
 
+## 2026-10-19（二）
+### PERF-7 用量扫描四级增量【v0.1.2】：P0 修正 2 + 让出 + 检查点 + 尾读 + ZCode 水位（评审驱动，perf-verify 17/17）
+
+- **P0-1 `stats.readBytes` 语义修正**：原实现对缓存命中文件也 `+= stat.size`（冷热两轮数字相同、无证明力）——改为实际读取字节（缓存命中 0 / 尾读增量段 / 整读全量），新增 `resumedFiles`/`corpusBytes`；这是后续所有「省读」断言的证据基础。
+- **P0-2 `?refresh=1` 真强刷**：原 `refreshUsage()` 无参调用 + CLI `--refresh` 漏传 zcode——「强制重扫」在服务端与 ZCode 上实际不存在；现 `refreshUsage(force)` 走 `FORCE_SCAN_OPTS` 五源强刷（含 zcode 清水位/LRU 重建），并跳过检查点加载、扫后覆盖写（坏缓存自愈）。
+- **第①级 事件循环让出**：文件间/每 512 行/DSH 帧粒度/ZCode `iterate()` 游标；ZCode 不加 SQL ORDER BY（无索引时 sqlite 首行前全表物化+排序 ≈228ms 同步块）。实测：DSH 全量扫描 20ms 计时器最大停顿 22ms（原整块 ~1.3s）、ZCode 23ms（原 ~409ms）；P7-a 64MB 冷扫 5.6s 期间 SSE 最大间隔 2001ms。
+- **第②级 检查点**：`~/.agent-pet/usage-checkpoint.json`（0600 原子写、SCANNER_VERSION 失效、逐条目丢弃、8MB 护栏、`PET_USAGE_CHECKPOINT` 可覆盖）；重启后未变文件零重读——P7-b 实测 dsh readBytes=0 vs 对照组全量 67,109,043B。
+- **第③级 尾读**：DSH 帧边界续读（实测截断 zstd 帧**不抛错**而「成功」解出半段——PERF-2 同款坑，末帧「非空且以 \n 收尾」才消费、否则推迟；inode+魔数双锚）；Codex `prevTotal/calls.seen` + 字节精确偏移（0x0A 切行）+ 64B 锚点哈希；Kimi 同构；**Claude 保持整读**（byMsg 全量 seen-id 持久化会致 checkpoint MB 级膨胀，评审选型）。对抗用例 UCD2/UCB2/UCC3（半写补齐/同路径更大替换/fork 累计跨界/重复 callId 跨界）全绿。
+- **第④级 ZCode 水位**：spike（[spikes/zcode-usage-watermark](../spikes/zcode-usage-watermark/README.md)，只读真实库回放）**推翻「tokens 只在终态写入」假设**（29,781/31,457 行处于中间态 tool-calls）→ delta 追账 + 双 LRU（msgLru 差量负截 0 / partLru (sid,callId) 去重）6000 随检查点持久化（不持久化重启实测丢 495 万 token）；staleMiss=「未命中 LRU 且 tc 早于 LRU 最早条目」可观测；稳态 409ms→40ms（time_updated 前置短路 json_extract）。lag 双场景（同进程 30s 补 tokens / 停机补 tokens 重启）fixtures 入 `usage-calendar-check`。
+- **修复（实现途中抓获）**：`addInto` 对显式 `requests:0` 走「有 token 即 +1」回退（zcode 差量行多计请求）；`deZcodeState` partLru 误用 Set（`lruTouch` 需 Map.set → 静默 degraded + 跨重启 part 重计，测试补 `s4.degraded===undefined` 断言）；zcode 状态未绑定 dbPath（跨库串台）；SSE 测试挂具必须消费 body（未消费的流式响应 abort 后污染 undici 连接池）。
+- **回归**：usage-check **36 项**、usage-calendar-check **7 测试**、test-usage-checkpoint **6/6**、test-minute-refresh 5/5、demo 15 项、**perf-verify 17/17（P7-a/b/c 新增，480s）**。
+- **文档**：真相源 [docs/27（v0.1.2 范围/验收/风险）](./27-v0.1.2-scope.md)；docs/40 §3.13 四级增量改写（含 spike 结论与 staleMiss 口径）；demo/README 用量行为注记；docs/25 §3/§4/附录 C 保持 v0.1.1 终态并加移出指针；「1.1GB≈2s」作废，实测基线（Claude 4,951ms/1.09GB 等）入册。
+
+## 2026-10-19
+### 分钟兜底刷新【v0.1.2】：修复空闲期 mini 条状态 / 日历桶计数无限滞留（PERF-1 盲区；用户反馈）
+
+- **问题（用户反馈：mini 条状态延迟、日历桶计数不刷新）**：PERF-1 后空闲期快照只在脏时重建，而五源目录 TTL 缓存是**惰性**缓存——`snapshot()` 不被调用就永不重扫；PERF-3 又把用量 60s 周期重扫改为纯懒触发（`/api/usage*` 命中或启动 +5min）。纯空闲下两条链路自锁：静默信号（四态 mtime 15s / `WORKSPACE_STORE` mtime 5s）未覆盖的变化（CLI 会话收尾状态、用量日历桶计数等）**无限滞留**，直至任一事件/信号唤醒。
+- **修复（`demo/framed.mjs` 2s 节拍内）**：有 SSE 客户端连接时，每 `REFRESH_MS`（默认 60s，`PET_REFRESH_MS` 可注入，下限 5s）强制重扫目录五源（`forceCatalogRescan` + 脏标记 → 全量快照推送）并触发用量重扫（完成即 broadcast，客户端按 `usage.generatedAt` 翻新自动重拉日历）——mini 条状态与日历桶计数最迟 **~1 分钟**可见（用户指定的口径）。**无客户端时跳过**：纯空闲零后台扫描口径不变（perf-verify P3③「无客户端 70s 无后台重扫」继续成立），代价仅在有 UI 在看时支付（每分钟一次目录五源重扫 ~170ms + 用量增量扫，v0.1.0 本就每 60s 扫一次）。
+- **验证**：新增 `demo/test-minute-refresh.mjs`（5/5：有客户端→≤1 周期首轮自动扫 + 追加后 ≤1 周期重扫吸收 + 全量推送；无客户端→≥2 周期零后台重扫；新会话文件 ≤周期+节拍可见）；`scripts/perf-verify.mjs` bootService 注入 `PET_REFRESH_MS=600000` 隔离（P1-a 平均字节 / P4-a 8s 下界 / P3③ 各自只测自身机制），P3③ 检查名同步改为「无客户端时分钟兜底不运行」；**perf-verify 14/14 全绿（286s）**，受影响回归全绿（test-tick 11/11、service-hardening、usage-calendar、headless-cap、mini、window 等 20 项 exit 0）。首轮 perf-verify 曾 11/14——`lastAutoRefresh` 锚 0 导致「首个客户端连上的节拍」立即强制重扫（首轮用量全量扫描混进 P2 测量窗口：P2-large CPU 20801ms），锚定启动时刻后回落（P2-large CPU 63ms）。
+- **文档**：真相源 [docs/27（v0.1.2）](./27-v0.1.2-scope.md) §2/§4（目录变化极端情况由分钟兜底封顶 ≤~62s；用量行「有 UI 连接时 ≤~1 分钟自动重扫」）；demo/README `/api/stream` 行补刷新语义；docs/25 §4 同位置留 v0.1.1 终态与移出指针。
+
+## 2026-10-18
+### 两轴审查修正（qa/v0.1.1-code-review-2026-10-18.md 修订版全项落地）：文档硬伤 1 + 证据链 1 + 口径 1 + 重构 4；perf-verify 升 14/14
+
+- **文档硬伤（S1）**：docs/26 §1 表格行、SPIKE-4 ②、§5 风险表的 ZCode `account:*` 表述与本批 CLI-1 纠偏口径矛盾（称「现回退 UI 粘贴」/「沿用 UI 通道既有模式」，实际该回退在当前接线**不可达**、account 走 app-server 管道且无 provider 时如实失败）——三处均已对齐 docs/25 §2/docs/40 §3.14 口径；SPIKE-4 ② 改为「可行性重估（当前为不可达死代码）」。
+- **证据链（P1）**：① perf-verify 新增 **P2-large**（64MB（>50MB 档）日志 20s 空闲 readBytes 增量 **0 B（readOps 0）**、CPU 44ms/20s，实测入册 `qa/perf/verify-2026-10-18.txt`）；② **P2-correct 补「坏帧重同步 + 乱序不丢不回退」断言**，凑齐 PERF-2 完成条件「乱序/坏帧/半帧/轮转」四类；③ 原「>50MB 独立测量 0 B vs 旧 ~2.64GB」表述不实（无脚本/产物、2.64GB 系估算）——docs/25 §3/§4/附录 A 锚点/附录 C 与本 CHANGELOG 两处历史条目（首轮/PERF-0 段，均已加校正注）统一改为：新码 64MB 实测 0 B + 旧实现读量**算术推算**口径（≈25 次 × 64MB ≈ 1.6GB + watch 双触发，旧代码已不在树上无法实测）。
+- **口径校准（P3）**：PERF-4「15s TTL + 2s 节拍」名不副实（TTL 为惰性缓存不主动触发）——docs/25 §3 与 perf-verify P4-a 检查名改为「**四态活动目录 mtime 15s 轮询信号 + 2s 节拍；不改 mtime 的变化才由 15s 惰性 TTL 兜底**」（机制与延迟数字不变）。
+- **重构（S2–S5，行为零变化）**：`isolatedEnv`/`DSH_SCRUB` 三份同形实现收敛到 `demo/test-env.mjs` 导出（perf-baseline/perf-verify 改 import，helper 并入 TMPDIR 隔离）；`zcode-adapter` `pump()` 尾部改调 `slowDown()`（退避封顶单一来源）；`framed.mjs` catalog/ws/multi 三缓存提取共享 `makeTtlCache()`（错误占位/无 onError 上抛语义保持）；`window.html` 移除 `sinceNum` 不可达回退（按 S5 定性为可选死代码清理——该回退本是同帧字段相减、docs/51 §3.2 T2 允许，非契约问题）。
+- **发布余项补登记（P2）**：docs/25 §4「发布前余项」补两项——**非 `--live` 的 `multi-source-check`** 与 **带插件的实机复测**（部署口径目前只有标准档近似）。
+- **夹具修正（复跑抓获）**：perf-verify `buildCorpus` 的 claude 用量文件 mtime 未置旧——四态连接 45s 新鲜度边界落进 P1-a 空闲窗口造成假失败（全量 3 > 阈 2）；已 `utimesSync` 置旧，P1-a 恢复「全量 2、tick 9」。
+- **回归**：隔离测试 **20 个文件全绿**；perf-verify **14/14 全绿（282s，exit 0）**（含 P2-large、扩展 P2-correct 与更名后 P4-a：10.8s 可见）。发布余项不变（V01–V06 修正后实机回归、multi-source-check（含 --live）、带插件复测、应用包重建复验，见 docs/25 §4）。
+
+## 2026-10-17（二轮：审查修正）
+### 审查修正轮：产品修复 9 项 + 验证套件 6 项补强 + 文档纠偏（用户授权；终轮 task-10 数字已回填）
+
+- **产品修复**：① PERF-5 阻塞缺陷——`readInputFile()` 丢弃 `autoRetry`，并发满入队的续会话永不自动重试、重启后全丢；修正保留字段 + `PET_FLUSH_MS` 可注入；② 静默变化驱动：`WORKSPACE_STORE` mtime 5s 检查 + 四态变化 → `forceCatalogRescan`（补目录/工作区漏推路径）；③ 插件 `pet.heartbeat` 数据无变化改发 `broadcastTick`（部署态不再每 15s 全量快照）；④ `read()` 无新字节时仍执行 45s offline 边沿判定；⑤ `PET_PERF_PROBE` 增 readBytes/readOps（PERF-2 改直接测量）；⑥ 日志轮转以 inode 变化检测；⑦ `broadcast()` 快照成功后再清脏 + 异常保底；⑧ `demo/window.html` tick 补全会话行计时器/45s 活动边界/分类跨界（新增 `demo/test-tick.mjs`）；⑨ ZCode `fp()` NULL/Buffer 兼容 + DB 缺失时退避。
+- **验证套件修正**：`perf-verify`/`perf-baseline` 显式隔离 `DSH_*`（修复 DSH 环境下假故障）；sseRecord 跨 chunk 稳健解析；P1-b① 持久 SSE + 精确时间戳（忽略连接首帧）；P2-diff 改 readBytes/readOps 直接断言；P4-a 改 SSE-only；P4-b 间隔增长断言；P6-b 改基线子进程差分重做；`test-headless-cap` 增「槽位释放后自动重投」端到端断言；新增 `demo/test-env.mjs` 隔离 helper。
+- **文档纠偏**：docs/25 §2 可见性矩阵（仅「打开会话」可见；`newCliSession` 与 `account:*` UI 粘贴为既有死代码；`account:*` 实际走 app-server 管道）、§4 延迟 tradeoff 与 readBytes 口径、附录 A/B/C 数值与数据 provenance（pre 原始数据从 /tmp 入册 `qa/perf/`；纯空闲 CPU **-82.4%/-83.8%**（190 vs 1080/1170）、SSE **-94.3%**；插件部署以标准档近似 **-85.8%/-46.5%～-57.1%**（心跳改 tick 后应更优，待插件实机）；测试计数 **20 文件/16 断言套件**）；CHANGELOG 删除/改写「三条可见通道」「20s 冲刷自动重试」「window tick 计时文本」「P6-b 证明旧实现」等不实/夸大表述；qa 验收记录修正 V06 标记归属并登记「修正前构建、修正后回归待补」。
+- **终轮（task-10）结果（2026-10-17 晚，clean-env）**：全量隔离测试 **20 个文件（16 个断言套件）全绿**（总耗时 75.4s）；perf-verify **13/13 全绿（237s，exit 0）**；perf-baseline 修正后复跑（`qa/perf/after-pure-fixed.json`）：标准档 idle CPU 1001/1248→**536**（-46.5%/-57.1%）、active 1454/1992→**617**（-57.6%/-69.0%）、**纯空闲 CPU 1080/1170→190（-82.4%/-83.8%）**、**纯空闲 SSE 4,753,983/4,754,373→270,932 B（-94.3%）**、标准档 idle SSE -85.8%/-86.2%、p50 21/20→**5ms**、启动 7.3～7.7s→**0.62s**、标准档 idle readBytes **0 B/0 ops**；文档/验收记录已回填终值。
+
+## 2026-10-17
+### 首轮：真优化验证套件制定（perf-verify 12/12 首测）＋抓获并修复 DSH 跟随器截断帧丢失缺陷（v0.1.0 即存在）
+
+- **新增 [scripts/perf-verify.mjs](../scripts/perf-verify.mjs)**（docs/25 附录 C）：逐项证明 PERF-1～6 机制真实生效而非「测试绿」——空闲心跳轻量化（2 全量+9 tick/20s、平均 2785B）、脏冲刷不漏推、用量懒触发（就绪即查 pending + 70s 零后台重扫）、目录 TTL 10.1s 可见、**增量读差分**（1MB vs 8MB 日志空闲 CPU 差 -2ms；二轮改用探针 readBytes/readOps 直接测量复核：>50MB 日志空闲 20s 读取 0 B vs 旧实现约 2.64GB（**2026-10-18 校正：当时 >50MB 档无产物入册、旧值系估算；现已补 P2-large 64MB 实测 0 B 入册，旧值改推算口径，见 docs/25 附录 C**））、ZCode 退避（空闲 5s 6 轮、回基准 204ms；二轮改为间隔增长断言）、并发上限（复用 test-headless-cap；二轮增自动重投端到端断言）、指纹去重（touch 不重放/UPDATE 重放）与**差分内存**（首轮 2.5 万行×6KB 同指纹 vs 异指纹 RSS 差 0.13MB；**该设计未测旧实现、+35MB 为算术估算，二轮重做为基线子进程差分 <6~8MB**）。全隔离可复跑（约 4 分钟；**二轮补：须清 DSH_* 环境变量，否则会跟随真实 ~/.dsh 产生假故障**），任一失败退出非零。
+- **首跑抓获真实缺陷（产品代码修复）**：`zstdDecompressSync` 对截断帧不抛错而「成功」解压为空——跟随器读到写到一半的帧时当空帧消费，**该帧事件永久丢失**（v0.1.0 整文件读取同样存在，靠下一帧魔数重同步掩盖；PERF-2 增量模式下余字节成孤儿前缀暴露）。修复：`decodeFrames` 末帧必须非空且以完整行（`\n`）收尾才消费，连续 3 轮不合格放行（防真实无换行尾帧永久滞留）。修复后 perf-verify 12/12、隔离测试 18 个文件全绿（其中 3 个 helper、实际 15 个断言套件；二轮后 20 文件/16 套件（终轮实测））；V06 安装包已同步 /Applications（**属修正前构建**；二轮修正后需重建复验，见 qa 验收记录「修正后回归待补」）。
+
+## 2026-10-17
+### v0.1.1 实机验收（首轮，对应修正前构建）：V01–V06 复跑全部通过（用户授权，专用测试会话 + 最小自检消息）
+
+- **V01 CLI 对话闭环 ✅**：claude（aa273dac…）/ codex（01a1492d…）/ kimi（session_5e7733c5…）各一个专用会话，投递即新建 + 首条送达 + 第二轮同 ID 上下文连续（均正确回忆指令词 "ok"）；claude 实际请求 `--model glm-5.2`（cc-switch 映射生效）。
+- **V02 同 cwd 隔离 ✅**：标记只进 A（3 处，B 0 处），回复 "A-ok"；未知 ID 404、无目标 400。
+- **V03 DSH 插件闭环 ✅**：session-ae69aa9d… 三轮 plugin:agents.followup（ok/ok/recovered），turn/end(completed)×3，状态机回流 done/已完成 + title 从日志派生。
+- **V04 ✅ / V05 ✅**：重启后插件重连、队列无幽灵、目录恢复，重启后投递 "recovered"；upsertInput 执行前落盘在位，test-crash-window 四场景全绿。
+- **V06 安装包 ✅**：新包 121.79 MiB + DMG 39.84 MiB（包内 v0.1.1 标记核对：PET_PERF_PROBE/broadcastTick/headlessInFlight/PET_HEADLESS_CAP/zcode 指纹全部在位）；干净安装后包内 Node 自起 7799，插件 connected、四源注册表 available，包服务投递闭环（claude A → "packaged"）。现 /Applications/CodeAll.app 是**修正前** v0.1.1 构建（**二轮更正：PET_HEADLESS_CAP 位于 `adapters/cli-control.mjs`，不在 framed.mjs**）。
+- **二轮登记**：本次实机验收对应**修正前构建**；修正后（autoRetry/静默变化驱动/心跳轻量化/readBytes/inode/window tick/ZCode NULL 等）V01–V06 实机回归待补，应用包需按修正后代码重建复验（见 [qa/v0.1.1-acceptance-2026-10-17.md](../qa/v0.1.1-acceptance-2026-10-17.md)「修正后回归待补」）。
+- **环境事件登记（非产品缺陷）**：验收中本机 cc-switch 代理（127.0.0.1:15721）未运行，claude 首轮 CLI 侧 ConnectionRefused——会话文件如实留痕（诚实边界的正面样本），启动 CC Switch 后同会话重发即送达。
+- 队列终态：32 条全 delivered、无残留。证据：[qa/v0.1.1-acceptance-2026-10-17.md](../qa/v0.1.1-acceptance-2026-10-17.md)。`multi-source-check --live` 未在本轮授权范围，余项由用户决定。
+
+## 2026-10-17
+### v0.1.1 开发完成（首轮）：PERF-1～6 + CLI-1 全部落地（无插件纯空闲 CPU -70.4%、SSE 推送 -94.3%；18 个隔离测试文件）
+
+- **PERF-1 快照脏标记**：显式变化点（事件/队列/投递/用量完成）仍即时全量推；静默变化（目录 TTL 重扫、四态刷新）以 `stableJson` 比对（剔除 scannedAt/tookMs 等易变字段）挂脏，由 2s 节拍冲刷；无变化心跳降为轻量 tick（仅 `ts`，`{v:1,tick:true}`），qa M4「无 DSH 日志也有消息流」语义保留；`broadcast()` 无客户端时跳过重建。**二轮审查发现 B3：window.html 会话行 elapsedMs、45s「活动中/静默」边界、活跃/完成分类在 tick 下冻结，违反「UI 计时/状态无退化」；已补全并加 `test-tick` 回归**。纯空闲口径（**无插件**）**CPU 1080/1170→190 ms/分钟（-82.4%/-83.8%，终轮定稿；首轮 320、二轮 240 为过程值）、推送 4.7MB→271KB/分钟（-94.3%）**，双达标；插件部署近似以标准档终测 **-85.8%/-46.5%～-57.1%** 计（二轮 pet.heartbeat 改 tick 后应更优，待插件实机复测）。
+- **PERF-2 跟随器增量读**：DSH 日志跟随从「800ms 定时 + fs.watch 双触发整文件 readFileSync」改为 **fs.open+定长定位尾读**（无增长零读取），fs.watch 500ms 去抖 + 5s 增量兜底轮询；未完成帧留 pending 缓冲拼接，轮转/截断重置重读。
+- **PERF-3 用量懒触发**：去掉启动即扫与 60s 周期；首轮延后至 +5min，`/api/usage` 与 `/api/usage/calendar` 在缓存 ≥60s 陈旧时异步触发重扫（响应仍回当前缓存）。
+- **PERF-4 轮询矩阵**：四态 3s→15s、五源目录/工作区缓存 TTL 5s→15s（重扫结果比对挂脏）、ZCode sqlite 1.5s→2s 且无新增行指数退避（≤10s，有变化立即回基准）；Claude/Codex/Kimi 跟随 1.2s 维持（实时事件路径，纯空闲已达标故不加退避）。
+- **PERF-5 投递台账 + 并发上限**：`headlessRun` 在途台账（pid/来源/开始时间/日志，进程退出即移除）暴露于 `/api/state.inFlight`；无头并发上限默认 2（`PET_HEADLESS_CAP` 可覆盖），超出返回 busy → 入队 `autoRetry`，`flushNewQueues` 设计为同时冲刷 new: 与 autoRetry 条目；ZCode 链保持全局串行不动。**二轮审查抓获阻塞缺陷：`readInputFile()` 重建条目时丢弃 `autoRetry` → busy 续会话永不自动重试、重启后全丢；已修复（保留字段 + `PET_FLUSH_MS` 可注入）**。新增 `demo/test-headless-cap.mjs`（挂起 mock：2 在途封顶/第 3 条入队/退出即释放；**二轮增「槽位释放后自动重投」端到端断言**）；test-cli-create 显式抬高测试上限（其意图是参数与环境，非限流）。
+- **PERF-6 ZCode 指纹瘦身**：`seen` 表值改 sha256 指纹（原全文本 data），命中 delete+set 重触构成 LRU；容量 6000 与批量淘汰 2000 口径不变。**二轮审查修正：`fp(r.data)` 对 NULL/Buffer 抛 TypeError（v0.1.0 容忍 NULL）→ 已兼容；DB 缺失/查询错误时更新退避。**
+- **CLI-1 文档收口**：投递通道可见性矩阵落 demo/README 与 docs/40 §3.14。**二轮纠正：可见投递/打开通道仅「打开会话」（Terminal；ZCode account 会话走 zcode:// 深链）；「新建会话窗口」`newCliSession` 未接线（docs/22 M1 死代码）、`account:*` 的 UI 粘贴回退 `deliverViaZcodeUi`/`PET_ZCODE_UI_DELIVER` 在当前接线不可达（`deliverViaCli` 对 zcode 无条件走 app-server 管道）；`account:*` 上游拒绝时如实失败、不谎报。首轮「三条可见通道」表述不实，已改写。**
+- **对比口径**：标准档（含挂具 /api/state 采样）空闲 CPU 1001/1248→727/795 ms/分钟、/api/state p50 21/20→**8/7**ms（p95 57/60→67 如实登记为变差；启动 7.3～7.7s→**0.62s**）；改动前代码经 git worktree 同款脚本对照；**pre 纯空闲原始数据已入册 `qa/perf/pre-pure.json`（1080ms/4,753,983B）、`pre-pure-rerun.json`（1170ms），after 过程值 `after-pure-rerun.json`（240ms），终轮定稿 `after-pure-fixed.json`（190ms/270,932B）**，全部数字与 provenance 见 [docs/25 附录 B](./25-v0.1.1-scope.md)；**待用户授权**：`multi-source-check --live`；修正后 V01–V06 实机回归待补。
+
+## 2026-10-17
+### PERF-0 完成：v0.1.1 开销基线表在册（工具 + 探针 + 两档复跑）
+
+- **新增 [scripts/perf-baseline.mjs](../scripts/perf-baseline.mjs)**：隔离 HOME + 合成五源确定性语料（**二轮更正单位：DSH 主日志 1.1MiB/其余 0.3MiB、Claude 1.6MiB（实占 1.65）、Codex 0.6MiB、Kimi 0.3MiB、ZCode 480 行；初版把 MiB 写作 MB**），起 framed 服务采「空闲 60s / 合成活跃 60s（每 2s 追加一轮事件）」两档：CPU、读写次数、RSS、SSE 推送条数与字节、/api/state（snapshot 全量重建）时延、启动耗时。macOS rusage 无 in/out-block；**二轮后 `PET_PERF_PROBE` 直接输出 readBytes/readOps，PERF-2 完成条件改为直接测量（>50MB 日志空闲 20s 0 B vs 旧 ~2.64GB；**2026-10-18 校正：旧值为估算非实测，64MB 档实测已入册**）**。
+- **framed.mjs 增 env 门控资源探针**（`PET_PERF_PROBE=<file>`，每 5s 追加 CPU µs/RSS 采样，二轮再增 readBytes/readOps；默认不开启、零行为影响）；**17 个隔离测试文件（其中 3 个 helper、14 个断言套件）通过**。
+- **基线（docs/25 附录 A，run1/run2）**：空闲 CPU 1001～1248ms/分钟（1.7～2.1%），空闲 SSE 推送 32～33 条/分钟 × ~149KB ≈ **4.8MB/分钟/客户端（零变化全量推）**；活跃档 121 条/分钟；/api/state p50 4～21ms / p95 35～60ms；复跑噪声 CPU ±25%、条数/字节 <0.1%。PERF-1 锚点：优化后空闲 CPU ≤500～625ms/分钟、空闲推送字节 ≥90% 下降。
+
+### v0.1.1 与 v0.3.0 立项（用户定向：性能优化补丁线 + 桌面端通道攻坚）
+
+- **v0.1.1 = 性能优化 + CLI 后台化收口**（真相源 [docs/25-v0.1.1-scope.md](./25-v0.1.1-scope.md)）：仅 macOS、功能语义零变化、不吸收 v0.2.1 清单。依据 2026-10-17 全量开销分析定位五大根因（broadcast 每 2s 全量重建 snapshot、日志跟随器整文件重读、用量扫描 60s 周期、各路固定轮询矩阵、每次投递独立 agent 进程）；任务 PERF-0 基线 → PERF-1 快照脏标记 / PERF-2 日志增量读（最大头）→ PERF-3/4/5/6 + CLI-1 后台化文档收口，合计约 5.5～9.5 人日。CLI 后台化复核结论（**二轮纠正**）：投递链路已实测全后台；可见通道**仅「打开会话」Terminal**（设计意图）；「新建会话窗口」`newCliSession` 未接线、ZCode `account:*` 的 UI 粘贴回退不可达，均为既有死代码；`account:*` 实际走 app-server 管道，上游拒绝时如实失败。
+- **v0.3.0 = 桌面端信息传输通道攻坚**（真相源 [docs/26-v0.3.0-scope.md](./26-v0.3.0-scope.md)）：把 docs/24「继续暂停」中的「Claude/Codex/Kimi 桌面 App 原生控制」升级为 v0.3.0 主目标（前置依赖 v0.2.0 完成；ACP/更多 Agent 在其后重启）。2026-10-17 本机实测确认：五家桌面 App 均无 AppleScript 脚本面，除 ZCode app-server 管道外无官方外部输入协议，「进程内插件」仅对自有软件 DSH 可行；SPIKE-1～5 全量 spike（只读/沙箱，证据卡进 docs/40）后按证据择优落地 1～2 家（DESK-1，预估优先级 DSH 深化 > ZCode account 加固 > Kimi Code > Claude/Codex 桌面）。
+- **同步**：docs/22 头部 2026-10-17 更新（v0.1.1/v0.3.0 定向，其余工作流继续暂停）；docs/24 §1「继续暂停」行指向 docs/26；README 前言、文档索引、§四当前开发任务（中英双语）同步三线排期。
+
 ## 2026-10-10
 ### v0.2.0 开发计划立项（用户定向：跨平台 Win/Linux）
 

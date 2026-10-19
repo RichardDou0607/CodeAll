@@ -1,14 +1,14 @@
 # CodeAll（Agent 工作框 / 总控）
 
-> 一个常驻桌面的**工作框 / Agent 总控**。当前开发目标是与 Claude Code、Codex、Kimi Code 的 CLI 会话及已授权的 DeepSeek Harness 会话对话；已有的多源观察、用量和 ZCode 实验能力保留。**跨平台（Windows/Linux）是当前开发方向（v0.2.0 进行中，见 [docs/24](./docs/24-v0.2.0-scope.md)，未发布不构成承诺）**；计费、远端 AgentOS 与手机端仍是暂停排期的方向，不属于当前交付承诺。
+> 一个常驻桌面的**工作框 / Agent 总控**。当前开发目标是与 Claude Code、Codex、Kimi Code 的 CLI 会话及已授权的 DeepSeek Harness 会话对话；已有的多源观察、用量和 ZCode 实验能力保留。**当前排期（2026-10-17 定向、10-19 增补）：v0.1.1 性能优化补丁线（仅 macOS，[docs/25](./docs/25-v0.1.1-scope.md)）＋ 其上追加的 v0.1.2 用量链路与刷新补丁（[docs/27](./docs/27-v0.1.2-scope.md)）；v0.2.0 跨平台 Windows/Linux（[docs/24](./docs/24-v0.2.0-scope.md)）；v0.3.0 桌面端信息传输通道攻坚（v0.2.0 后启动，[docs/26](./docs/26-v0.3.0-scope.md)），均未发布不构成承诺**；计费、远端 AgentOS 与手机端仍是暂停排期的方向，不属于当前交付承诺。
 >
-> 当前对外可下载：**v0.1.0-alpha（2026-10-08，独立安装包）**。CLI 与 DS Harness 对话闭环的 v0.1.0 收口验收（V01–V06）已在源码层完成（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)），正式版本待跨平台（v0.2.0）与整体形态完成后发布。已有观察/用量等功能仍在，但不构成新增开发承诺。
+> 当前对外可下载：**v0.1.2（2026-10-19，独立安装包）**。CLI 与 DS Harness 对话闭环的 v0.1.0 收口验收（V01–V06）已在源码层完成（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)），正式版本待跨平台（v0.2.0）与整体形态完成后发布。已有观察/用量等功能仍在，但不构成新增开发承诺。
 
 > English readers: see the full **English version → [English](#english)** at the bottom of this page.
 
 ## 〇、下载安装（macOS · Apple Silicon）
 
-从 [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) 下载 **v0.1.0-alpha** 的 `CodeAll_0.1.0_aarch64.dmg`，拖入 /Applications 即用：**安装包自带本地服务与 Node 运行时，不依赖源码仓库，也无需先装 Node 或其它任何依赖**（各家 Agent 软件本体当然需要各自安装并登录）。
+从 [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) 下载 **v0.1.2** 的 `CodeAll_0.1.2_aarch64.dmg`，拖入 /Applications 即用：**安装包自带本地服务与 Node 运行时，不依赖源码仓库，也无需先装 Node 或其它任何依赖**（各家 Agent 软件本体当然需要各自安装并登录）。
 
 ```bash
 # 首次打开：应用为 ad-hoc 签名、未经过 Apple 公证，macOS 门禁会拦截一次——任选其一：
@@ -102,6 +102,9 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 | [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md) | 原后续构建任务，现已暂停排期 |
 | [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) | v0.1.0 真相源（已收口）：CLI + DSH 对话范围、优先级与发布验收 |
 | [docs/24-v0.2.0-scope.md](./docs/24-v0.2.0-scope.md) | **当前真相源（v0.2.0）**：Windows/Linux 跨平台范围、优先级与发布验收 |
+| [docs/25-v0.1.1-scope.md](./docs/25-v0.1.1-scope.md) | **真相源（v0.1.1）**：性能优化 + CLI 后台化收口范围与验收（仅 macOS，先行） |
+| [docs/26-v0.3.0-scope.md](./docs/26-v0.3.0-scope.md) | **真相源（v0.3.0）**：桌面端信息传输通道攻坚（全量 spike 后择优落地，v0.2.0 后启动） |
+| [docs/27-v0.1.2-scope.md](./docs/27-v0.1.2-scope.md) | **当前真相源（v0.1.2）**：分钟兜底刷新 + 用量扫描四级增量（PERF-7）范围与验收 |
 | [docs/40-adapters.md](./docs/40-adapters.md) | 后端适配矩阵（含 Cursor/Copilot/ACP 行）、观测能力与降级 |
 | [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | 产品规格、工作框三形态、人机交互总体方案 |
 | [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri 外壳实现（双窗口、Space 行为、内存口径） |
@@ -111,7 +114,7 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 
 ## 四、当前开发任务
 
-[v0.1.0 对话收口](./docs/23-v0.1.0-scope.md) 的 V01–V06 已于 2026-10-10 全部验收通过（CLI 指定会话收发、DSH 授权插件收发、误投/失败/重发保护、崩溃窗口记录与最终 macOS 安装包复验）。**当前开发：v0.2.0 Windows/Linux 跨平台**（[docs/24](./docs/24-v0.2.0-scope.md)，2026-10-10 用户定向恢复历史排期 W3）：平台抽象层 → 双平台全功能 → 三平台安装包，发布门槛 W01–W07；v0.1.0 验收登记的遗留小修排 v0.2.1。更多 Agent、计费、远端和手机端仍保留在 [历史待办](./docs/22-post-release-roadmap.md)。原则不变：能力落地且完成验收，才进入对外保证。
+[v0.1.0 对话收口](./docs/23-v0.1.0-scope.md) 的 V01–V06 已于 2026-10-10 全部验收通过（CLI 指定会话收发、DSH 授权插件收发、误投/失败/重发保护、崩溃窗口记录与最终 macOS 安装包复验）。**当前排期（2026-10-17 用户定向，10-19 增补 v0.1.2）**：**v0.1.1 性能优化 + CLI 后台化收口**先行（[docs/25](./docs/25-v0.1.1-scope.md)，仅 macOS、功能语义零变化，PERF-0 基线 → PERF-1 快照脏标记 → PERF-2 日志增量读 → 其余按带宽，约 5.5～9.5 人日）；**v0.1.2 用量链路与刷新补丁**（[docs/27](./docs/27-v0.1.2-scope.md)：MRF-1 分钟兜底刷新修复空闲滞留 + PERF-7 用量扫描四级增量——事件循环让出/检查点跨重启/增长文件尾读/ZCode 水位，perf-verify 17/17）；**v0.2.0 Windows/Linux 跨平台**主线（[docs/24](./docs/24-v0.2.0-scope.md)：平台抽象层 → 双平台全功能 → 三平台安装包，发布门槛 W01–W07，与 v0.1.x 同代码区、v0.1.2 收口后 PLAT 合流）；**v0.3.0 桌面端信息传输通道攻坚**（[docs/26](./docs/26-v0.3.0-scope.md)，v0.2.0 后启动：SPIKE-1～5 全量 spike 出证据卡 → 按证据择优落地 1～2 家）。v0.1.0 验收登记的遗留小修排 v0.2.1。更多 Agent（ACP）、计费、远端和手机端仍保留在 [历史待办](./docs/22-post-release-roadmap.md)。原则不变：能力落地且完成验收，才进入对外保证。
 
 ## 五、许可证
 
@@ -119,13 +122,13 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 
 ## English
 
-> CodeAll is a resident desktop **work-frame / agent cockpit**. The current development goal is conversation with Claude Code, Codex and Kimi Code CLI sessions, plus authorized DeepSeek Harness sessions; existing multi-source observation, usage tracking and ZCode experimental capabilities are retained. **Cross-platform (Windows/Linux) is the current direction (v0.2.0 in progress, see [docs/24](./docs/24-v0.2.0-scope.md); not a commitment until released)**; billing, remote AgentOS and mobile remain paused and are not part of the current delivery promise.
+> CodeAll is a resident desktop **work-frame / agent cockpit**. The current development goal is conversation with Claude Code, Codex and Kimi Code CLI sessions, plus authorized DeepSeek Harness sessions; existing multi-source observation, usage tracking and ZCode experimental capabilities are retained. **Current schedule (set 2026-10-17, v0.1.2 added 10-19): v0.1.1 performance patch line (macOS only, [docs/25](./docs/25-v0.1.1-scope.md)) plus the follow-on v0.1.2 usage-pipeline & refresh patch ([docs/27](./docs/27-v0.1.2-scope.md)); v0.2.0 cross-platform Windows/Linux ([docs/24](./docs/24-v0.2.0-scope.md)); v0.3.0 desktop-app transmission-channel push (starts after v0.2.0, [docs/26](./docs/26-v0.3.0-scope.md)) — none released yet, no commitment**; billing, remote AgentOS and mobile remain paused and are not part of the current delivery promise.
 >
-> Current public download: **v0.1.0-alpha (2026-10-08, standalone installer)**. The v0.1.0 acceptance for the CLI & DS Harness conversation loop (V01–V06) is complete at source level (evidence: [qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)); a formal release comes after cross-platform (v0.2.0) and the overall product shape are done. Existing observation/usage features remain available but are not a new development commitment.
+> Current public download: **v0.1.2 (2026-10-19, standalone installer)**. The v0.1.0 acceptance for the CLI & DS Harness conversation loop (V01–V06) is complete at source level (evidence: [qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)); a formal release comes after cross-platform (v0.2.0) and the overall product shape are done. Existing observation/usage features remain available but are not a new development commitment.
 
 ### 0 · Download & Install (macOS · Apple Silicon)
 
-Download the **v0.1.0-alpha** `CodeAll_0.1.0_aarch64.dmg` from [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) and drag it into /Applications: **the installer ships its own local service and Node runtime** — no repo checkout or Node installation required (each agent product itself still needs to be installed and signed in by you).
+Download the **v0.1.2** `CodeAll_0.1.2_aarch64.dmg` from [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) and drag it into /Applications: **the installer ships its own local service and Node runtime** — no repo checkout or Node installation required (each agent product itself still needs to be installed and signed in by you).
 
 ```bash
 # First launch: the app is ad-hoc signed and not notarized, macOS Gatekeeper blocks it once — pick one:
@@ -219,6 +222,9 @@ node scripts/replay-check.mjs --selftest   # State-machine replay + negative cas
 | [docs/22-post-release-roadmap.md](./docs/22-post-release-roadmap.md) | Original follow-up build tasks, scheduling now paused |
 | [docs/23-v0.1.0-scope.md](./docs/23-v0.1.0-scope.md) | v0.1.0 truth source (closed out): CLI + DSH conversation scope, priorities and release acceptance |
 | [docs/24-v0.2.0-scope.md](./docs/24-v0.2.0-scope.md) | **Current truth source (v0.2.0)**: Windows/Linux cross-platform scope, priorities and release acceptance |
+| [docs/25-v0.1.1-scope.md](./docs/25-v0.1.1-scope.md) | **Truth source (v0.1.1)**: performance optimization + CLI backgrounding closure (macOS only, goes first) |
+| [docs/26-v0.3.0-scope.md](./docs/26-v0.3.0-scope.md) | **Truth source (v0.3.0)**: desktop-app transmission-channel push (full spikes, then land 1–2 by evidence; after v0.2.0) |
+| [docs/27-v0.1.2-scope.md](./docs/27-v0.1.2-scope.md) | **Current truth source (v0.1.2)**: minute fallback refresh + four-level incremental usage scanning (PERF-7) |
 | [docs/40-adapters.md](./docs/40-adapters.md) | Backend adapter matrix (incl. Cursor/Copilot/ACP rows), observation capabilities and degradation |
 | [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | Product spec, work-frame three forms, human-machine interaction plan |
 | [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri shell implementation (dual windows, Spaces behavior, memory accounting) |
@@ -228,7 +234,7 @@ node scripts/replay-check.mjs --selftest   # State-machine replay + negative cas
 
 ### 4 · Current Development
 
-The v0.1.0 conversation loop ([docs/23](./docs/23-v0.1.0-scope.md)) passed all V01–V06 acceptances on 2026-10-10 (CLI directed send/receive, DSH authorized plugin send/receive, mis-delivery/failure/resend protection, crash-window records and final macOS installer re-verification). **Current work: v0.2.0 Windows/Linux cross-platform** ([docs/24](./docs/24-v0.2.0-scope.md), direction set by the owner on 2026-10-10 per the historical schedule W3): platform abstraction layer → full functionality on both platforms → three-platform installers, release gates W01–W07; leftover fixes registered in the v0.1.0 acceptance are scheduled for v0.2.1. More agents, billing, remote and mobile remain in the [historical backlog](./docs/22-post-release-roadmap.md). Unchanged principle: a capability enters the public guarantee only after it is implemented and accepted.
+The v0.1.0 conversation loop ([docs/23](./docs/23-v0.1.0-scope.md)) passed all V01–V06 acceptances on 2026-10-10 (CLI directed send/receive, DSH authorized plugin send/receive, mis-delivery/failure/resend protection, crash-window records and final macOS installer re-verification). **Current schedule (set by the owner on 2026-10-17, v0.1.2 added 10-19)**: **v0.1.1 performance + CLI-backgrounding closure** goes first ([docs/25](./docs/25-v0.1.1-scope.md), macOS only, zero semantic change, ~5.5–9.5 person-days); **v0.1.2 usage-pipeline & refresh patch** ([docs/27](./docs/27-v0.1.2-scope.md): MRF-1 minute fallback refresh fixing idle staleness + PERF-7 four-level incremental usage scanning — event-loop yielding / restart checkpoint / grown-file tail reads / ZCode watermark, perf-verify 17/17); **v0.2.0 Windows/Linux cross-platform** is the main line ([docs/24](./docs/24-v0.2.0-scope.md): platform abstraction → full functionality on both platforms → three-platform installers, release gates W01–W07; PLAT merges after v0.1.2 closes since both touch the same code); **v0.3.0 desktop-app transmission-channel push** starts after v0.2.0 ([docs/26](./docs/26-v0.3.0-scope.md): SPIKE-1…5 evidence cards, then land 1–2 vendors by evidence). Leftover fixes registered in the v0.1.0 acceptance are scheduled for v0.2.1. More agents (ACP), billing, remote and mobile remain in the [historical backlog](./docs/22-post-release-roadmap.md). Unchanged principle: a capability enters the public guarantee only after it is implemented and accepted.
 
 ### License
 

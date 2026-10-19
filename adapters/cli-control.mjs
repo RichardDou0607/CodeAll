@@ -215,11 +215,21 @@ function sanitizedEnv() {
  * 不再把静默失败当「已投递」（与 ME3 抓过的 pid-undefined 假成功同类）。活过窗口的回合
  * 继续异步执行，写入各自会话文件后观察跟随器自动看到。
  */
-/** 无头执行公共路径：detached spawn + 2.5s 快速失败窗口 + 0600 日志（续会话与新建共用）。 */
+/**
+ * 无头投递公共路径：detached spawn + 2.5s 快速失败窗口 + 0600 日志（续会话与新建共用）。
+ * PERF-5（docs/25）：在途台账 + 并发上限——每次投递 spawn 独立 agent 进程（200MB+ 级、存活至回合
+ * 结束），默认最多 2 个在途（PET_HEADLESS_CAP 可覆盖，测试用）；超出的返回 busy，由调用方入队自动重试。
+ */
+const HEADLESS_CAP = Math.max(1, Number(process.env.PET_HEADLESS_CAP || 2) || 2);
+const headlessLedger = new Map();     // pid → { pid, source, startedAt, logFile }（进程退出即移除）
+export function headlessInFlight() { return [...headlessLedger.values()]; }
+
 async function headlessRun(source, cwd, args, label, envExtra = {}) {
   const t = CLI_TARGETS[source];
   const bin = resolveCliBin(source);
   if (!bin) return { ok: false, error: 'cli-not-found', detail: t.bin + ' 不在 PATH' };
+  if (headlessLedger.size >= HEADLESS_CAP)
+    return { ok: false, error: 'busy', detail: '无头投递并发已满（' + HEADLESS_CAP + ' 在途）' };
   try {
     fs.mkdirSync(CONTROL_DIR, { recursive: true });
     const logFile = path.join(CONTROL_DIR, source + '-' + Date.now().toString(36) + '.log');
@@ -238,6 +248,9 @@ async function headlessRun(source, cwd, args, label, envExtra = {}) {
       return { ok: false, error: 'spawn', detail: t.bin + ' 启动失败：二进制或会话目录（cwd）不可用' };
     }
     child.unref();
+    headlessLedger.set(pid, { pid, source, startedAt: Date.now(), logFile });
+    child.on('exit', () => headlessLedger.delete(pid));
+    child.on('error', () => headlessLedger.delete(pid));
     const earlyCode = await new Promise((resolve) => {
       const done = (v) => { clearTimeout(timer); resolve(v); };
       const timer = setTimeout(() => done(null), 2500);        // 活过窗口 = 回合正常开跑

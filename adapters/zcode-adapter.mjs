@@ -26,6 +26,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { categoryOf } from '../demo/frame.mjs';
@@ -294,17 +295,37 @@ export function mapZcodeRow(row, ctx) {
  * 以 (tbl,id)→data 文本指纹去重：新行与内容变化行各重放一次映射（状态机幂等，重复 tool.call 无害）。
  */
 export function followZcodeLogs(opts = {}) {
-  const intervalMs = opts.intervalMs ?? 1500;
+  const intervalMs = opts.intervalMs ?? 2000;             // PERF-4：1.5s→2s 基准；无新增行时指数退避（≤10s）
   const lookbackMs = opts.lookbackMs ?? 60_000;          // 启动回看窗口：只关注「现在正在跑」的会话
   const maxRows = opts.maxRows ?? 400;
   const onEvent = opts.onEvent ?? (() => {});
   let db = openZcodeDb(opts.dbPath || ZCODE_DB);
   let watermark = Date.now() - lookbackMs;
-  const seen = new Map();                                // 'tbl:id' → data 文本（指纹去重）
+  // PERF-6（docs/25）：指纹去重——seen 只存 sha256(data)（原全文本 data 在长会话下可占数十 MB RSS）；
+  // 命中即 delete+set 重触刷新，配合容量上限构成 LRU（容量 6000 与原批淘汰口径不变）。
+  const seen = new Map();                                // 'tbl:id' → sha256 hex
+  // 鲁棒性：data 允许 NULL / 非字符串（v0.1.0 的 safeJson 对 NULL 宽容、该行被忽略；新码不能把历史坏行/
+  // 半写行升级为 TypeError 崩服务）：NULL→空串指纹、Buffer/TypedArray 按字节、其它按 String()。
+  const fp = (s) => {
+    try { return createHash('sha256').update(s == null ? '' : s).digest('hex'); }
+    catch { return createHash('sha256').update(String(s)).digest('hex'); }
+  };
   const ctxBySid = new Map();                            // sessionId → {seq, hello}
   const metaBySid = new Map();                           // sessionId → {cwd, title}
   let stopped = false;
-  const stats = { polls: 0, rows: 0, events: 0, parseErrors: 0, subagentSkipped: 0, dbReopens: 0 };
+  // P4-b 断言用：lastGapMs/gaps 暴露实际轮询间隔（空闲应显著增长、取到新行后回基准），
+  // currentBackoffMs 暴露当前退避值；无 DB / 查询异常也走退避（见 slowDown）。
+  let lastPumpAt = 0;
+  const stats = { polls: 0, rows: 0, events: 0, parseErrors: 0, subagentSkipped: 0, dbReopens: 0, lastGapMs: 0, gaps: [] };
+  const noteGap = () => {
+    const now = Date.now();
+    const gap = lastPumpAt ? Math.max(0, now - lastPumpAt) : 0;
+    lastPumpAt = now;
+    if (gap) { stats.lastGapMs = gap; stats.gaps.push(gap); if (stats.gaps.length > 60) stats.gaps.shift(); }
+  };
+  /** 无 DB（未安装/打不开）或查询异常也算一轮空闲：退避同样推进，
+   *  否则没有 ZCode 的机器会永久保持基准间隔每 2s 探测一次文件系统。 */
+  function slowDown() { backoffMs = Math.min(backoffMs * 2, 10_000); }
 
   const STMT = `
     SELECT 'message' AS tbl, m.id AS id, m.session_id AS session_id, m.time_created AS time_created,
@@ -321,17 +342,23 @@ export function followZcodeLogs(opts = {}) {
   function pump() {
     if (stopped) return;
     stats.polls++;
+    noteGap();
     if (!db) { db = openZcodeDb(opts.dbPath || ZCODE_DB); if (db) stats.dbReopens++; }
-    if (!db) return;
+    if (!db) { slowDown(); return; }                                // 无 ZCode：退避而非每 2s 探测
     let rows;
     try { rows = db.prepare(STMT).all(watermark - 2000, watermark - 2000, maxRows); }
-    catch (e) { try { db.close(); } catch {} db = null; return; }   // 库被替换/锁死：下轮重开
+    catch (e) { try { db.close(); } catch {} db = null; slowDown(); return; }   // 库被替换/锁死：下轮重开+退避
+    const rowsBefore = stats.rows;
     let maxUpdated = watermark;
     for (const r of rows) {
       if (r.time_updated > maxUpdated) maxUpdated = r.time_updated;
       const key = r.tbl + ':' + r.id;
-      if (seen.get(key) === r.data) continue;            // 未变化的旧行
-      seen.set(key, r.data);
+      const h = fp(r.data);
+      const prev = seen.get(key);
+      if (prev === h) {                                   // 未变化的旧行（LRU：重触刷新位置）
+        seen.delete(key); seen.set(key, h); continue;
+      }
+      seen.set(key, h);
       if (seen.size > 6000) { const it = seen.keys(); for (let i = 0; i < 2000; i++) { const k = it.next().value; if (k === undefined) break; seen.delete(k); } }
       stats.rows++;
       let ctx = ctxBySid.get(r.session_id);
@@ -349,11 +376,20 @@ export function followZcodeLogs(opts = {}) {
       for (const ev of mapZcodeRow({ tbl: r.tbl, data, time_created: r.time_created, time_updated: r.time_updated }, ctx)) { stats.events++; onEvent(ev); }
     }
     watermark = maxUpdated;
+    // PERF-4：本轮有新增/变化行 → 回到基准间隔；空闲轮与无 DB/查询异常同走 slowDown（2× 指数退避，上限 10s）
+    if (stats.rows > rowsBefore) backoffMs = intervalMs; else slowDown();
   }
 
-  const timer = setInterval(pump, intervalMs);
+  let backoffMs = intervalMs;
+  let timer = null;
+  const schedule = () => { if (!stopped) timer = setTimeout(() => { pump(); schedule(); }, backoffMs); };
   pump();
-  return { stop() { stopped = true; clearInterval(timer); try { db?.close(); } catch {} }, stats: () => ({ ...stats }) };
+  schedule();
+  return {
+    stop() { stopped = true; clearTimeout(timer); try { db?.close(); } catch {} },
+    // gaps 给数组快照（stats() 调用方可能跨轮持有）；currentBackoffMs 供 P4-b 断言"取到新行后回基准"
+    stats: () => ({ ...stats, gaps: stats.gaps.slice(), currentBackoffMs: backoffMs, baseIntervalMs: intervalMs }),
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ node demo/test-html.mjs              # 回放页自检：8 项断言
 |---|---|---|
 | GET | `/api/state` | 快照：聚合状态、实时会话（含 agentName/model/reasoningEffort/kind）、计数器、输入队列、目录摘要（主会话口径）、能力位 |
 | GET | `/api/catalog` | 项目 → 会话目录（**只含主会话**，子代理计入 `subagentCount`；`?refresh=1` 强制重扫） |
-| GET | `/api/stream` | SSE 实时推送 |
+| GET | `/api/stream` | SSE 实时推送（变化推全量快照，无变化每 2s 发轻量 tick；**有客户端连接时每分钟兜底强制重扫目录+用量并推全量**——mini 条状态/日历桶计数最迟 ~1 分钟可见，测试可用 `PET_REFRESH_MS` 缩短周期，回归 `demo/test-minute-refresh.mjs`；无客户端时保持懒触发零后台扫描） |
 | POST | `/api/input` | `{"text":"…","sessionId":"明确的主会话 ID"}` → 投递；无目标返回 400，唯一前缀可用，歧义前缀/子代理拒绝；ZCode 实验管道 accepted 后返回 202 执行中，终态再从队列移除或标失败 |
 | DELETE | `/api/input/:id` | 从队列删除一条（文件与内存同步） |
 | POST | `/api/input/:id/resend` | 原位重发（沿用原来源、模型与目标）；可能已接收的失败消息需 `{"confirm":true}`，避免重复投递 |
@@ -89,6 +89,23 @@ curl -X POST http://127.0.0.1:7799/api/input \
 **投递链路说明**：desktop profile 进程内直调 `sessionController.prompt` 会丢 cancellation signal（DSH 侧问题，已实测），插件按 **agents 优先、prompt 回退** 的顺序投递；插件自身 socket 有 inode 对照 + 5s 自愈重绑（HMR 重载不再产生「活着却连不上」的孤儿）。插件**代码**更新需重启 DSH（宿主进程内模块缓存）；`cordis.patch.yml` 变更只重新 apply。
 
 **为什么不能绕过**：运行中的会话日志有排他锁（直写会损坏会话）；DSH 的 GUI 接口需要浏览器会话密钥（`~/.dsh/.credentials.yaml`），让悬浮窗持有它属于越权。插件在 DSH 自身进程内调用官方 API 才是权限最小的做法。
+
+## 投递通道可见性矩阵（v0.1.1 CLI-1，2026-10-17 复核收口；同日代码复核纠偏）
+
+投递动作哪些「全程后台无窗口」、哪些「必然可见」，逐通道明示（实测口径，详见 [docs/25 §2](../docs/25-v0.1.1-scope.md)）：
+
+| 通道 | 可见性 | 定性 |
+|---|---|---|
+| `/api/input` → CLI 无头续会话（claude/codex/kimi） | **全后台**（detached spawn，输出落 `~/.agent-pet/cli-control/*.log` 0600） | 设计意图 |
+| `/api/new`（含 `new:<source>:<cwd>` 投递即新建）→ CLI 无头新建 | **全后台**（同上） | 设计意图 |
+| ZCode 投递/新建 → app-server 管道（含 `account:*` 登录态会话，逐条 `modelSelection` 覆盖到非登录态 provider，见 [docs/40 §3.12](../docs/40-adapters.md)） | **全后台**（stdio 全 pipe，无窗口） | 设计意图（无 UI 粘贴回退：`deliverViaZcodeUi`/account 回落分支未接线、`PET_ZCODE_UI_DELIVER` 失效；无非登录态 provider 时如实失败） |
+| 「打开会话」按钮 → `POST /api/open` | **可见**：CLI 会话新开/聚焦 Terminal 窗口；ZCode `account:*` 会话走 `zcode://workspace/open` 深链（App 前台）；DSH 会话交插件（进程内，无新窗口） | 设计意图（用户显式交互动作，要的就是窗口；当前**唯一**已接线的可见通道） |
+
+**纠偏说明（2026-10-17 代码复核）**：①「新建会话窗口 → `newCliSession`（Terminal/tmux 新窗口）」通道**未接线**（全仓无调用方；实际 `/api/new` 一律走上面的无头后台新建；属 [docs/22](../docs/22-post-release-roadmap.md) 审查遗留 M1 死代码），不列为可见通道；② ZCode `account:*` 会话投递实际走 app-server 管道（全后台），不存在 UI 粘贴回退（上游限制下无个人 Key provider 时如实失败），不再标注「可见/技术必然」。
+
+另：无头投递有**并发上限 2**（PERF-5）——在途进程台账在 `/api/state` 的 `inFlight` 字段可见（pid/来源/开始时间/日志文件）；超出的投递自动入队（`autoRetry` 标记），由 20s 周期冲刷自动重试（测试可用 `PET_FLUSH_MS` 缩短周期；回归：`demo/test-headless-cap.mjs`），不误标失败。
+
+另：Token 用量扫描为**四级增量**（PERF-7，v0.1.2，[docs/27](../docs/27-v0.1.2-scope.md)）——①扫描分块让出事件循环（冷扫不卡 SSE）；②文件缓存跨重启持久化于 `~/.agent-pet/usage-checkpoint.json`（`PET_USAGE_CHECKPOINT` 可覆盖；重启后未变文件零重读，P7-b 实测 readBytes=0）；③增长文件尾读（DSH/Codex/Kimi；Claude 例外整读）；④ZCode sqlite 水位增量（稳态 409ms→40ms）。`?refresh=1` 五源强刷并重建检查点（坏缓存自愈）；证据口径 `stats.readBytes`=实际读取字节。回归：`demo/test-usage-checkpoint.mjs`（服务级两段式重启）+ perf-verify P7 + `scripts/usage-check.mjs` UC-D2/UC-B2/UCC3 尾读对抗组。
 
 ## 其它演示
 

@@ -13,6 +13,7 @@ import zlib from 'node:zlib';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeModelFixture } from './test-model-fixture.mjs';
+import { isolatedEnv } from './test-env.mjs';
 
 const framed = fileURLToPath(new URL('./framed.mjs', import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -49,8 +50,8 @@ async function freePort() {
 }
 function startService(home, fixture, port, cliMode = '') {
   const child = spawn(process.execPath, [framed, '--port', String(port)], {
-    env: { ...process.env, ...fixture, HOME: home, PET_PLUGIN_SOCK: path.join(home, 'missing.sock'),
-      PET_INPUT_CMD: '', MOCK_CLI_MODE: cliMode },
+    env: isolatedEnv(home, { ...fixture, PET_PLUGIN_SOCK: path.join(home, 'missing.sock'),
+      PET_INPUT_CMD: '', MOCK_CLI_MODE: cliMode }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   return child;
@@ -172,7 +173,7 @@ async function restartAndAssert(home, fixture, port, match, extra) {
   await new Promise((resolve) => pluginServer.listen(sockPath, resolve));
   const port = await freePort();
   const marker = 'dsh crash window B';
-  const baseEnv = { ...process.env, ...fixture, HOME: home, DSH_HOME: path.join(home, '.dsh'), PET_PLUGIN_SOCK: sockPath, PET_INPUT_CMD: '', MOCK_CLI_MODE: '' };
+  const baseEnv = isolatedEnv(home, { ...fixture, PET_PLUGIN_SOCK: sockPath, PET_INPUT_CMD: '', MOCK_CLI_MODE: '' });
   const child = spawn(process.execPath, [framed, '--port', String(port)], { env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
   try {
     const base = `http://127.0.0.1:${port}`;

@@ -223,7 +223,12 @@ $('m-hide').addEventListener('click',async ev=>{ev.stopPropagation();
 let es=null;
 function connect(){
   es=new EventSource('/api/stream');
-  es.onmessage=e=>{try{render(JSON.parse(e.data))}catch(err){console.error('CodeAll mini render:',err)}};
+  es.onmessage=e=>{try{const m=JSON.parse(e.data);
+    if(m&&m.tick){   // PERF-1 轻量心跳：本地按 ts 重算计时后重渲染（迷你条渲染只写几个 textContent，客户端成本可忽略）
+      const s=window.__SNAP__;if(s){s.ts=m.ts;for(const x of (s.sessions||[]))if(x.since)x.elapsedMs=m.ts-x.since;render(s)}
+      return;
+    }
+    render(m)}catch(err){console.error('CodeAll mini render:',err)}};
   es.onerror=function(){$('m-sub').textContent='· 与本地服务断开，重连中…';es.close();setTimeout(connect,3000)};
 }
 connect();

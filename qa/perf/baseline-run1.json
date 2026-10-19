@@ -1,0 +1,63 @@
+{
+  "meta": {
+    "date": "2026-10-17T08:15:48.587Z",
+    "node": "v24.18.0",
+    "platform": "darwin arm64",
+    "idleSecs": 60,
+    "activeSecs": 60,
+    "bootMs": 7726,
+    "corpus": {
+      "dshBigMB": 1.1,
+      "dshRestMB": 0.3,
+      "ccMB": 1.6,
+      "cxMB": 0.6,
+      "kmMB": 0.3,
+      "zcRows": 480
+    }
+  },
+  "idle": {
+    "label": "idle",
+    "secs": 60,
+    "cpuMs": 1001,
+    "cpuPct": 1.7,
+    "cpuPerMin": 1001,
+    "fsRead": 0,
+    "fsReadPerMin": 0,
+    "fsWrite": 0,
+    "rssStartMB": "255.6",
+    "rssEndMB": "274.1",
+    "sseMsgs": 32,
+    "sseBytes": 4781474,
+    "sseMaxBytes": 148723,
+    "sseMsgsPerMin": 32,
+    "sseAvgBytes": 149421,
+    "stateP50": 21,
+    "stateP95": 57,
+    "stateMax": 65,
+    "stateBytes": 149459,
+    "stateSamples": 25
+  },
+  "active": {
+    "label": "active",
+    "secs": 60,
+    "cpuMs": 1454,
+    "cpuPct": 2.4,
+    "cpuPerMin": 1454,
+    "fsRead": 0,
+    "fsReadPerMin": 0,
+    "fsWrite": 0,
+    "rssStartMB": "274.1",
+    "rssEndMB": "287.6",
+    "sseMsgs": 121,
+    "sseBytes": 17980274,
+    "sseMaxBytes": 148715,
+    "sseMsgsPerMin": 121,
+    "sseAvgBytes": 148597,
+    "stateP50": 4,
+    "stateP95": 35,
+    "stateMax": 35,
+    "stateBytes": 148545,
+    "stateSamples": 25
+  },
+  "home": "/var/folders/2d/dmp3ty5d7l19hfvntgwtg51w0000gn/T/codeall-perf-euU9AQ"
+}

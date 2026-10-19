@@ -1,7 +1,7 @@
 {
   "name": "agent-pet-shell",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Agent 悬浮窗桌面外壳（Tauri v2）· M1",
   "type": "module",
   "scripts": {

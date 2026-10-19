@@ -498,8 +498,8 @@ $ node -e 'fs.watch(dir, ...)'    # 文件级变化（会话日志增长 = 有�
 - 投递 = `zcode --resume <id> --mode build --prompt "<text>"`（`--mode build` 显式压掉无头默认的 yolo，守住「不越权」红线）；新建/打开 = Terminal 窗口跑同 CLI。
 - **必须补两个环境变量**（桌面 App 进程会注入、独立运行时缺失，否则 `无法定位 CLI ZCode Built-in Provider Config` → `Model creation failed`）：`ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`（App 包 `config/provider/zcode-builtin.json`，按 bin 相对位置推导）与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`（`~/.zcode/v2/provider_config.json`）。
 - **上游限制（2026-10-07 发现；2026-10-08 根因修正）**：无头 `--resume` 对 `account:*`（Z.AI Coding Plan 登录态）provider 会话必失败（"Model creation failed"）。~~起初归因于登录态文件缺失~~——10-08 复核：`~/.zcode/v2/credentials.json` 存在且全部 8 个字段可用引擎的确定性回退密钥（`sha256("zcode-credential-fallback:<platform>:<homedir>:<username>)"`，格式 `enc:v1:<iv>.<tag>.<ct>` base64url）解开，含 `account-provider:...:api-key`；真实根因在 CLI 日志（`~/.zcode/cli/log/*.jsonl`）的 `turn.failed`：`cause = "Select a model before continuing"`（CONFIGURATION_ERROR）——account provider 只能由**桌面 App 进程注入的 model adapter** 注册（App 内引擎 `hasInjectedModelAdapter=true`，独立引擎 `=false`），外部无头进程建不出该 provider → 会话的模型选择恢复不了。builtin / 个人 Key 会话不受影响（10-08 实测 `moonshot-kimi` 探测会话无头续接成功回复）。
-- **cli-control 预检（2026-10-08）**：`deliverViaCli` 对 `provider` 以 `account:` 开头的 zcode 会话**提前如实失败**（`zcode-account-provider`，不烧必败进程），提示解锁方式：`zcode login` **不解除该限制**（2026-10-08 复测：login 后凭证已刷新入 v2/credentials.json，无头续接 account 会话仍 `Select a model before continuing`）——docs/40 §3.12 的 10-07「login 可解除」结论在 App 3.14.4 / CLI 0.16.9 上失效。出路：①改投 builtin / 个人 Key 会话；②cli-control 的「打开会话」对 account 会话改走 `zcode://workspace/open?path=` 深链，直达桌面 App 该项目后点击会话继续。
-- **app-server 管道（2026-10-08 落地，account 会话的最终答案）**：`zcode app-server` 是桌面 App ↔ 引擎之间的官方进程间协议（stdio NDJSON，信封 `{id, method, params}`，无 `jsonrpc` 键、无握手）。探测确认的最小面：`session/resume {sessionId}` → 服务器反向请求 `session/requestRuntimePreferences`（应答 `{nativeSearchEnhancementsEnabled:true, memoryEnabled:false, askUserQuestionAutoResolutionEnabled:true}`，其余反向请求回 `-32601`）→ `session/send {sessionId, content, modelSelection}`。**`modelSelection`（严格模式 `{providerId, modelId, options.reasoningLevel}`）是逐条消息的模型覆盖**——account 会话的回合可用个人 Key provider（实测 moonshot-kimi/kimi-k3）完整跑完，不经 Z.AI 登录态。两个实测副作用（如实告知）：①覆盖会被引擎**原地持久化**为会话保存的选择（同一 session_entry 行 time_created 不变、内容改写）；②外部**无法恢复**为 account:*（独立引擎 Provider Registry 不含登录态 provider，`session/setModel` 报「Provider Registry 中不存在 Model」）——管道投递后该会话在桌面 App 的默认模型即管道 provider，想回 Coding Plan 需在 App 内 /model 手动切回。生命周期红线：**app-server 进程必须活到 `state.updated patch.status=idle`**，提前断开 = `model_request_cancelled`（两次实测踩坑）。投递语义对齐无头：`accepted` + 8s 快速失败窗口（model_request_failed / state error 如实 failed）。模型覆盖来源：`PET_ZCODE_PIPE_MODEL=provider/model` 环境变量优先，否则取会话库 `session_entry` 最近用过的非 account provider（元数据，不读凭证）。回合计权模式继承会话自身设置（与无头 `--mode build` 不同——管道是「代用户在他自己的会话里发消息」，不额外降权）。`PET_ZCODE_PIPE=0` 整体关闭回落 UI 粘贴；自检入口 `node adapters/cli-control.mjs --pipe-zcode <sessionId> [text]`。
+- **cli-control 预检（2026-10-08；二轮复核标注为历史设计）**：~~`deliverViaCli` 对 `provider` 以 `account:` 开头的 zcode 会话提前如实失败（`zcode-account-provider`，不烧必败进程）~~——**2026-10-17 二轮代码复核：该预检分支在当前接线不可达**。`deliverViaCli` 对 `source` 为 zcode 的请求无条件先走 app-server 管道（见下一条），`account:*` 会话同样走管道、逐条 `modelSelection` 覆盖到非登录态 provider；无非登录态 provider 时由管道如实失败（`zcode-pipe-no-model` 等），不再返回 `zcode-account-provider`。10-08 的解锁提示保留为历史背景：`zcode login` **不解除该限制**（2026-10-08 复测：login 后凭证已刷新入 v2/credentials.json，无头续接 account 会话仍 `Select a model before continuing`）——docs/40 §3.12 的 10-07「login 可解除」结论在 App 3.14.4 / CLI 0.16.9 上失效。出路：①改投 builtin / 个人 Key 会话；②cli-control 的「打开会话」对 account 会话改走 `zcode://workspace/open?path=` 深链，直达桌面 App 该项目后点击会话继续。
+- **app-server 管道（2026-10-08 落地，account 会话的最终答案）**：`zcode app-server` 是桌面 App ↔ 引擎之间的官方进程间协议（stdio NDJSON，信封 `{id, method, params}`，无 `jsonrpc` 键、无握手）。探测确认的最小面：`session/resume {sessionId}` → 服务器反向请求 `session/requestRuntimePreferences`（应答 `{nativeSearchEnhancementsEnabled:true, memoryEnabled:false, askUserQuestionAutoResolutionEnabled:true}`，其余反向请求回 `-32601`）→ `session/send {sessionId, content, modelSelection}`。**`modelSelection`（严格模式 `{providerId, modelId, options.reasoningLevel}`）是逐条消息的模型覆盖**——account 会话的回合可用个人 Key provider（实测 moonshot-kimi/kimi-k3）完整跑完，不经 Z.AI 登录态。两个实测副作用（如实告知）：①覆盖会被引擎**原地持久化**为会话保存的选择（同一 session_entry 行 time_created 不变、内容改写）；②外部**无法恢复**为 account:*（独立引擎 Provider Registry 不含登录态 provider，`session/setModel` 报「Provider Registry 中不存在 Model」）——管道投递后该会话在桌面 App 的默认模型即管道 provider，想回 Coding Plan 需在 App 内 /model 手动切回。生命周期红线：**app-server 进程必须活到 `state.updated patch.status=idle`**，提前断开 = `model_request_cancelled`（两次实测踩坑）。投递语义对齐无头：`accepted` + 8s 快速失败窗口（model_request_failed / state error 如实 failed）。模型覆盖来源：`PET_ZCODE_PIPE_MODEL=provider/model` 环境变量优先，否则取会话库 `session_entry` 最近用过的非 account provider（元数据，不读凭证）。回合计权模式继承会话自身设置（与无头 `--mode build` 不同——管道是「代用户在他自己的会话里发消息」，不额外降权）。`PET_ZCODE_PIPE=0` 仅关闭管道投递（请求返回 `zcode-pipe-disabled` 如实失败）；**当前接线不会回落到 UI 粘贴**——`deliverViaZcodeUi` 的 account 回落分支不可达、`PET_ZCODE_UI_DELIVER` 失效（既有死代码）；自检入口 `node adapters/cli-control.mjs --pipe-zcode <sessionId> [text]`。
 
 **形态（CLI/桌面）**：库内无 surface 标记（message/session_entry 均查过）——ZCode 会话不打形态徽标（与 DSH 同口径），软件状态面板为单行（App 捆 CLI，无独立安装）。
 
@@ -509,7 +509,14 @@ $ node -e 'fs.watch(dir, ...)'    # 文件级变化（会话日志增长 = 有�
 
 ### 3.13 usage-collect：Token 用量采集（跨五源慢通道，2026-10-07 落地）
 
-**定位**：`adapters/usage-collect.mjs`——按 **Agent × 模型**计数 token 用量的独立采集层，与目录扫描（头/尾窗口、5s 热缓存）分离：usage 需全文件精确累计（本机 Claude 1.1GB / 164 文件），走 **60s 慢缓存 + 文件级增量**（size+mtime 复用，首轮 ~2s，之后只重读增长文件）+ 15s 软时限护栏（partial 截断最旧文件，下轮续扫）。
+**定位**：`adapters/usage-collect.mjs`——按 **Agent × 模型**计数 token 用量的独立采集层，与目录扫描（头/尾窗口、5s 热缓存）分离：usage 需全文件精确累计（本机实测基线 2026-10-19：Claude 1.09GB/166 文件全量 4,951ms、Codex 2,544ms、Kimi 2,038ms、DSH 1,335ms、ZCode 426ms；冷启动合计 ≈4,963ms）。**增量机制四级（PERF-7，2026-10-19）**：
+
+1. **事件循环让出**：文件间/每 512 行/DSH 帧粒度/ZCode `iterate()` 游标分批——冷扫期间 SSE tick 不停顿（P7-a 实测 5.6s 扫描最大间隔 2001ms）；ZCode 不加 SQL `ORDER BY`（无索引时 sqlite 首行前全表物化+排序是 ~228ms 同步块，part 的确定性由 JS 排序保证）。
+2. **文件级缓存跨重启持久化**：`~/.agent-pet/usage-checkpoint.json`（`PET_USAGE_CHECKPOINT` 可覆盖；0600、唯一 tmp 名原子写、8MB 护栏、`SCANNER_VERSION` 不符整体作废、单条目形状异常只丢该条）。失效键与进程内一致（size+mtime）；首轮扫描前才加载（启动不扫，P3① 保持）；`?refresh=1` 跳过加载、五源强刷（含 ZCode）后覆盖写——坏缓存自愈通路。P7-b 实测重启后 readBytes=0（对照组全量 67MB）。
+3. **增长文件尾读**：DSH 按「解码成功且非空且以 `\n` 收尾」的**帧边界**续读（截断帧不抛错而「成功」解出半段——PERF-2 同款坑；末帧不合格推迟到下轮），inode+魔数双锚防同路径替换；Codex 携带 `prevTotal/curModel/calls.seen` 续解析（差分归日不因跨界回到「首条」分支），字节精确偏移（按 `0x0A` 切行，不用 readline 字符偏移）+ 偏移前 64B 哈希锚点；Kimi 同构（`variant/seenCallIds`）。**Claude 例外保持整读**：按 message.id 去重需全量 seen-id 集合，持久化会使 checkpoint 膨胀至 MB 级（评审选型：重启秒就绪已由②覆盖，活跃文件靠①兜底）。
+4. **ZCode 水位增量**：`time_updated` 单调水位 + 2s 重叠 + `msgLru`（id→已计值，差量=新−旧、**负值截 0**、requests 仅首次入账 +1）与 `partLru`（(sid,callId) 去重）双 LRU 6000/batch 2000，**随检查点持久化**（spike S3b 实测不持久化重启丢 495 万 token）；`staleMiss` 规则=「未命中 LRU 且 tc 早于 LRU 最早条目」才跳过（lag p99≈5min，固定窗规则会漏计），计入 stats 可观测；异常轮不推进水位（行内「acc 变更+LRU 基线」成对，下轮幂等收敛）。稳态 409ms→40ms（`WHERE` 里 `time_updated` 前置短路 json_extract）。**口径前提（spike S1 推翻原假设后重述）**：tokens 并非只在终态写入（29,781/31,457 行处于中间态 `finish=tool-calls`）——精确性依赖「LRU 记忆期内 delta 追账 + 终态后冻结」，LRU 淘汰后重见按冻结假设跳过（本机实测 0 例）。spike 与回放证据：[spikes/zcode-usage-watermark](../spikes/zcode-usage-watermark/README.md)。
+
+`stats` 口径（P0-1，2026-10-19）：`readBytes`=本轮**实际读取**字节（缓存命中 0 / 尾读增量段 / 整读全量；ZCode sqlite 页缓存不可测恒 0）、`corpusBytes`=本轮纳入语料体积、`resumedFiles`=尾读续文件数。15s 软时限为**单文件**预算：到点该文件不写缓存（含尾读状态不推进）、下轮重来。
 
 **五源口径（本机实测，2026-10-07）**：
 
@@ -529,6 +536,21 @@ $ node -e 'fs.watch(dir, ...)'    # 文件级变化（会话日志增长 = 有�
 **输出面**：framed 快照 `usage` 块（totals/byModel/bySource + ranges 时间窗 + 会话行 `usage` 字段）、`/api/usage` 明细端点、UI「用量」页（时间窗切换器 + **各 Agent 消耗量表（形态拆分 + 命中率列）** + 模型表 + 会话行 `tok in/out`）；CLI `node adapters/usage-collect.mjs [--json|--refresh]`。
 
 **复现**：`node scripts/multi-source-check.mjs` 看 MU1–MU9（独立对账：Claude 去重证明 / Codex 文件自有量反读（首条 last + Δ累计）/ Kimi 原始行计数（会话全部 wire）/ ZCode 双路互证 / DSH 恒等式+独立解压重数 / 形态归属恒等 / 日桶逐字段=总量+单调性 / framed 端到端）。**证据等级 [A]**。
+
+### 3.14 控制通道可见性矩阵（v0.1.1 CLI-1，2026-10-17 复核收口；同日代码复核纠偏）
+
+投递动作哪些「全程后台无窗口」、哪些「必然可见」，逐通道明示（实测口径；详见 [docs/25 §2](./25-v0.1.1-scope.md)）：
+
+| 通道 | 可见性 | 定性 |
+|---|---|---|
+| `/api/input` → CLI 无头续会话（claude/codex/kimi，`adapters/cli-control.mjs` headlessRun） | **全后台**（detached spawn，输出落 `~/.agent-pet/cli-control/*.log` 0600） | 设计意图 |
+| `/api/new`（含 `new:<source>:<cwd>` 投递即新建）→ CLI 无头新建 | **全后台**（同上） | 设计意图 |
+| ZCode 投递/新建 → app-server 管道（含 `account:*` 登录态会话，逐条 `modelSelection` 覆盖到非登录态 provider，§3.12） | **全后台**（stdio 全 pipe，无窗口） | 设计意图（无 UI 粘贴回退：`deliverViaZcodeUi`/account 回落分支未接线、`PET_ZCODE_UI_DELIVER` 失效；无非登录态 provider 时如实失败） |
+| 「打开会话」→ `POST /api/open` | **可见**：CLI 会话新开/聚焦 Terminal 窗口；ZCode `account:*` 会话走 `zcode://workspace/open` 深链（App 前台）；DSH 会话交插件（进程内，无新窗口） | 设计意图（用户显式交互动作；当前**唯一**已接线的可见通道） |
+
+**纠偏说明（2026-10-17 代码复核）**：①「新建会话窗口 → `newCliSession`（Terminal/tmux 新窗口）」通道**未接线**（全仓无调用方；实际 `/api/new` 一律走上面的无头后台新建；属 [docs/22](./22-post-release-roadmap.md) 审查遗留 M1 死代码），不列为可见通道；② ZCode `account:*` 会话投递实际走 app-server 管道（全后台），不存在 UI 粘贴回退（上游限制下无个人 Key provider 时如实失败），不再标注「可见/技术必然」。
+
+无头投递**并发上限 2**（PERF-5，`PET_HEADLESS_CAP` 可覆盖）：在途台账见 `/api/state` 的 `inFlight`；超出自动入队（`autoRetry`）由 20s 冲刷重试（测试可用 `PET_FLUSH_MS` 缩短周期），不误标失败（回归 `demo/test-headless-cap.mjs`）。
 
 ---
 

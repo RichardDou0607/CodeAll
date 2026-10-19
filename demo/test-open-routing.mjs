@@ -10,6 +10,7 @@ import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeModelFixture } from './test-model-fixture.mjs';
+import { isolatedEnv } from './test-env.mjs';
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codeall-open-'));
 const fixture = writeModelFixture(home);
@@ -65,7 +66,7 @@ const port = await new Promise((resolve, reject) => {
   s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
 });
 const child = spawn(process.execPath, [fileURLToPath(new URL('./framed.mjs', import.meta.url)), '--port', String(port)], {
-  env: { ...process.env, ...fixture, HOME: home, PET_PLUGIN_SOCK: sockPath },
+  env: isolatedEnv(home, { ...fixture, PET_PLUGIN_SOCK: sockPath }),
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = '';

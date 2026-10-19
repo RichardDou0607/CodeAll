@@ -55,6 +55,7 @@
  *   framed.mjs 内 refreshUsage()：60s 轮询 → snapshot().usage + /api/usage
  */
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import readline from 'node:readline';
 import zlib from 'node:zlib';
@@ -68,8 +69,16 @@ import { SESSIONS_ROOT as DSH_ROOT, pickLogFile } from './session-catalog.mjs';
 export const DEFAULT_OPTS = Object.freeze({
   maxFiles: 800,                 // 单源文件数上限（本机 Claude 164 / Codex 34 / Kimi 12 / DSH 37）
   maxLineBytes: 512 * 1024,      // 超大行跳过，并在日历标注部分数据
-  softBudgetMs: 15_000,          // 单源单轮软时限：到点即停（partial=true），未处理文件下轮续
+  softBudgetMs: 15_000,          // 单文件软时限：到点即停（partial=true），该文件不写缓存、下轮整读
   refresh: false,                // true=忽略文件级缓存强制重读（诊断用）
+});
+
+/** 强制全量重扫的五源参数（framed refreshUsage(force) 与 CLI --refresh 共用）。
+ *  P0-2（2026-10-19 评审）：此前 CLI --refresh 只给四个文件源传了 refresh、zcode 是 {}——
+ *  「?refresh=1 强制重扫」在服务端与 ZCode 上实际不存在；统一从这里取参，zcode 的 refresh
+ *  语义 = 清水位/LRU 状态后全表重建（增量实现后生效）。 */
+export const FORCE_SCAN_OPTS = Object.freeze({
+  dsh: { refresh: true }, claude: { refresh: true }, codex: { refresh: true }, kimi: { refresh: true }, zcode: { refresh: true },
 });
 
 // ---------- 公共累计器 ----------
@@ -78,7 +87,9 @@ const fin = (v) => (Number.isFinite(v) ? v : 0);
 function addInto(acc, d) {
   acc.input += fin(d.input); acc.output += fin(d.output);
   acc.cacheRead += fin(d.cacheRead); acc.cacheWrite += fin(d.cacheWrite);
-  acc.requests += fin(d.requests) || (fin(d.input) || fin(d.output) ? 1 : 0);
+  // requests：显式字段权威（0 合法——zcode 增量 delta 行已计过 requests，不能因有 token 差量再 +1）；
+  // 字段缺席才按「有 token 即 1 次」回退。
+  acc.requests += Number.isFinite(d.requests) ? fin(d.requests) : ((fin(d.input) || fin(d.output)) ? 1 : 0);
 }
 function bumpModel(map, model, d) {
   let m = map.get(model);
@@ -105,6 +116,8 @@ function bumpModelDay(mdm, model, day, d) {
   bumpDay(dm, day, d);
 }
 function newCalls() { return { days: new Map(), seen: new Set(), undated: 0 }; }
+/** MCP 工具名判定（recordTool 与 zcode 增量 part 计数共用）：仅显式 MCP 名/命名空间计入，结果与发现事件不计。 */
+const MCP_NAME_RE = /(^|[.])mcp(?:__|[.:/-])/i;
 function addCallDays(target, days) {
   for (const [day, counts] of days || []) {
     const row = target.get(day) ?? { toolCalls: 0, mcpCalls: 0 };
@@ -123,8 +136,7 @@ function recordTool(calls, id, name, timestamp) {
   const day = dayKeyOf(ts);
   const row = calls.days.get(day) ?? { toolCalls: 0, mcpCalls: 0 };
   row.toolCalls++;
-  // Only explicit MCP names/namespaces qualify; results and discovery events never count.
-  if (/(^|[.])mcp(?:__|[.:/-])/i.test(String(name ?? ''))) row.mcpCalls++;
+  if (MCP_NAME_RE.test(String(name ?? ''))) row.mcpCalls++;
   calls.days.set(day, row);
 }
 /** fresh input / 命中率折算（含cache语义的源要先减掉 cacheRead）。 */
@@ -171,34 +183,84 @@ function variantFromOriginator(og) {
 const dshFileCache = makeFileCache();
 const ZSTD_MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
 
-/** 多帧 zstd → 文本（与 framed.mjs decodeFrames 同款逐帧解压；尾部半写坏帧跳过）；明文直读。 */
-function dshReadText(buf) {
-  if (!buf.subarray(0, 4).equals(ZSTD_MAGIC)) return buf.toString('utf8');
-  const offs = [];
+/** 让出事件循环（macrotask 级）：扫描分块处理时保证 SSE tick/推送不被长同步块停顿（第 1 步）。 */
+const yieldNow = () => new Promise((r) => setImmediate(r));
+
+/**
+ * 字节精确的按行读取（codex/kimi 尾读共用，第 4b 步）：从 startByte 起按 0x0A 切行。
+ * 返回 { aborted, lastLineEnd }：lastLineEnd = 最后一个完整行（含 \n）之后的**绝对字节偏移**——
+ * 这是尾读续读点；不能用 readline 的字符偏移（多字节 UTF-8 下字符数 ≠ 字节数）。
+ * deadline 到点 → aborted=true 停在中途（调用方不写缓存，下轮整读/续读重来）。
+ */
+async function readLinesByte(file, { startByte = 0, deadline = Infinity }, onLine) {
+  const stream = fs.createReadStream(file, { start: startByte });
+  let carry = Buffer.alloc(0), carryStart = startByte, lineCnt = 0, chunkCnt = 0, aborted = false;
+  try {
+    for await (const chunk of stream) {
+      carry = carry.length ? Buffer.concat([carry, chunk]) : chunk;
+      let idx;
+      while ((idx = carry.indexOf(0x0A)) >= 0) {
+        const line = carry.subarray(0, idx).toString('utf8');
+        carry = carry.subarray(idx + 1);
+        carryStart += idx + 1;
+        onLine(line);
+        if ((++lineCnt & 511) === 0 && Date.now() > deadline) { aborted = true; break; }
+      }
+      if (aborted) break;
+      if ((++chunkCnt & 15) === 0) await yieldNow();
+    }
+  } catch { return { aborted: true, lastLineEnd: startByte }; }   // 读失败按中止处理（不写缓存）
+  finally { try { stream.destroy(); } catch { /* ignore */ } }
+  return { aborted, lastLineEnd: carryStart };
+}
+
+/** 尾读锚点（第 4b 步轮转防护）：offset 前 ≤64 字节的 sha256。同路径被替换成更大文件时
+ *  （size < offset 检测不到），锚点不符 → 整读回退。offset=0 时锚为空串。 */
+function anchorAt(file, offset) {
+  try {
+    if (offset <= 0) return '';
+    const len = Math.min(64, offset);
+    const buf = Buffer.alloc(len);
+    const fh = fs.openSync(file, 'r');
+    try { const n = fs.readSync(fh, buf, 0, len, offset - len); return crypto.createHash('sha256').update(buf.subarray(0, n)).digest('hex'); }
+    finally { try { fs.closeSync(fh); } catch { /* ignore */ } }
+  } catch { return null; }   // 读不了 → 让调用方整读回退
+}
+
+/** 列出 buf 中全部 zstd 帧起始偏移（帧自包含；魔数扫描与旧 dshReadText 同款口径）。 */
+function zstdFrameOffsets(buf) {
+  const offsets = [];
   let i = buf.indexOf(ZSTD_MAGIC, 0);
-  while (i >= 0) { offs.push(i); i = buf.indexOf(ZSTD_MAGIC, i + 1); }
-  let out = '';
-  for (let k = 0; k < offs.length; k++) {
-    const end = k + 1 < offs.length ? offs[k + 1] : buf.length;
-    try { out += zlib.zstdDecompressSync(buf.subarray(offs[k], end)).toString('utf8'); } catch { /* 坏帧/半写尾帧 */ }
-  }
-  return out;
+  while (i >= 0) { offsets.push(i); i = buf.indexOf(ZSTD_MAGIC, i + 1); }
+  return offsets;
 }
 
 async function collectDshFile(file, o) {
   let st; try { st = fs.statSync(file); } catch { return { skipped: true }; }
   const hit = o.refresh ? null : cachedEntry(dshFileCache, file, st);
-  if (hit) return { ...hit.result, cached: true };
+  if (hit) return { ...hit.result, cached: true, fileSize: st.size, readBytes: 0 };
+  // 尾读路径（第 4a 步）：缓存失效但存在尾部状态，且文件只增长、inode 未变 → 从上个
+  // 「解码成功且以 \n 结尾」的帧边界续读；锚点/帧校验失败一律整读回退（保守）。
+  const prev = dshFileCache.get(file);
+  if (!o.refresh && prev && prev.tail && st.size > prev.size
+    && (st.ino === undefined || prev.ino === undefined || st.ino === prev.ino)) {
+    const r = await dshTailResume(file, st, prev, o);
+    if (r) return { ...r.result, fileSize: st.size, readBytes: r.readBytes, resumed: true };
+  }
   let buf; try { buf = fs.readFileSync(file); } catch { return { skipped: true }; }
   const byModel = new Map(), modelDays = new Map(), days = new Map();
   const flat = newUsage(), calls = newCalls();
   let curModel = null, sid = null, parseErrors = 0, skippedLines = 0, usageLines = 0, totalTokensSum = 0;
-  for (const line of dshReadText(buf).split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    if (!t.includes('"usage"') && !t.includes('"request/header"') && !t.includes('"session"') && !t.includes('"tool/call"')) continue;
-    if (t.length > o.maxLineBytes) { skippedLines++; continue; }
-    let j; try { j = JSON.parse(t); } catch { parseErrors++; continue; }
+  // 帧感知逐帧解析（第 1 步让出 + 第 4a 步尾读同构）：帧自包含；实测（17,852 帧）完整帧都以
+  // \n 结尾、行不跨帧——末帧不以 \n 结尾 = 写到一半，丢弃；该边界即尾读续读点。
+  // 明文文件保持旧行为（整文本 split，尾行即使无 \n 也解析；无尾读状态）。
+  let lineCnt = 0;
+  const handleLine = (raw) => {
+    const t = raw.trim();
+    if (!t) return;
+    if (!t.includes('"usage"') && !t.includes('"request/header"') && !t.includes('"session"') && !t.includes('"tool/call"')) return;
+    if (t.length > o.maxLineBytes) { skippedLines++; return; }
+    let j; try { j = JSON.parse(t); } catch { parseErrors++; return; }
     if (j?.type === 'session' && sid === null) sid = typeof j.id === 'string' ? j.id : null;
     else if (j?.type === 'request/header') {
       const m = j.data?.header?.config?.model;
@@ -207,7 +269,7 @@ async function collectDshFile(file, o) {
       recordTool(calls, j.data?.callId ?? j.seq, j.data?.name ?? j.data?.toolName ?? j.data?.tool?.name, j.time);
     } else if (j?.type === 'assistant/message') {
       const u = j.data?.usage;
-      if (!u || (!Number.isFinite(u.inputTokens) && !Number.isFinite(u.outputTokens))) continue;
+      if (!u || (!Number.isFinite(u.inputTokens) && !Number.isFinite(u.outputTokens))) return;
       usageLines++;
       const d = { input: fin(u.inputTokens), output: fin(u.outputTokens), cacheRead: fin(u.cacheReadTokens), cacheWrite: fin(u.cacheWriteTokens), requests: 1 };
       const day = dayKeyOf(Number.isFinite(j.time) ? j.time : Date.now());
@@ -217,13 +279,132 @@ async function collectDshFile(file, o) {
       bumpModelDay(modelDays, curModel || '(unknown)', day, d);
       totalTokensSum += fin(u.totalTokens);
     }
+  };
+  let tail = null;
+  if (!buf.subarray(0, 4).equals(ZSTD_MAGIC)) {
+    for (const line of buf.toString('utf8').split('\n')) {
+      handleLine(line);
+      if ((++lineCnt & 511) === 0) await yieldNow();
+    }
+  } else {
+    const offsets = zstdFrameOffsets(buf);
+    let completeEnd = 0;                    // 最后一个「解码成功且非空且以 \n 结尾」的帧的结束偏移（绝对）
+    for (let k = 0; k < offsets.length; k++) {
+      const isLast = k + 1 === offsets.length;
+      const end = isLast ? buf.length : offsets[k + 1];
+      let text; try { text = zlib.zstdDecompressSync(buf.subarray(offsets[k], end)).toString('utf8'); }
+      catch { break; /* 末帧半写/坏帧：completeEnd 停在其前 */ }
+      const lines = text.split('\n');
+      const trailing = lines.pop() ?? '';
+      // 末帧完整性口径与尾读一致（截断帧可解出 "" 或以 \n 结尾的半段，PERF-2 同款坑）：非空且以 \n 收尾才推进。
+      if (isLast && (trailing !== '' || text.length === 0)) break;
+      if (!isLast && trailing !== '') break;            // 中间帧不以 \n 结尾：非预期（行跨帧），停在其前
+      for (const line of lines) {
+        handleLine(line);
+        if ((++lineCnt & 511) === 0) await yieldNow(); // 行粒度让出：512 行 ≈ 数 ms 同步块
+      }
+      completeEnd = end;
+      if ((k & 31) === 31) await yieldNow();           // 帧粒度让出：单帧解压同步块典型 <5ms，32 帧一挡
+    }
+    tail = { nextFrameOffset: completeEnd, sid, curModel, seenCallIds: [...calls.seen], undatedCalls: calls.undated };
   }
   const result = {
     flat, days, callDays: calls.days, models: byModel, modelDays, variant: null, sid,
     stats: { usageLines, parseErrors, skippedLines, undatedCalls: calls.undated, totalTokensSum, componentsSum: flat.input + flat.output + flat.cacheRead + flat.cacheWrite },
   };
-  dshFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
-  return result;
+  dshFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, ino: st.ino, ...(tail ? { tail } : {}), result });
+  // readBytes/fileSize 只挂在返回值上（不进缓存条目）：readBytes = 本轮实际读取字节（P0-1）
+  return { ...result, fileSize: st.size, readBytes: buf.length };
+}
+
+/** DSH 尾读续解析：从 prev.tail.nextFrameOffset 读增量段，逐帧解压续账。
+ *  返回 {result, readBytes} 或 null（锚点/帧校验失败 → 调用方整读回退）。 */
+async function dshTailResume(file, st, prev, o) {
+  const off = prev.tail.nextFrameOffset;
+  let buf;
+  let fh;
+  try {
+    const len = st.size - off;
+    if (len < 4) return null;
+    fh = fs.openSync(file, 'r');
+    buf = Buffer.alloc(len);
+    const n = fs.readSync(fh, buf, 0, len, off);
+    if (n !== len) return null;                                   // 读取期间被截断：整读回退
+    if (!buf.subarray(0, 4).equals(ZSTD_MAGIC)) return null;      // 偏移处必须仍是帧魔数（同路径替换/伪偏移防护）
+  } catch { return null; } finally { if (fh !== undefined) { try { fs.closeSync(fh); } catch { /* ignore */ } } }
+  // 克隆累积器与解析状态（中途失败不得污染缓存条目）
+  const acc = cloneDshResult(prev.result);
+  const calls = { days: acc.callDays, seen: new Set(prev.tail.seenCallIds || []), undated: prev.tail.undatedCalls || 0 };
+  const state = { sid: prev.tail.sid ?? null, curModel: prev.tail.curModel ?? null };
+  let lineCnt = 0;
+  const handleLine = (raw) => { /* 与全量路径同款行处理，但写回克隆累积器 */ 
+    const t = raw.trim();
+    if (!t) return;
+    if (!t.includes('"usage"') && !t.includes('"request/header"') && !t.includes('"session"') && !t.includes('"tool/call"')) return;
+    if (t.length > o.maxLineBytes) { acc.stats.skippedLines++; return; }
+    let j; try { j = JSON.parse(t); } catch { acc.stats.parseErrors++; return; }
+    if (j?.type === 'session' && state.sid === null) state.sid = typeof j.id === 'string' ? j.id : null;
+    else if (j?.type === 'request/header') {
+      const m = j.data?.header?.config?.model;
+      if (typeof m === 'string' && m) state.curModel = m;
+    } else if (j?.type === 'tool/call') {
+      recordTool(calls, j.data?.callId ?? j.seq, j.data?.name ?? j.data?.toolName ?? j.data?.tool?.name, j.time);
+    } else if (j?.type === 'assistant/message') {
+      const u = j.data?.usage;
+      if (!u || (!Number.isFinite(u.inputTokens) && !Number.isFinite(u.outputTokens))) return;
+      acc.stats.usageLines++;
+      const d = { input: fin(u.inputTokens), output: fin(u.outputTokens), cacheRead: fin(u.cacheReadTokens), cacheWrite: fin(u.cacheWriteTokens), requests: 1 };
+      const day = dayKeyOf(Number.isFinite(j.time) ? j.time : Date.now());
+      addInto(acc.flat, d);
+      bumpDay(acc.days, day, d);
+      bumpModel(acc.models, state.curModel || '(unknown)', d);
+      bumpModelDay(acc.modelDays, state.curModel || '(unknown)', day, d);
+      acc.stats.totalTokensSum += fin(u.totalTokens);
+    }
+  };
+  const offsets = zstdFrameOffsets(buf);
+  let consumed = 0;                        // 增量段内已消费字节数（均落在完整帧边界上）
+  for (let k = 0; k < offsets.length; k++) {
+    const isLast = k + 1 === offsets.length;
+    const end = isLast ? buf.length : offsets[k + 1];
+    let text;
+    try { text = zlib.zstdDecompressSync(buf.subarray(offsets[k], end)).toString('utf8'); }
+    catch { if (isLast) break; return null; }               // 末帧解压失败=半写：推迟；中间帧损坏：整读回退
+    const lines = text.split('\n');
+    const trailing = lines.pop() ?? '';
+    if (trailing !== '') {
+      // 截断帧可能「成功」解压出以 \n 结尾的半段（PERF-2 同款坑，实测 cut-4 → "a\n"）——无法从帧头
+      // 判定完整性（真实流式帧不带 FCS）。口径与 framed.mjs 跟随器一致：末帧仅当「非空且以 \n 收尾」
+      // 才消费，否则推迟到下轮（文件增长后由后继魔数证明边界）；中间帧异常一律整读回退。
+      if (isLast) break;
+      return null;
+    }
+    if (text.length === 0) { if (isLast) break; return null; }   // 空输出：半写（cut-8 实测 → ""）或坏帧
+    for (const line of lines) {
+      handleLine(line);
+      if ((++lineCnt & 511) === 0) await yieldNow();
+    }
+    consumed = end;
+    if ((k & 31) === 31) await yieldNow();
+  }
+  acc.stats.componentsSum = acc.flat.input + acc.flat.output + acc.flat.cacheRead + acc.flat.cacheWrite;
+  acc.stats.undatedCalls = calls.undated;
+  acc.sid = state.sid;
+  const accounted = off + consumed;         // 已对账字节位（≠ st.size：半写末帧留待下轮，条目按对账位存）
+  const tail = { nextFrameOffset: accounted, sid: state.sid, curModel: state.curModel, seenCallIds: [...calls.seen], undatedCalls: calls.undated };
+  dshFileCache.set(file, { size: accounted, mtimeMs: st.mtimeMs, ino: st.ino, tail, result: acc });
+  return { result: acc, readBytes: buf.length };
+}
+
+/** DSH 缓存条目 result 的深克隆（尾读在克隆上续账，失败不污染缓存）。 */
+function cloneDshResult(r) {
+  const cp = (m) => { const o = new Map(); for (const [k, v] of m) o.set(k, { ...v }); return o; };
+  const cpNested = (m) => { const o = new Map(); for (const [k, v] of m) o.set(k, cp(v)); return o; };
+  return {
+    flat: { ...r.flat }, days: cp(r.days), callDays: cp(r.callDays), models: cp(r.models), modelDays: cpNested(r.modelDays),
+    variant: null, sid: r.sid ?? null,
+    stats: { ...r.stats },
+  };
 }
 
 export async function scanDshUsage(opts = {}) {
@@ -245,16 +426,19 @@ export async function scanDshUsage(opts = {}) {
   const acc = newAcc();
   for (const f of logs) {
     if (acc.stats.files >= o.maxFiles) { acc.stats.partial = true; break; }
+    await yieldNow();                                   // 文件间让出：读+解压+解析的同步块不跨文件累积
     const r = await collectDshFile(f, o);
     if (r.aborted) { acc.stats.partial = true; break; }
     if (r.skipped || !r.sid) { acc.stats.skippedFiles++; continue; }
     acc.stats.files++;
     if (r.cached) acc.stats.cachedFiles++;
+    if (r.resumed) acc.stats.resumedFiles++;   // 尾读续文件数（第 4a 步）
     acc.stats.parseErrors += r.stats.parseErrors;
     acc.stats.skippedLines += r.stats.skippedLines;
     acc.stats.undatedCalls += r.stats.undatedCalls;
     if (r.stats.componentsSum !== r.stats.totalTokensSum) acc.stats.identityMismatched++;   // 恒等式失配=解析可疑（对账口径）
-    try { acc.stats.readBytes += fs.statSync(f).size; } catch { /* 文件消失 */ }
+    acc.stats.readBytes += r.readBytes || 0;      // P0-1：实际读取字节（缓存命中=0；zcode 例外见 scanZcodeUsage）
+    acc.stats.corpusBytes += r.fileSize || 0;     // 本轮纳入语料体积（含缓存命中文件，供表格/对账）
     foldFile(acc, r, r.sid);
   }
   acc.stats.sessions = acc.bySession.size;
@@ -270,7 +454,7 @@ const claudeFileCache = makeFileCache();
 async function collectClaudeFile(file, o) {
   let st; try { st = fs.statSync(file); } catch { return { skipped: true }; }
   const hit = o.refresh ? null : cachedEntry(claudeFileCache, file, st);
-  if (hit) return { ...hit.result, cached: true };
+  if (hit) return { ...hit.result, cached: true, fileSize: st.size, readBytes: 0 };
   const byMsg = new Map(), calls = newCalls();
   let variant = null, anonSeq = 0, parseErrors = 0, skippedLines = 0, aborted = false, lineCnt = 0;
   const deadline = Date.now() + o.softBudgetMs;
@@ -278,7 +462,7 @@ async function collectClaudeFile(file, o) {
     const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
     try {
       for await (const line of rl) {
-        if ((++lineCnt & 511) === 0 && Date.now() > deadline) { aborted = true; break; }
+        if ((++lineCnt & 511) === 0) { await yieldNow(); if (Date.now() > deadline) { aborted = true; break; } }
         const isUsage = line.includes('"usage"');
         if (!isUsage && !line.includes('"entrypoint"') && !line.includes('"tool_use"')) continue;
         if (line.length > o.maxLineBytes) { skippedLines++; continue; }
@@ -305,7 +489,7 @@ async function collectClaudeFile(file, o) {
       }
     } finally { try { rl.close(); } catch { /* 已关闭 */ } }
   } catch { return { skipped: true }; }
-  if (aborted) return { aborted: true };                 // 半读文件不入缓存（下轮整读）
+  if (aborted) return { aborted: true, fileSize: st.size, readBytes: st.size };   // 半读文件不入缓存（下轮整读）；读量按整流近似计
   const byModel = new Map(), modelDays = new Map(), days = new Map();
   const flat = newUsage();
   for (const v of byMsg.values()) {
@@ -317,7 +501,7 @@ async function collectClaudeFile(file, o) {
   }
   const result = { flat, days, callDays: calls.days, models: byModel, modelDays, variant, stats: { distinctMsgs: byMsg.size, parseErrors, skippedLines, undatedCalls: calls.undated } };
   claudeFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
-  return result;
+  return { ...result, fileSize: st.size, readBytes: st.size };   // 整流读取 = size（P0-1）
 }
 
 export async function scanClaudeUsage(opts = {}) {
@@ -344,6 +528,7 @@ export async function scanClaudeUsage(opts = {}) {
   const acc = newAcc();
   for (const f of files) {
     if (acc.stats.files >= o.maxFiles) { acc.stats.partial = true; break; }
+    await yieldNow();                                   // 文件间让出（第 1 步）
     const r = await collectClaudeFile(f, o);
     if (r.aborted) { acc.stats.partial = true; break; }
     if (r.skipped) { acc.stats.skippedFiles++; continue; }
@@ -352,7 +537,8 @@ export async function scanClaudeUsage(opts = {}) {
     acc.stats.parseErrors += r.stats.parseErrors;
     acc.stats.skippedLines += r.stats.skippedLines;
     acc.stats.undatedCalls += r.stats.undatedCalls;
-    try { acc.stats.readBytes += fs.statSync(f).size; } catch { /* 文件消失 */ }
+    acc.stats.readBytes += r.readBytes || 0;
+    acc.stats.corpusBytes += r.fileSize || 0;
     foldFile(acc, r, sidOf(f));
   }
   acc.stats.sessions = acc.bySession.size;
@@ -365,92 +551,135 @@ export async function scanClaudeUsage(opts = {}) {
 
 const codexFileCache = makeFileCache();
 
+/** Codex 行处理器（全量/尾读共用）：h 为可变状态容器（尾读时从克隆状态续写）。 */
+function codexLineHandler(h, o) {
+  return (line) => {
+    const isTok = line.includes('"token_count"');
+    if (!isTok && !line.includes('"turn_context"') && !line.includes('"thread_settings_applied"') && !line.includes('"originator"') && !line.includes('"function_call"') && !line.includes('"custom_tool_call"')) return;
+    if (line.length > o.maxLineBytes) { h.skippedLines++; return; }
+    let j; try { j = JSON.parse(line); } catch { h.parseErrors++; return; }
+    const p = j?.payload ?? {};
+    if (j?.type === 'response_item' && (p.type === 'function_call' || p.type === 'custom_tool_call')) {
+      recordTool(h.calls, p.call_id ?? p.id, [p.namespace, p.name].filter(Boolean).join('.'), j.timestamp);
+    } else if (j?.type === 'session_meta') {
+      if (typeof p.originator === 'string') h.variant = variantFromOriginator(p.originator);
+    } else if (j?.type === 'turn_context' && typeof p.model === 'string') h.curModel = p.model;
+    else if (j?.type === 'event_msg' && p.type === 'thread_settings_applied' && typeof p.thread_settings?.model === 'string') h.curModel = p.thread_settings.model;
+    else if (isTok && j?.type === 'event_msg' && p.type === 'token_count') {
+      const last = p.info?.last_token_usage ?? {};
+      const tot = p.info?.total_token_usage;
+      const hasTot = !!tot && Number.isFinite(tot.input_tokens);
+      const own = {
+        input: fin(last.input_tokens), output: fin(last.output_tokens),
+        cacheRead: fin(last.cached_input_tokens), cacheWrite: fin(last.cache_write_input_tokens),
+      };
+      let d;
+      if (!h.prevTotal) {
+        // 首条事件：total 可能是继承的父会话/fork 前缀（子代理 rollout 的 C0 = 父会话当时累计），
+        // 只认本条自己的 last_token_usage——新会话实测 C0 == L0；forked 实测 L0 = 0（前缀是父会话的账）。
+        d = { ...own, requests: 1 };
+        if (hasTot) h.inheritedPrefix = Math.max(0, fin(tot.input_tokens) - own.input);
+      } else if (hasTot) {
+        // 其后每条：累计值差分（权威）。last_token_usage 会被重复上报（同一累计值连出多条事件），
+        // 逐条求和会虚高；差分天然把重复上报按 0 计。
+        const delta = {
+          input: fin(tot.input_tokens) - fin(h.prevTotal.input_tokens),
+          output: fin(tot.output_tokens) - fin(h.prevTotal.output_tokens),
+          cacheRead: fin(tot.cached_input_tokens) - fin(h.prevTotal.cached_input_tokens),
+          cacheWrite: fin(tot.cache_write_input_tokens) - fin(h.prevTotal.cache_write_input_tokens),
+        };
+        d = {
+          input: Math.max(0, delta.input), output: Math.max(0, delta.output),
+          cacheRead: Math.max(0, delta.cacheRead), cacheWrite: Math.max(0, delta.cacheWrite), requests: 1,
+        };
+        if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) h.duplicateReports++;
+      } else {
+        // 已见过累计值却缺累计值的事件（异常/旧格式）：不按 last 计 token，避免与后续 Δ累计 双计。
+        d = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 1 };
+        h.missingTotals++;
+      }
+      if (hasTot) h.prevTotal = tot;
+      const day = dayKeyOf(Date.parse(j.timestamp) || Date.now());
+      addInto(h.flat, d);
+      bumpDay(h.days, day, d);
+      bumpModelDay(h.modelDays, h.curModel || '(unknown)', day, d);
+      h.requests++;
+    }
+  };
+}
+
+/** h（累积器+解析状态）→ 统一 result 形状（byModel 从合并后 modelDays 重算：单模型整额/多模型按日桶）。 */
+function codexFinish(h) {
+  const byModel = new Map();
+  // flat 已是「首条自有增量 + 其后 Δ累计」之和：Σdays ≡ flat ≡ 文件自有消耗（不含继承前缀）。
+  for (const [model, dm] of h.modelDays) {
+    const u = newUsage();
+    if (h.modelDays.size === 1) Object.assign(u, h.flat); else for (const v of dm.values()) addInto(u, v);
+    byModel.set(model, u);
+  }
+  if (!byModel.size && (h.flat.input || h.flat.output)) bumpModel(byModel, '(unknown)', h.flat);
+  return {
+    flat: h.flat, days: h.days, callDays: h.calls.days, models: byModel, modelDays: h.modelDays, variant: h.variant,
+    stats: { tokenEvents: h.requests, parseErrors: h.parseErrors, skippedLines: h.skippedLines, undatedCalls: h.calls.undated, inheritedPrefix: h.inheritedPrefix, duplicateReports: h.duplicateReports, missingTotals: h.missingTotals },
+  };
+}
+const newCodexState = () => ({
+  curModel: null, variant: null, requests: 0, parseErrors: 0, skippedLines: 0,
+  byModel: new Map(), modelDays: new Map(), days: new Map(), calls: newCalls(), flat: newUsage(),
+  prevTotal: null, inheritedPrefix: 0, duplicateReports: 0, missingTotals: 0,
+});
+const cloneCodexState = (h) => ({
+  ...h,
+  modelDays: new Map([...h.modelDays].map(([k, v]) => [k, new Map([...v].map(([d, u]) => [d, { ...u }]))])),
+  days: new Map([...h.days].map(([k, v]) => [k, { ...v }])),
+  calls: { days: new Map([...h.calls.days].map(([k, v]) => [k, { ...v }])), seen: new Set(h.calls.seen), undated: h.calls.undated },
+  flat: { ...h.flat },
+  prevTotal: h.prevTotal ? { ...h.prevTotal } : null,
+});
+
 async function collectCodexFile(file, o) {
   let st; try { st = fs.statSync(file); } catch { return { skipped: true }; }
   const hit = o.refresh ? null : cachedEntry(codexFileCache, file, st);
-  if (hit) return { ...hit.result, cached: true };
-  let curModel = null, variant = null, requests = 0, aborted = false, lineCnt = 0, parseErrors = 0, skippedLines = 0;
-  const byModel = new Map(), modelDays = new Map(), days = new Map();
-  const calls = newCalls();
-  const flat = newUsage();                             // 逐事件归因累加（与 days 同源 → Σ日桶 ≡ 源总量）
-  let prevTotal = null;                                // 上一条 total_token_usage（会话累计，权威）
-  let inheritedPrefix = 0, duplicateReports = 0, missingTotals = 0;
-  const deadline = Date.now() + o.softBudgetMs;
-  try {
-    const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
-    try {
-      for await (const line of rl) {
-        if ((++lineCnt & 511) === 0 && Date.now() > deadline) { aborted = true; break; }
-        const isTok = line.includes('"token_count"');
-        if (!isTok && !line.includes('"turn_context"') && !line.includes('"thread_settings_applied"') && !line.includes('"originator"') && !line.includes('"function_call"') && !line.includes('"custom_tool_call"')) continue;
-        if (line.length > o.maxLineBytes) { skippedLines++; continue; }
-        let j; try { j = JSON.parse(line); } catch { parseErrors++; continue; }
-        const p = j?.payload ?? {};
-        if (j?.type === 'response_item' && (p.type === 'function_call' || p.type === 'custom_tool_call')) {
-          recordTool(calls, p.call_id ?? p.id, [p.namespace, p.name].filter(Boolean).join('.'), j.timestamp);
-        } else if (j?.type === 'session_meta') {
-          if (typeof p.originator === 'string') variant = variantFromOriginator(p.originator);
-        } else if (j?.type === 'turn_context' && typeof p.model === 'string') curModel = p.model;
-        else if (j?.type === 'event_msg' && p.type === 'thread_settings_applied' && typeof p.thread_settings?.model === 'string') curModel = p.thread_settings.model;
-        else if (isTok && j?.type === 'event_msg' && p.type === 'token_count') {
-          const last = p.info?.last_token_usage ?? {};
-          const tot = p.info?.total_token_usage;
-          const hasTot = !!tot && Number.isFinite(tot.input_tokens);
-          const own = {
-            input: fin(last.input_tokens), output: fin(last.output_tokens),
-            cacheRead: fin(last.cached_input_tokens), cacheWrite: fin(last.cache_write_input_tokens),
-          };
-          let d;
-          if (!prevTotal) {
-            // 首条事件：total 可能是继承的父会话/fork 前缀（子代理 rollout 的 C0 = 父会话当时累计），
-            // 只认本条自己的 last_token_usage——新会话实测 C0 == L0；forked 实测 L0 = 0（前缀是父会话的账）。
-            d = { ...own, requests: 1 };
-            if (hasTot) inheritedPrefix = Math.max(0, fin(tot.input_tokens) - own.input);
-          } else if (hasTot) {
-            // 其后每条：累计值差分（权威）。last_token_usage 会被重复上报（同一累计值连出多条事件），
-            // 逐条求和会虚高；差分天然把重复上报按 0 计。
-            const delta = {
-              input: fin(tot.input_tokens) - fin(prevTotal.input_tokens),
-              output: fin(tot.output_tokens) - fin(prevTotal.output_tokens),
-              cacheRead: fin(tot.cached_input_tokens) - fin(prevTotal.cached_input_tokens),
-              cacheWrite: fin(tot.cache_write_input_tokens) - fin(prevTotal.cache_write_input_tokens),
-            };
-            d = {
-              input: Math.max(0, delta.input), output: Math.max(0, delta.output),
-              cacheRead: Math.max(0, delta.cacheRead), cacheWrite: Math.max(0, delta.cacheWrite), requests: 1,
-            };
-            if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) duplicateReports++;
-          } else {
-            // 已见过累计值却缺累计值的事件（异常/旧格式）：不按 last 计 token，避免与后续 Δ累计 双计。
-            d = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: 1 };
-            missingTotals++;
-          }
-          if (hasTot) prevTotal = tot;
-          const day = dayKeyOf(Date.parse(j.timestamp) || Date.now());
-          addInto(flat, d);
-          bumpDay(days, day, d);
-          bumpModelDay(modelDays, curModel || '(unknown)', day, d);
-          requests++;
-        }
+  if (hit) return { ...hit.result, cached: true, fileSize: st.size, readBytes: 0 };
+  // 尾读路径（第 4b 步）：文件只增长 + inode 未变 + 锚点（offset 前 64B 哈希）相符 → 从 offset 续读
+  const prev = codexFileCache.get(file);
+  if (!o.refresh && prev && Number.isFinite(prev.offset) && st.size > prev.size
+    && (st.ino === undefined || prev.ino === undefined || st.ino === prev.ino)) {
+    const anchor = anchorAt(file, prev.offset);
+    if (anchor !== null && anchor === prev.anchor) {
+      const h = cloneCodexState(newCodexStateFromEntry(prev));
+      const { aborted, lastLineEnd } = await readLinesByte(file, { startByte: prev.offset, deadline: Date.now() + o.softBudgetMs }, codexLineHandler(h, o));
+      if (!aborted) {
+        const result = codexFinish(h);
+        codexFileCache.set(file, { size: lastLineEnd, mtimeMs: st.mtimeMs, ino: st.ino, offset: lastLineEnd, anchor: anchorAt(file, lastLineEnd), parserState: codexParserState(h), result });
+        return { ...result, fileSize: st.size, readBytes: st.size - prev.offset, resumed: true };
       }
-    } finally { try { rl.close(); } catch { /* 已关闭 */ } }
-  } catch { return { skipped: true }; }
-  if (aborted) return { aborted: true };
-  // flat 已是「首条自有增量 + 其后 Δ累计」之和：Σdays ≡ flat ≡ 文件自有消耗（不含继承前缀）。
-  // per-model 全量（供 byModel）：单模型会话整额归属；多模型会话按日桶增量归属。
-  for (const [model, dm] of modelDays) {
-    const u = newUsage();
-    if (modelDays.size === 1) Object.assign(u, flat); else for (const v of dm.values()) addInto(u, v);
-    byModel.set(model, u);
+      // 中止：不写缓存（下轮重试）；fall through 整读
+    }
   }
-  if (!byModel.size && (flat.input || flat.output)) bumpModel(byModel, '(unknown)', flat);
-  const result = {
-    flat, days, callDays: calls.days, models: byModel, modelDays, variant,
-    stats: { tokenEvents: requests, parseErrors, skippedLines, undatedCalls: calls.undated, inheritedPrefix, duplicateReports, missingTotals },
-  };
-  codexFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
-  return result;
+  const h = newCodexState();
+  const { aborted, lastLineEnd } = await readLinesByte(file, { startByte: 0, deadline: Date.now() + o.softBudgetMs }, codexLineHandler(h, o));
+  if (aborted) return { aborted: true, fileSize: st.size, readBytes: st.size };
+  const result = codexFinish(h);
+  codexFileCache.set(file, { size: lastLineEnd, mtimeMs: st.mtimeMs, ino: st.ino, offset: lastLineEnd, anchor: anchorAt(file, lastLineEnd), parserState: codexParserState(h), result });
+  return { ...result, fileSize: st.size, readBytes: st.size };
 }
+
+/** 尾读续写状态：缓存条目（result + parserState）→ 可变状态容器 h。 */
+function newCodexStateFromEntry(prev) {
+  const r = prev.result;
+  const ps = prev.parserState ?? {};
+  return {
+    curModel: ps.curModel ?? null, variant: r.variant ?? null, requests: ps.requests ?? 0,
+    parseErrors: r.stats?.parseErrors ?? 0, skippedLines: r.stats?.skippedLines ?? 0,
+    byModel: r.models, modelDays: r.modelDays, days: r.days,
+    calls: { days: r.callDays, seen: new Set(ps.seenCallIds || []), undated: r.stats?.undatedCalls ?? 0 },
+    flat: r.flat,
+    prevTotal: ps.prevTotal ?? null,
+    inheritedPrefix: r.stats?.inheritedPrefix ?? 0, duplicateReports: r.stats?.duplicateReports ?? 0, missingTotals: r.stats?.missingTotals ?? 0,
+  };
+}
+const codexParserState = (h) => ({ prevTotal: h.prevTotal, curModel: h.curModel, requests: h.requests, seenCallIds: [...h.calls.seen] });
 
 export async function scanCodexUsage(opts = {}) {
   const o = { ...DEFAULT_OPTS, root: CODEX_ROOT, ...opts };
@@ -464,11 +693,13 @@ export async function scanCodexUsage(opts = {}) {
   const acc = newAcc();
   for (const f of files) {
     if (acc.stats.files >= o.maxFiles) { acc.stats.partial = true; break; }
+    await yieldNow();                                   // 文件间让出（第 1 步）
     const r = await collectCodexFile(f, o);
     if (r.aborted) { acc.stats.partial = true; break; }
     if (r.skipped) { acc.stats.skippedFiles++; continue; }
     acc.stats.files++;
     if (r.cached) acc.stats.cachedFiles++;
+    if (r.resumed) acc.stats.resumedFiles++;   // 尾读续文件数（第 4b 步）
     acc.stats.parseErrors += r.stats.parseErrors;
     acc.stats.skippedLines += r.stats.skippedLines;
     acc.stats.undatedCalls += r.stats.undatedCalls;
@@ -476,7 +707,8 @@ export async function scanCodexUsage(opts = {}) {
     acc.stats.inheritedPrefix += r.stats.inheritedPrefix || 0;
     acc.stats.duplicateReports += r.stats.duplicateReports || 0;
     acc.stats.missingTotals += r.stats.missingTotals || 0;
-    try { acc.stats.readBytes += fs.statSync(f).size; } catch { /* 文件消失 */ }
+    acc.stats.readBytes += r.readBytes || 0;
+    acc.stats.corpusBytes += r.fileSize || 0;
     foldFile(acc, r, threadIdOf(f));
   }
   acc.stats.sessions = acc.bySession.size;
@@ -491,50 +723,82 @@ export async function scanCodexUsage(opts = {}) {
 
 const kimiFileCache = makeFileCache();
 
+/** Kimi 行处理器（全量/尾读共用）：每行自包含（usage.record），仅 variant 与 tool 去重是跨行状态。 */
+function kimiLineHandler(h, o) {
+  return (line) => {
+    const isUsage = line.includes('"usage.record"');
+    const isMeta = line.includes('"clientMetadata"');        // turn.prompt 的形态标记（与 parseKimiSession 同源）
+    const isTool = line.includes('"tool.call"');
+    if (!isUsage && !isMeta && !isTool) return;
+    if (line.length > o.maxLineBytes) { h.skippedLines++; return; }
+    // 形态：clientMetadata 含 composer = 桌面版（原始行子串判定，免整行 JSON.parse）
+    if (isMeta) { h.variant = line.includes('composer') ? 'desktop' : 'cli'; if (!isUsage && !isTool) return; }
+    let j; try { j = JSON.parse(line); } catch { h.parseErrors++; return; }
+    if (j?.type === 'context.append_loop_event' && j.event?.type === 'tool.call') {
+      const ev = j.event;
+      recordTool(h.calls, ev.uuid ?? ev.toolCallId ?? ev.callId, ev.name ?? ev.toolName ?? ev.tool_name, j.time);
+    }
+    if (j?.type !== 'usage.record' || !j.usage) return;
+    const d = {
+      input: fin(j.usage.inputOther), output: fin(j.usage.output),
+      cacheRead: fin(j.usage.inputCacheRead), cacheWrite: fin(j.usage.inputCacheCreation), requests: 1,
+    };
+    if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) return;
+    const model = typeof j.model === 'string' && j.model ? j.model.split('/').pop() : '(unknown)';
+    const day = dayKeyOf(Number.isFinite(j.time) ? j.time : Date.now());
+    addInto(h.flat, d);
+    bumpDay(h.days, day, d);
+    bumpModel(h.models, model, d);
+    bumpModelDay(h.modelDays, model, day, d);
+  };
+}
+const newKimiState = () => ({ variant: null, parseErrors: 0, skippedLines: 0, models: new Map(), modelDays: new Map(), days: new Map(), calls: newCalls(), flat: newUsage() });
+const kimiFinish = (h) => ({ flat: h.flat, days: h.days, callDays: h.calls.days, models: h.models, modelDays: h.modelDays, variant: h.variant, stats: { parseErrors: h.parseErrors, skippedLines: h.skippedLines, undatedCalls: h.calls.undated } });
+function newKimiStateFromEntry(prev) {
+  const r = prev.result, ps = prev.parserState ?? {};
+  return {
+    variant: r.variant ?? null, parseErrors: r.stats?.parseErrors ?? 0, skippedLines: r.stats?.skippedLines ?? 0,
+    models: r.models, modelDays: r.modelDays, days: r.days,
+    calls: { days: r.callDays, seen: new Set(ps.seenCallIds || []), undated: r.stats?.undatedCalls ?? 0 },
+    flat: r.flat,
+  };
+}
+function cloneKimiState(h) {
+  return {
+    ...h,
+    models: new Map([...h.models].map(([k, v]) => [k, { ...v }])),
+    modelDays: new Map([...h.modelDays].map(([k, v]) => [k, new Map([...v].map(([d, u]) => [d, { ...u }]))])),
+    days: new Map([...h.days].map(([k, v]) => [k, { ...v }])),
+    calls: { days: new Map([...h.calls.days].map(([k, v]) => [k, { ...v }])), seen: new Set(h.calls.seen), undated: h.calls.undated },
+    flat: { ...h.flat },
+  };
+}
+
 async function collectKimiWire(file, o) {
   let st; try { st = fs.statSync(file); } catch { return { skipped: true }; }
   const hit = o.refresh ? null : cachedEntry(kimiFileCache, file, st);
-  if (hit) return { ...hit.result, cached: true };
-  let variant = null, aborted = false, lineCnt = 0, parseErrors = 0, skippedLines = 0;
-  const byModel = new Map(), modelDays = new Map(), days = new Map();
-  const flat = newUsage(), calls = newCalls();
-  const deadline = Date.now() + o.softBudgetMs;
-  try {
-    const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
-    try {
-      for await (const line of rl) {
-        if ((++lineCnt & 511) === 0 && Date.now() > deadline) { aborted = true; break; }
-        const isUsage = line.includes('"usage.record"');
-        const isMeta = line.includes('"clientMetadata"');        // turn.prompt 的形态标记（与 parseKimiSession 同源）
-        const isTool = line.includes('"tool.call"');
-        if (!isUsage && !isMeta && !isTool) continue;
-        if (line.length > o.maxLineBytes) { skippedLines++; continue; }
-        // 形态：clientMetadata 含 composer = 桌面版（原始行子串判定，免整行 JSON.parse）
-        if (isMeta) { variant = line.includes('composer') ? 'desktop' : 'cli'; if (!isUsage && !isTool) continue; }
-        let j; try { j = JSON.parse(line); } catch { parseErrors++; continue; }
-        if (j?.type === 'context.append_loop_event' && j.event?.type === 'tool.call') {
-          const ev = j.event;
-          recordTool(calls, ev.uuid ?? ev.toolCallId ?? ev.callId, ev.name ?? ev.toolName ?? ev.tool_name, j.time);
-        }
-        if (j?.type !== 'usage.record' || !j.usage) continue;
-        const d = {
-          input: fin(j.usage.inputOther), output: fin(j.usage.output),
-          cacheRead: fin(j.usage.inputCacheRead), cacheWrite: fin(j.usage.inputCacheCreation), requests: 1,
-        };
-        if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) continue;
-        const model = typeof j.model === 'string' && j.model ? j.model.split('/').pop() : '(unknown)';
-        const day = dayKeyOf(Number.isFinite(j.time) ? j.time : Date.now());
-        addInto(flat, d);
-        bumpDay(days, day, d);
-        bumpModel(byModel, model, d);
-        bumpModelDay(modelDays, model, day, d);
+  if (hit) return { ...hit.result, cached: true, fileSize: st.size, readBytes: 0 };
+  // 尾读路径（第 4b 步）：同 codex（inode + 锚点校验，字节偏移续读）
+  const prev = kimiFileCache.get(file);
+  if (!o.refresh && prev && Number.isFinite(prev.offset) && st.size > prev.size
+    && (st.ino === undefined || prev.ino === undefined || st.ino === prev.ino)) {
+    const anchor = anchorAt(file, prev.offset);
+    if (anchor !== null && anchor === prev.anchor) {
+      const h = cloneKimiState(newKimiStateFromEntry(prev));
+      const { aborted, lastLineEnd } = await readLinesByte(file, { startByte: prev.offset, deadline: Date.now() + o.softBudgetMs }, kimiLineHandler(h, o));
+      if (!aborted) {
+        const result = kimiFinish(h);
+        kimiFileCache.set(file, { size: lastLineEnd, mtimeMs: st.mtimeMs, ino: st.ino, offset: lastLineEnd, anchor: anchorAt(file, lastLineEnd), parserState: { seenCallIds: [...h.calls.seen] }, result });
+        return { ...result, fileSize: st.size, readBytes: st.size - prev.offset, resumed: true };
       }
-    } finally { try { rl.close(); } catch { /* 已关闭 */ } }
-  } catch { return { skipped: true }; }
-  if (aborted) return { aborted: true };
-  const result = { flat, days, callDays: calls.days, models: byModel, modelDays, variant, stats: { parseErrors, skippedLines, undatedCalls: calls.undated } };
-  kimiFileCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result });
-  return result;
+    }
+  }
+  const h = newKimiState();
+  const { aborted, lastLineEnd } = await readLinesByte(file, { startByte: 0, deadline: Date.now() + o.softBudgetMs }, kimiLineHandler(h, o));
+  if (aborted) return { aborted: true, fileSize: st.size, readBytes: st.size };
+  const result = kimiFinish(h);
+  kimiFileCache.set(file, { size: lastLineEnd, mtimeMs: st.mtimeMs, ino: st.ino, offset: lastLineEnd, anchor: anchorAt(file, lastLineEnd), parserState: { seenCallIds: [...h.calls.seen] }, result });
+  return { ...result, fileSize: st.size, readBytes: st.size };
 }
 
 export async function scanKimiUsage(opts = {}) {
@@ -566,15 +830,18 @@ export async function scanKimiUsage(opts = {}) {
     const tmp = { flat: newUsage(), days: new Map(), callDays: new Map(), models: new Map(), modelDays: new Map(), variant: null };
     for (const w of s.wires) {
       if (wireCount >= o.maxFiles) { acc.stats.partial = true; partialSession = true; break; }
+      await yieldNow();                                 // 文件间让出（第 1 步）
       const r = await collectKimiWire(w, o);
       if (r.aborted) { acc.stats.partial = true; partialSession = true; break; }
       if (r.skipped) { acc.stats.skippedFiles++; continue; }
       wireCount++; acc.stats.files++;
       if (r.cached) acc.stats.cachedFiles++;
+      if (r.resumed) acc.stats.resumedFiles++;   // 尾读续文件数（第 4b 步）
       acc.stats.parseErrors += r.stats.parseErrors;
       acc.stats.skippedLines += r.stats.skippedLines;
       acc.stats.undatedCalls += r.stats.undatedCalls;
-      try { acc.stats.readBytes += fs.statSync(w).size; } catch { /* 文件消失 */ }
+      acc.stats.readBytes += r.readBytes || 0;
+      acc.stats.corpusBytes += r.fileSize || 0;
       mergeInto(tmp, r);
       if (r.variant) tmp.variant = r.variant;          // 多 wire（子代理）时以 main 的判定为准可被覆盖，取后见
     }
@@ -590,30 +857,96 @@ export async function scanKimiUsage(opts = {}) {
 // ZCode：sqlite message 表 tokens（行级拉取，JS 折叠三桶）
 // ---------------------------------------------------------------------------
 
-export function scanZcodeUsage(opts = {}) {
-  const o = { ...DEFAULT_OPTS, dbPath: ZCODE_DB, ...opts };
+// ---------------------------------------------------------------------------
+// ZCode：sqlite message 表 tokens（行级拉取，JS 折叠三桶）+ 水位增量（第 3 步）
+// 可行性依据：spikes/zcode-usage-watermark（2026-10-19 真实库回放）——
+//   · tokens 并非只在终态写入（29,781/31,457 行处于中间态 finish=tool-calls）→ 用 delta（新−旧，负截 0）追账；
+//   · delta 算法崩溃收敛：水位只在整轮成功后推进，行内「acc 变更 + LRU 基线」原子成对，中断轮下轮幂等重放；
+//   · LRU 不持久化则重启丢账（实测 -495 万 token）→ msgLru/partLru 随 checkpoint 持久化；
+//   · staleMiss 规则：未命中 LRU 且 tc 早于 LRU 最早条目才跳过（lag p99=5min，固定窗规则会漏计首计行）。
+// ---------------------------------------------------------------------------
+
+const ZCODE_LRU_CAP = 6000, ZCODE_LRU_EVICT = 2000, ZCODE_OVERLAP_MS = 2_000;
+
+/** ZCode 增量状态（跨轮常驻 + checkpoint 持久化）：watermark 单调；msgLru = id → 已计入值+tc
+ *  （Map 序 = LRU 序，touch 时 delete+set）；partLru = 已计入 (sid,callId) 键。 */
+let zcodeState = null;
+
+/** LRU 写入（touch 语义：命中重插到尾部；超容批量淘汰最旧）。 */
+function lruTouch(map, key, value, cap, evict = ZCODE_LRU_EVICT) {
+  map.delete(key); map.set(key, value);
+  if (map.size > cap) { let k = 0; for (const kk of map.keys()) { map.delete(kk); if (++k >= evict) break; } }
+}
+
+/** scan 累加器快照（深拷贝）：增量轮继续变动 zcodeState.acc，返回值必须与后续变更隔离
+ *  （否则 usageCache.data.zc 会被下一轮增量原地改写）。 */
+function snapshotAcc(acc) {
+  const cp = (m) => { const o = new Map(); for (const [k, v] of m) o.set(k, { ...v }); return o; };
+  const cpNested = (m) => { const o = new Map(); for (const [k, v] of m) o.set(k, cp(v)); return o; };
+  return {
+    bySession: cp(acc.bySession), byModel: cp(acc.byModel), byDay: cp(acc.byDay), callsByDay: cp(acc.callsByDay),
+    byModelDay: cpNested(acc.byModelDay), byVariantDay: cpNested(acc.byVariantDay), byVariantFlat: cp(acc.byVariantFlat),
+    totals: { ...acc.totals }, stats: { ...acc.stats },
+  };
+}
+
+export async function scanZcodeUsage(opts = {}) {
+  const o = { ...DEFAULT_OPTS, dbPath: ZCODE_DB, lruCap: ZCODE_LRU_CAP, ...opts };
   const t0 = process.hrtime.bigint();
-  const acc = newAcc();
+  if (o.refresh) zcodeState = null;                    // 强刷（P0-2 管道）：清状态全表重建
+  if (zcodeState && zcodeState.dbPath !== o.dbPath) zcodeState = null;   // 状态绑定库文件：换库（测试/改 env）即全量重建
+  const incremental = !!zcodeState;
+  // acc 数据映射跨轮累积；stats 是轮次级诊断 → 每轮重置（含增量标记与 zcode 特有计数）
+  const acc = incremental ? zcodeState.acc : newAcc();
+  acc.stats = { ...newAcc().stats, incremental, incrementalRows: 0, staleMiss: 0 };
   acc.stats.files = 1;
+  const degradedAcc = () => { const e = newAcc(); e.stats = { ...acc.stats }; e.stats.files = 1; return e; };   // degraded 返回空账（旧语义）：不拿旧 acc 冒充，状态保留待下轮重试
+  try { acc.stats.corpusBytes = fs.statSync(o.dbPath).size; } catch { /* 库不存在：degraded 路径 */ }
   const db = openZcodeDb(o.dbPath);
-  if (!db) return finishScan('zcode', acc, t0, { inputIncludesCache: true, degraded: true, error: 'db-unavailable' });
+  if (!db) return finishScan('zcode', degradedAcc(), t0, { inputIncludesCache: true, degraded: true, error: 'db-unavailable' });
   try {
-    const rows = db.prepare(`
-      SELECT m.session_id AS sid,
+    // 游标式拉行 + 每 512 行 yield（第 1 步）；不加 SQL ORDER BY（无索引时 sqlite 首行前全表物化+排序 ≈228ms 同步块）。
+    // message 折叠加法可交换无需排序；part 的「重复 callId 最早优先」确定性由 JS 排序保证（全量路径）。
+    const st = zcodeState ?? { dbPath: o.dbPath, watermark: -Infinity, msgLru: new Map(), partLru: new Map(), acc, lruCap: o.lruCap };
+    let maxTu = Number.isFinite(st.watermark) ? st.watermark : -Infinity;
+    let rowCnt = 0;
+    const since = incremental ? st.watermark - ZCODE_OVERLAP_MS : -Infinity;
+    const msgStmt = db.prepare(`
+      SELECT m.id AS rid, m.session_id AS sid, m.time_updated AS tu,
              COALESCE(json_extract(m.data,'$.modelId'), '(unknown)') AS model,
-             COALESCE(CAST(json_extract(m.data,'$.tokens.input') AS INTEGER), 0) AS input,
-             COALESCE(CAST(json_extract(m.data,'$.tokens.output') AS INTEGER), 0) AS output,
-             COALESCE(CAST(json_extract(m.data,'$.tokens.cache.read') AS INTEGER), 0) AS cacheRead,
-             COALESCE(CAST(json_extract(m.data,'$.tokens.cache.write') AS INTEGER), 0) AS cacheWrite,
+             CAST(json_extract(m.data,'$.tokens.input') AS INTEGER) AS input,
+             CAST(json_extract(m.data,'$.tokens.output') AS INTEGER) AS output,
+             CAST(json_extract(m.data,'$.tokens.cache.read') AS INTEGER) AS cacheRead,
+             CAST(json_extract(m.data,'$.tokens.cache.write') AS INTEGER) AS cacheWrite,
              m.time_created AS tc
       FROM message m
-      WHERE json_extract(m.data,'$.role')='assistant'
+      WHERE ${incremental ? 'm.time_updated > ? AND ' : ''}json_extract(m.data,'$.role')='assistant'
         AND json_extract(m.data,'$.tokens.input') IS NOT NULL
-    `).all();
-    for (const r of rows) {
-      const d = { input: fin(r.input), output: fin(r.output), cacheRead: fin(r.cacheRead), cacheWrite: fin(r.cacheWrite), requests: 1 };
-      if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) continue;
+    `);
+    const msgIter = incremental ? msgStmt.iterate(since) : msgStmt.iterate();
+    for (const r of msgIter) {
+      if ((++rowCnt & 511) === 0) await yieldNow();
+      if (Number.isFinite(r.tu)) maxTu = Math.max(maxTu, r.tu);
+      const val = { input: fin(r.input), output: fin(r.output), cacheRead: fin(r.cacheRead), cacheWrite: fin(r.cacheWrite) };
+      if (!val.input && !val.output && !val.cacheRead && !val.cacheWrite) continue;
       const day = dayKeyOf(r.tc);
+      const old = st.msgLru.get(r.rid);
+      let d;
+      if (old) {
+        // 已计过：delta = 新−旧（负值截 0，文档化口径）；requests 已随首次入账计 1（全量口径=每行 1 次）
+        d = {
+          input: Math.max(0, val.input - old.input), output: Math.max(0, val.output - old.output),
+          cacheRead: Math.max(0, val.cacheRead - old.cacheRead), cacheWrite: Math.max(0, val.cacheWrite - old.cacheWrite), requests: 0,
+        };
+        if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) { lruTouch(st.msgLru, r.rid, { ...val, tc: r.tc }, st.lruCap); continue; }   // 无变化：只 touch 不折账
+        if (incremental) acc.stats.incrementalRows++;
+      } else {
+        // staleMiss 规则（spike S3）：未命中且 tc 早于 LRU 最早条目 → 冻结假设跳过并计数（可观测）
+        let minTc = Infinity; for (const v of st.msgLru.values()) minTc = Math.min(minTc, v.tc);
+        if (st.msgLru.size && r.tc < minTc) { acc.stats.staleMiss++; continue; }
+        d = { ...val, requests: 1 };
+      }
+      lruTouch(st.msgLru, r.rid, { ...val, tc: r.tc }, st.lruCap);
       // 行级结果组装成统一「文件形状」后折叠（d 只读共享，四处引用安全）
       foldFile(acc, {
         flat: d,
@@ -623,26 +956,202 @@ export function scanZcodeUsage(opts = {}) {
         variant: null,
       }, r.sid);
     }
-    const tools = db.prepare(`
-      SELECT session_id AS sid, id,
+    const partStmt = db.prepare(`
+      SELECT session_id AS sid, id, time_updated AS tu,
              json_extract(data,'$.callID') AS callId,
              json_extract(data,'$.tool') AS toolName,
              time_created AS tc
-      FROM part WHERE json_extract(data,'$.type')='tool'
-      ORDER BY time_created, id
-    `).all();
-    const calls = newCalls();
-    for (const r of tools) {
-      recordTool(calls, JSON.stringify([r.sid, r.callId ?? r.id]), r.toolName, r.tc);
+      FROM part WHERE ${incremental ? 'time_updated > ? AND ' : ''}json_extract(data,'$.type')='tool'
+    `);
+    const partIter = incremental ? partStmt.iterate(since) : partStmt.iterate();
+    const partRows = [];
+    for (const r of partIter) {
+      if (Number.isFinite(r.tu)) maxTu = Math.max(maxTu, r.tu);
+      partRows.push(r);
+      if ((++rowCnt & 511) === 0) await yieldNow();
+    }
+    if (!incremental) partRows.sort((a, b) => (a.tc - b.tc) || String(a.id).localeCompare(String(b.id)));   // 与原 SQL ORDER BY 同语义（最早优先去重）
+    for (const r of partRows) {
+      if ((++rowCnt & 511) === 0) await yieldNow();
+      const key = JSON.stringify([r.sid, r.callId ?? r.id]);     // 与全量口径同键
+      if (!st.partLru.has(key)) {
+        if (incremental) acc.stats.incrementalRows++;
+        if (!Number.isFinite(r.tc)) { acc.stats.undatedCalls++; }
+        else {
+          const day = dayKeyOf(r.tc);
+          const row = acc.callsByDay.get(day) ?? { toolCalls: 0, mcpCalls: 0 };
+          row.toolCalls++;
+          if (MCP_NAME_RE.test(String(r.toolName ?? ''))) row.mcpCalls++;
+          acc.callsByDay.set(day, row);
+        }
+      }
+      lruTouch(st.partLru, key, true, st.lruCap);
       if (!acc.bySession.has(r.sid)) acc.bySession.set(r.sid, newUsage());
     }
-    addCallDays(acc.callsByDay, calls.days);
-    acc.stats.undatedCalls += calls.undated;
+    // 整轮成功才建/推进状态：异常路径不落水位（中断轮的已折 delta 与 LRU 基线成对，下轮幂等收敛）
+    zcodeState = st;
+    zcodeState.watermark = maxTu;
     acc.stats.sessions = acc.bySession.size;
   } catch (e) {
-    return finishScan('zcode', acc, t0, { inputIncludesCache: true, degraded: true, error: 'sqlite:' + String(e.message || e).slice(0, 120) });
+    return finishScan('zcode', snapshotAcc(acc), t0, { inputIncludesCache: true, degraded: true, error: 'sqlite:' + String(e.message || e).slice(0, 120) });
   } finally { try { db.close(); } catch { /* ignore */ } }
-  return finishScan('zcode', acc, t0, { inputIncludesCache: true });
+  return finishScan('zcode', snapshotAcc(acc), t0, { inputIncludesCache: true });
+}
+
+// ---------------------------------------------------------------------------
+// 检查点（第 2 步，PERF-7）：文件级缓存跨进程持久化——重启后 size/mtime 未变的文件零重读。
+// 失效键与进程内一致（size+mtime：不匹配该文件整读回退）；解析器/result 语义变更时 bump
+// SCANNER_VERSION 使旧检查点整体作废。单条目形状异常只丢该条（永不抛）；数值字段过 fin() 防脏。
+// ---------------------------------------------------------------------------
+
+export const SCANNER_VERSION = 1;
+
+const FILE_CACHES = () => ({ dsh: dshFileCache, 'claude-code': claudeFileCache, codex: codexFileCache, 'kimi-code': kimiFileCache });
+
+/** result 的 Map 字段 → JSON（dayKey 是数字，JSON 对象键落地为字符串，加载时还原）。 */
+function serResult(r) {
+  const obj = (m, inner) => { const o = {}; for (const [k, v] of m) o[k] = inner ? inner(v) : v; return o; };
+  const out = {
+    flat: { ...r.flat },
+    days: obj(r.days), callDays: obj(r.callDays), models: obj(r.models),
+    modelDays: obj(r.modelDays, (dm) => obj(dm)),
+    variant: r.variant ?? null,
+    stats: { ...r.stats },
+  };
+  if (r.sid !== undefined) out.sid = r.sid ?? null;
+  return out;
+}
+/** JSON → result（形状/数值校验；坏形状抛错，由调用方按单条目丢弃）。 */
+function deResult(e) {
+  if (!e || typeof e !== 'object' || typeof e.flat !== 'object' || !e.flat) throw new Error('bad-result');
+  const numMap = (o) => { const m = new Map(); for (const k of Object.keys(o || {})) m.set(Number(k), o[k]); return m; };
+  const strMap = (o) => { const m = new Map(); for (const k of Object.keys(o || {})) m.set(k, o[k]); return m; };
+  const flat = newUsage();
+  flat.input = fin(e.flat.input); flat.output = fin(e.flat.output);
+  flat.cacheRead = fin(e.flat.cacheRead); flat.cacheWrite = fin(e.flat.cacheWrite); flat.requests = fin(e.flat.requests);
+  const modelDays = new Map();
+  for (const k of Object.keys(e.modelDays || {})) modelDays.set(k, numMap(e.modelDays[k]));
+  const r = {
+    flat,
+    days: numMap(e.days), callDays: numMap(e.callDays), models: strMap(e.models), modelDays,
+    variant: typeof e.variant === 'string' ? e.variant : null,
+    stats: (e.stats && typeof e.stats === 'object') ? { ...e.stats } : {},
+  };
+  if (e.sid !== undefined) r.sid = typeof e.sid === 'string' ? e.sid : null;
+  return r;
+}
+
+/** 导出全部文件缓存为可 JSON 化的检查点；超 maxBytes（默认 8MB）返回 null（调用方跳过写入）。 */
+export function exportCheckpoint(opts = {}) {
+  const maxBytes = opts.maxBytes ?? 8 * 1024 * 1024;
+  const out = { version: SCANNER_VERSION, savedAt: Date.now(), sources: {}, zcode: null };
+  for (const [src, cache] of Object.entries(FILE_CACHES())) {
+    const files = {};
+    for (const [file, ent] of cache) {
+      files[file] = {
+        size: ent.size, mtimeMs: ent.mtimeMs,
+        ...(ent.ino !== undefined ? { ino: ent.ino } : {}),                      // 尾读轮转防护（第 4 步）
+        ...(ent.tail ? { tail: ent.tail } : {}),                                 // dsh：帧边界续读状态
+        ...(ent.offset !== undefined ? { offset: ent.offset, anchor: ent.anchor } : {}),   // codex/kimi：字节偏移 + 前置锚点哈希
+        ...(ent.parserState ? { parserState: ent.parserState } : {}),
+        result: serResult(ent.result),
+      };
+    }
+    out.sources[src] = files;
+  }
+  // zcode 水位状态：delta 算法崩溃收敛（spike S3），任何轮次导出都安全——中断轮的已折 delta
+  // 与 LRU 基线成对，重载后下轮幂等补齐；spike S3b 实测不持久化则重启丢账。
+  if (zcodeState) out.zcode = serZcodeState(zcodeState);
+  return JSON.stringify(out).length <= maxBytes ? out : null;
+}
+
+/** zcode 增量状态 ↔ JSON（msgLru 用条目数组保 LRU 序；variant 键可能为 null → 空串哨兵）。 */
+function serZcodeState(st) {
+  const acc = st.acc;
+  const ent = (m, valSer) => [...m.entries()].map(([k, v]) => [String(k ?? ''), valSer(v)]);
+  const numEnt = (m) => [...m.entries()].map(([k, v]) => [String(k), { ...v }]);
+  return {
+    dbPath: st.dbPath ?? null,
+    watermark: Number.isFinite(st.watermark) ? st.watermark : null,
+    msgLru: [...st.msgLru.entries()].map(([id, v]) => [id, { input: v.input, output: v.output, cacheRead: v.cacheRead, cacheWrite: v.cacheWrite, tc: v.tc }]),
+    partLru: [...st.partLru.keys()],
+    acc: {
+      bySession: ent(acc.bySession, (v) => ({ ...v })), byModel: ent(acc.byModel, (v) => ({ ...v })),
+      byDay: numEnt(acc.byDay), callsByDay: numEnt(acc.callsByDay),
+      byModelDay: ent(acc.byModelDay, (dm) => numEnt(dm)),
+      byVariantDay: ent(acc.byVariantDay, (dm) => numEnt(dm)), byVariantFlat: ent(acc.byVariantFlat, (v) => ({ ...v })),
+      totals: { ...acc.totals }, stats: { ...acc.stats },
+    },
+  };
+}
+function deZcodeState(e) {
+  if (!e || typeof e !== 'object' || !e.acc) throw new Error('bad-zcode');
+  const key = (k) => (k === '' || k === 'null' ? null : k);
+  const map = (arr, valDe) => { const m = new Map(); for (const [k, v] of arr || []) m.set(key(k), valDe(v)); return m; };
+  const numMap = (arr) => { const m = new Map(); for (const [k, v] of arr || []) m.set(Number(k), { ...v }); return m; };
+  const msgLru = new Map();
+  for (const [id, v] of e.msgLru || []) msgLru.set(id, { input: fin(v.input), output: fin(v.output), cacheRead: fin(v.cacheRead), cacheWrite: fin(v.cacheWrite), tc: fin(v.tc) });
+  const st = {
+    dbPath: typeof e.dbPath === 'string' ? e.dbPath : null,
+    watermark: Number.isFinite(e.watermark) ? e.watermark : -Infinity,
+    msgLru, partLru: new Map((e.partLru || []).map((k) => [k, 1])),   // Map（与 lruTouch/Set.has 同构；勿用 Set——lruTouch 需要 Map.set）
+    lruCap: ZCODE_LRU_CAP,
+    acc: {
+      bySession: map(e.acc.bySession, (v) => ({ ...v })), byModel: map(e.acc.byModel, (v) => ({ ...v })),
+      byDay: numMap(e.acc.byDay), callsByDay: numMap(e.acc.callsByDay),
+      byModelDay: map(e.acc.byModelDay, (dm) => numMap(dm)),
+      byVariantDay: map(e.acc.byVariantDay, (dm) => numMap(dm)), byVariantFlat: map(e.acc.byVariantFlat, (v) => ({ ...v })),
+      totals: { input: fin(e.acc.totals.input), output: fin(e.acc.totals.output), cacheRead: fin(e.acc.totals.cacheRead), cacheWrite: fin(e.acc.totals.cacheWrite), requests: fin(e.acc.totals.requests) },
+      stats: (e.acc.stats && typeof e.acc.stats === 'object') ? { ...e.acc.stats } : {},
+    },
+  };
+  if (!(st.acc.bySession instanceof Map)) throw new Error('bad-zcode-acc');
+  return st;
+}
+
+/** 加载检查点到四源文件缓存（不抛）。返回摘要 {version, loaded:{src:n}, dropped, reason} 供日志。 */
+export function loadCheckpoint(obj) {
+  const summary = { version: obj?.version ?? null, loaded: {}, dropped: 0, reason: null };
+  if (!obj || typeof obj !== 'object' || obj.version !== SCANNER_VERSION) {
+    summary.reason = obj ? 'version-mismatch' : 'empty';
+    return summary;
+  }
+  for (const [src, cache] of Object.entries(FILE_CACHES())) {
+    const files = obj.sources?.[src];
+    let n = 0;
+    if (files && typeof files === 'object') {
+      for (const [file, ent] of Object.entries(files)) {
+        try {
+          if (!Number.isFinite(ent?.size) || !Number.isFinite(ent?.mtimeMs) || typeof file !== 'string' || !file) throw new Error('bad-entry');
+          const result = deResult(ent.result);
+          const entry = { size: ent.size, mtimeMs: ent.mtimeMs, result };
+          // 可选尾读字段（形状异常只丢该条；4a/4b 各自的续读状态）
+          if (ent.tail != null) {
+            if (!Number.isFinite(ent.tail.nextFrameOffset) || !Array.isArray(ent.tail.seenCallIds)) throw new Error('bad-tail');
+            entry.tail = ent.tail; entry.ino = Number.isFinite(ent.ino) ? ent.ino : undefined;
+          } else if (Number.isFinite(ent.offset)) {
+            if (typeof ent.anchor !== 'string') throw new Error('bad-offset-entry');
+            entry.offset = ent.offset; entry.anchor = ent.anchor; entry.ino = Number.isFinite(ent.ino) ? ent.ino : undefined;
+            if (ent.parserState && typeof ent.parserState === 'object') entry.parserState = ent.parserState;
+          }
+          cache.set(file, entry);
+          n++;
+        } catch { summary.dropped++; }
+      }
+    }
+    summary.loaded[src] = n;
+  }
+  if (obj.zcode && typeof obj.zcode === 'object') {
+    try { zcodeState = deZcodeState(obj.zcode); summary.loaded.zcode = 1; }
+    catch { zcodeState = null; summary.dropped++; }
+  }
+  return summary;
+}
+
+/** 测试用：清空全部源内缓存（模拟全新进程）。 */
+export function resetCaches() {
+  for (const cache of Object.values(FILE_CACHES())) cache.clear();
+  zcodeState = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -654,7 +1163,7 @@ function newAcc() {
   return {
     bySession: new Map(), byModel: new Map(), byDay: new Map(), callsByDay: new Map(), byModelDay: new Map(), byVariantDay: new Map(), byVariantFlat: new Map(),
     totals: newUsage(),
-    stats: { files: 0, cachedFiles: 0, sessions: 0, readBytes: 0, parseErrors: 0, skippedLines: 0, skippedFiles: 0, undatedCalls: 0, partial: false, identityMismatched: 0, dayIdentityMismatched: 0, inheritedPrefix: 0, duplicateReports: 0, missingTotals: 0 },
+    stats: { files: 0, cachedFiles: 0, resumedFiles: 0, sessions: 0, readBytes: 0, corpusBytes: 0, parseErrors: 0, skippedLines: 0, skippedFiles: 0, undatedCalls: 0, partial: false, identityMismatched: 0, dayIdentityMismatched: 0, inheritedPrefix: 0, duplicateReports: 0, missingTotals: 0 },
   };
 }
 /** 把一个「文件结果」（统一形状 {flat, days, models, modelDays, variant}）折叠进 scan 累加器。 */
@@ -872,9 +1381,7 @@ function fmtTok(n) {
 function fmtHit(r) { return r == null ? '—' : (r * 100).toFixed(1) + '%'; }
 
 async function main(argv) {
-  const scans = await scanAllUsage(argv.includes('--refresh') ? {
-    dsh: { refresh: true }, claude: { refresh: true }, codex: { refresh: true }, kimi: { refresh: true }, zcode: {},
-  } : {});
+  const scans = await scanAllUsage(argv.includes('--refresh') ? FORCE_SCAN_OPTS : {});
   if (argv.includes('--json')) {
     console.log(JSON.stringify({
       generatedAt: Date.now(),

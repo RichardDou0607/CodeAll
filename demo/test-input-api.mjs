@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { writeModelFixture } from './test-model-fixture.mjs';
+import { isolatedEnv } from './test-env.mjs';
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codeall-input-test-'));
 const modelEnv = writeModelFixture(home);
@@ -64,9 +65,9 @@ const port = await new Promise((resolve, reject) => {
   s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); });
 });
 const child = spawn(process.execPath, [fileURLToPath(new URL('./framed.mjs', import.meta.url)), '--port', String(port)], {
-  env: { ...process.env, ...modelEnv, HOME: home, PATH: binDir + path.delimiter + process.env.PATH,
+  env: isolatedEnv(home, { ...modelEnv, PATH: binDir + path.delimiter + process.env.PATH,
     PET_PLUGIN_SOCK: path.join(home, 'missing.sock'), PET_INPUT_CMD: 'touch ' + unsafeFallback,
-    PET_ZCODE_PIPE_MODEL: 'personal/mock-model', MOCK_ZCODE_CALLS: calls, MOCK_ZCODE_DB: dbFile },
+    PET_ZCODE_PIPE_MODEL: 'personal/mock-model', MOCK_ZCODE_CALLS: calls, MOCK_ZCODE_DB: dbFile }),
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = '';

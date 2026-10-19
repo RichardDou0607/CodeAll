@@ -28,3 +28,4 @@ demo/frame.html
 # 本地物料不上传（宣传片制作素材含个人路径 / 个人下载）
 promo/
 downloads/
+.zcode/

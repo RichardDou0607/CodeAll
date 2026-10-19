@@ -20,14 +20,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { createHub, makeMapper, findSessionLog } from './frame.mjs';
-import { scanCatalog, readWorkspaceIndex, DSH_HOME } from '../adapters/session-catalog.mjs';
+import { scanCatalog, readWorkspaceIndex, DSH_HOME, WORKSPACE_STORE } from '../adapters/session-catalog.mjs';
 import { scanLocalAgents } from '../adapters/local-agents.mjs';
 import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, followKimiLogs, SOURCE as KM_SOURCE } from '../adapters/kimi-code-adapter.mjs';
 import { scanZcodeCatalog, followZcodeLogs, SOURCE as ZC_SOURCE } from '../adapters/zcode-adapter.mjs';
-import { scanAllUsage, serializeUsageScan, usageCalendar } from '../adapters/usage-collect.mjs';
-import { CLI_TARGETS, availableCliChannels, deliverControl, deliverCreateViaCli, deliverCreateViaZcodePipe, openCliSession, resolveCliBin, recoverZcodePendingRollbacks } from '../adapters/cli-control.mjs';
+import { scanAllUsage, serializeUsageScan, usageCalendar, FORCE_SCAN_OPTS, exportCheckpoint, loadCheckpoint } from '../adapters/usage-collect.mjs';
+import { CLI_TARGETS, availableCliChannels, deliverControl, deliverCreateViaCli, deliverCreateViaZcodePipe, headlessInFlight, openCliSession, resolveCliBin, recoverZcodePendingRollbacks } from '../adapters/cli-control.mjs';
 import { loadModelRegistry, validateModelSelection } from '../adapters/model-registry.mjs';
 import net from 'node:net';
 import crypto from 'node:crypto';
@@ -132,6 +132,11 @@ const PET_DIR = path.join(process.env.HOME || '.', '.agent-pet');
 const INPUT_LOG = path.join(PET_DIR, 'input-queue.jsonl');
 const INPUT_MAX_ITEMS = 200;      // 队列条目上限：超出丢弃最旧（补上架构文档 §4 缺失的轮转规格）
 const INPUT_MAX_BYTES = 1 << 20;  // 1MB 硬上限（单条 ≤2000 字符，正常远达不到）
+// 自动冲刷周期：默认 20s；测试用 PET_FLUSH_MS 注入更短周期以确定性断言“busy 入队后自动重投”（PERF-5）。
+const FLUSH_MS = Math.max(500, Number(process.env.PET_FLUSH_MS || 20_000) || 20_000);
+// 分钟兜底刷新周期：默认 60s，仅在有 SSE 客户端时执行（见 2s 节拍内注释）；
+// 测试用 PET_REFRESH_MS 注入更短周期做确定性断言（test-minute-refresh），perf-verify 注入长周期隔离。
+const REFRESH_MS = Math.max(5_000, Number(process.env.PET_REFRESH_MS || 60_000) || 60_000);
 const HTML_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ASSET_DIR = path.join(HTML_DIR, 'assets');
 // Keep the user's CLI priority; append bundled Node for shebangs if absent.
@@ -172,19 +177,27 @@ function tokenOk(req, url) {
 }
 
 const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-function decodeFrames(buf) {
+/**
+ * 末帧完整性（PERF-2，2026-10-17 perf-verify P2-correct 抓获）：截断的 zstd 帧**不会抛错**，
+ * 而是「成功」解压为空/半段文本——直接消费会丢该帧事件，且余下字节成孤儿前缀（增量模式下污染 pending）。
+ * 该缺陷 v0.1.0 的整文件读取同样存在（丢帧后靠下一帧魔数重同步掩盖）。修复：末帧必须解出非空且以
+ * 完整行（\n）收尾才消费；连续 stallLimit 轮不合格则放行（防真实无换行尾帧永久卡死，调用方计数）。
+ */
+function decodeFrames(buf, acceptPartialLast = false) {
   const offsets = [];
   let i = buf.indexOf(MAGIC, 0);
   while (i >= 0) { offsets.push(i); i = buf.indexOf(MAGIC, i + 1); }
   const events = []; let cursor = 0;
   for (let k = 0; k < offsets.length; k++) {
     const start = offsets[k]; if (start < cursor) continue;
-    const end = k + 1 < offsets.length ? offsets[k + 1] : buf.length;
+    const isLast = k + 1 === offsets.length;
+    const end = isLast ? buf.length : offsets[k + 1];
     let text = null;
     try { text = zlib.zstdDecompressSync(buf.subarray(start, end)).toString('utf8'); }
-    catch { if (k + 1 === offsets.length) break; continue; }
+    catch { if (isLast) break; continue; }
+    if (isLast && !acceptPartialLast && !(text.length > 0 && text.endsWith('\n'))) break;
     cursor = end;
-    for (const line of text.split('\n')) { const t = line.trim(); if (t) { try { events.push(JSON.parse(t)); } catch {} } }
+    for (const line of text.split('\n')) { const t = line.trim(); if (!t) continue; try { events.push(JSON.parse(t)); } catch { /* 半行 */ } }
   }
   return { events, nextOffset: cursor };
 }
@@ -206,6 +219,7 @@ function readInputFile() {
           sessionId: o.sessionId ?? null,
           source: o.source ?? null, model: o.model ?? '', reasoningEffort: o.reasoningEffort ?? '', accepted: !!o.accepted,
           targetKey: o.targetKey ?? (o.sessionId ? 'sess:' + o.sessionId : 'new:dsh:-'),
+          autoRetry: o.autoRetry === true,   // PERF-5 修复：此前白名单重建会丢弃该标记 → 续会话 busy 排队永不自动重试
         });
       } catch { /* 坏行跳过 */ }
     }
@@ -236,51 +250,104 @@ if (state.inputs.some(i => i.status === 'pending')) {
 }
 try { fs.chmodSync(INPUT_LOG, 0o600); } catch { /* 文件尚不存在，首次写入时即为 0600 */ }
 const clients = new Set();
-// 目录缓存（项目 → 会话）；每 5s 或按需刷新，扫描实测 ~20ms/16 会话
-let catalogCache = { at: 0, data: null };
-function catalog(force) {
-  if (force || !catalogCache.data || Date.now() - catalogCache.at > 5000) {
-    try { catalogCache = { at: Date.now(), data: scanCatalog({}) }; }
-    catch (e) { catalogCache = { at: Date.now(), data: { projects: [], error: String(e.message).slice(0, 120) } }; }
-  }
-  return catalogCache.data;
+// PERF-1（docs/25）：静默变化（目录 TTL 重扫 / 四态刷新）只登记脏标记，由 2s 节拍统一冲刷；
+// 显式变化点（事件 / 队列 / 投递 / 用量完成）仍走 broadcast() 即时全量推。
+// 无变化的心跳降为轻量 tick（仅 ts，客户端本地补相对时间）——空闲期不再每 2s 重建+推送全量快照。
+let snapshotDirty = true;
+function markDirty() { snapshotDirty = true; }
+/** 剔除时间戳类易变字段后序列化：用于「TTL 重扫结果是否真的变了」比较（变了才推）。 */
+const VOLATILE_KEYS = new Set(['scannedAt', 'generatedAt', 'elapsedMs', 'tookMs']);
+const stableJson = (d) => JSON.stringify(d, (k, v) => (k && VOLATILE_KEYS.has(k)) ? undefined : v);
+// PERF-1/B4 修复：workspace.json 等注册表类静默变化不在四态 activity 目录内——用 5s 廉价 mtime 探测兜底
+//（只 stat 不扫描），变化时强制下一次 snapshot 重扫五源目录，恢复“目录变化 ≤~15s 可见”的产品口径。
+let forceCatalogRescan = false;
+let lastWorkspaceMtime = null;
+function checkWorkspaceSignal() {
+  try {
+    const m = fs.statSync(WORKSPACE_STORE).mtimeMs;
+    if (lastWorkspaceMtime !== null && m !== lastWorkspaceMtime) { forceCatalogRescan = true; markDirty(); }
+    lastWorkspaceMtime = m;
+  } catch { /* workspace.json 不存在：无信号 */ }
 }
-// DSH 左侧会话列表的注册表（workspace.json，只读）：列表成员与顺序以它为准
-let wsCache = { at: 0, data: null };
-function workspaceIndex(force) {
-  if (force || !wsCache.data || Date.now() - wsCache.at > 5000) {
-    wsCache = { at: Date.now(), data: readWorkspaceIndex() };   // 内部已兜底，绝不抛
-  }
-  return wsCache.data;
+// 目录/注册表类 TTL 缓存工厂（2026-10-18 审查 S4：catalog/ws/multi 三处同形实现收敛）：
+//   {at, data, key} + TTL + stableJson 变化比较（变了才 markDirty）；
+//   scan 抛错时用 onError 的占位数据并置 key=''（下次成功扫描必判变化），未提供 onError 则原样上抛。
+function makeTtlCache(ttlMs, scan, onError) {
+  let cache = { at: 0, data: null, key: '' };
+  return (force) => {
+    if (force || !cache.data || Date.now() - cache.at > ttlMs) {
+      try {
+        const data = scan(force);
+        const key = stableJson(data);
+        if (cache.data && key !== cache.key) markDirty();
+        cache = { at: Date.now(), data, key };
+      } catch (e) {
+        if (!onError) throw e;
+        cache = { at: Date.now(), data: onError(e), key: '' };
+      }
+    }
+    return cache.data;
+  };
 }
-// 多源目录缓存：DSH + Claude Code + Codex + Kimi Code + ZCode 五路扫描合并（各 ~20ms / zcode ~90ms，5s 复用）
-let multiCache = { at: 0, data: null };
-function multiCatalog(force) {
-  if (force || !multiCache.data || Date.now() - multiCache.at > 5000) {
-    const dsh = catalog(force);
-    let cc = { projects: [], sessions: [], elapsedMs: 0 };
-    let cx = { projects: [], sessions: [], elapsedMs: 0 };
-    let km = { projects: [], sessions: [], elapsedMs: 0 };
-    let zc = { projects: [], sessions: [], elapsedMs: 0 };
-    try { cc = scanClaudeCatalog(); } catch (e) { cc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
-    try { cx = scanCodexCatalog(); } catch (e) { cx = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
-    try { km = scanKimiCatalog(); } catch (e) { km = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
-    try { zc = scanZcodeCatalog(); } catch (e) { zc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
-    multiCache = { at: Date.now(), data: { dsh, cc, cx, km, zc, elapsedMs: Math.round(((dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0) + (zc.elapsedMs || 0)) * 100) / 100 } };
-  }
-  return multiCache.data;
-}
+// 目录缓存（项目 → 会话）；PERF-4：TTL 5s→15s（实时性由各跟随器与 mtime 静默信号承担，目录只做兜底，变化 ≤15s 可见）
+const catalog = makeTtlCache(15_000, () => scanCatalog({}), (e) => ({ projects: [], error: String(e.message).slice(0, 120) }));
+// DSH 左侧会话列表的注册表（workspace.json，只读）：列表成员与顺序以它为准（readWorkspaceIndex 内部兜底，不抛）
+const workspaceIndex = makeTtlCache(15_000, () => readWorkspaceIndex());
+// 多源目录缓存：DSH + Claude Code + Codex + Kimi Code + ZCode 五路扫描合并（各 ~20ms / zcode ~90ms，15s 复用）
+const multiCatalog = makeTtlCache(15_000, (force) => {
+  const dsh = catalog(force);
+  let cc = { projects: [], sessions: [], elapsedMs: 0 };
+  let cx = { projects: [], sessions: [], elapsedMs: 0 };
+  let km = { projects: [], sessions: [], elapsedMs: 0 };
+  let zc = { projects: [], sessions: [], elapsedMs: 0 };
+  try { cc = scanClaudeCatalog(); } catch (e) { cc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+  try { cx = scanCodexCatalog(); } catch (e) { cx = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+  try { km = scanKimiCatalog(); } catch (e) { km = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+  try { zc = scanZcodeCatalog(); } catch (e) { zc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+  return { dsh, cc, cx, km, zc, elapsedMs: Math.round(((dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0) + (zc.elapsedMs || 0)) * 100) / 100 };
+});
 const sessionStates = new Map(); // sessionId -> 来自目录的粗粒度状态（无实时事件时用）
 
 // ---------- Token 用量慢缓存（60s；与 5s 目录缓存分离——usage 需全文件精确累计） ----------
 // 首轮全量 ~2s（本机 1.1GB 转录）；文件级增量（size+mtime）让后续轮次只重读有增长的文件。
+// ---------- 用量检查点（第 2 步，PERF-7）：文件缓存跨重启持久化 ----------
+// 加载时机 = 首轮扫描前（P3① 保持：boot 不扫也不加载）；写入时机 = 每轮扫描完成后（分钟节拍下 ≤1 次/分钟）。
+// 坏检查点自愈：版本不符/解析失败 → 忽略 + 首轮全量重建；?refresh=1 跳过加载并覆盖写。
+const CHECKPOINT_FILE = process.env.PET_USAGE_CHECKPOINT || path.join(PET_DIR, 'usage-checkpoint.json');
+let checkpointLoaded = false;
+function loadUsageCheckpoint() {
+  checkpointLoaded = true;
+  let raw; try { raw = fs.readFileSync(CHECKPOINT_FILE, 'utf8'); } catch { return; }   // 无检查点：首轮全量（现状路径）
+  try {
+    const t0 = Date.now();
+    const s = loadCheckpoint(JSON.parse(raw));
+    console.log('[framed] 用量检查点：版本 ' + s.version + '，载入 ' + Object.entries(s.loaded).map(([k, v]) => k + ':' + v).join(' ')
+      + (s.dropped ? '，丢弃坏条目 ' + s.dropped : '') + (s.reason ? '（' + s.reason + ' → 整体作废，首轮全量重建）' : '') + '，' + (Date.now() - t0) + 'ms');
+  } catch (e) { console.error('[framed] 用量检查点损坏，忽略（首轮全量重建）：' + (e?.message || e)); }
+}
+function saveUsageCheckpoint() {
+  const cp = exportCheckpoint();
+  if (!cp) { console.error('[framed] 用量检查点超 8MB 护栏，本轮跳过写入'); return; }
+  try {
+    fs.mkdirSync(PET_DIR, { recursive: true });
+    const tmp = CHECKPOINT_FILE + '.tmp.' + process.pid + '.' + Date.now();   // 唯一 tmp 名：并发实例不互踩
+    fs.writeFileSync(tmp, JSON.stringify(cp), { mode: 0o600 });               // 0600：含 per-model/per-day 用量，同队列文件同级隐私
+    fs.renameSync(tmp, CHECKPOINT_FILE);                                      // 原子替换：磁盘上不会出现半写检查点
+  } catch (e) { console.error('[framed] 用量检查点写入失败（下轮重试）：' + (e?.message || e)); }
+}
+
 let usageCache = { at: 0, busy: false, data: null };
-async function refreshUsage() {
+/** P0-2（2026-10-19 评审）：force=true 走 FORCE_SCAN_OPTS 五源全量强制重扫（含 zcode——此前
+ *  「?refresh=1」调的是无参 scanAllUsage，四个文件源的 refresh:true 与 zcode 都没传到位，强刷不存在）。
+ *  force 同时跳过检查点加载、扫后覆盖写（坏缓存自愈通路）。 */
+async function refreshUsage(force = false) {
   if (usageCache.busy) return;
   usageCache.busy = true;
   try {
-    usageCache.data = await scanAllUsage();
+    if (!force && !checkpointLoaded) loadUsageCheckpoint();
+    usageCache.data = await scanAllUsage(force ? FORCE_SCAN_OPTS : {});
     usageCache.at = Date.now();
+    saveUsageCheckpoint();
   } catch (e) {
     usageCache.data = usageCache.data ?? { overview: null, cc: null, cx: null, km: null, zc: null, error: String(e?.message || e).slice(0, 120) };
   } finally { usageCache.busy = false; }
@@ -348,7 +415,11 @@ function validateCreateCwd(source, cwd) {
 let agentStatus = { agents: [], counts: {}, scannedAt: 0, tookMs: 0 };
 async function refreshAgentStatus() {
   try {
-    agentStatus = await scanLocalAgents({ dsh: { plugin: plugin.available, lastEventAt: state.lastEventAt } });
+    const next = await scanLocalAgents({ dsh: { plugin: plugin.available, lastEventAt: state.lastEventAt } });
+    // PERF-1：四态静默变化（进程起停 / 安装变化）才登记脏推；比对剔除 scannedAt/tookMs 类易变字段
+    // B4 修复：活动目录 mtime 变化通常意味着目录内容也变了 → 强制同轮重扫五源目录，避免脏标记被 TTL 未到期白白清掉
+    if (agentStatus && stableJson(next) !== stableJson(agentStatus)) { markDirty(); forceCatalogRescan = true; }
+    agentStatus = next;
   } catch { /* 探测失败保持上次结果 */ }
 }
 
@@ -379,13 +450,23 @@ function setState(s, next, activity) {
   if (s.state !== next) { s.since = Date.now(); s.state = next; }
   if (activity !== undefined) s.activity = activity;
 }
+let lastHeartbeatKey = null;   // pet.heartbeat 上一次的负载/会话数快照（相同则只发 tick）
+const perfIo = { readBytes: 0, readOps: 0 };   // PERF-2 证据：跟随器累计读字节/读次数（PET_PERF_PROBE 输出）
 function applyEvent(ev) {
   const id = ev.sessionId ?? 'backend';
   state.lastEvent = { type: ev.type, ts: ev.ts, sessionId: id };
   state.lastEventAt = Date.now();
   // 来源级帧（pet.heartbeat / sessionId='backend'）：维持存活判定，但**不**建会话行
   //（曾把心跳画成名为 backend 的幽灵「会话」，2026-10-05 实测踩坑）
-  if (id === 'backend' || ev.type === 'pet.heartbeat') { hub.apply(ev); broadcast(); return; }
+  if (id === 'backend' || ev.type === 'pet.heartbeat') {
+    hub.apply(ev);
+    // PERF-1/B5 修复：插件每 15s 一次 pet.heartbeat；负载/会话数无变化时只发轻量 tick，
+    // 不再每次心跳都重建并推送全量快照（否则真实插件部署的空闲收益被心跳吃掉）。
+    const hbKey = JSON.stringify({ load: ev.data?.load ?? 0, sessionCount: ev.data?.sessionCount ?? null });
+    if (hbKey === lastHeartbeatKey) broadcastTick();
+    else { lastHeartbeatKey = hbKey; broadcast(); }
+    return;
+  }
   const s = touchSession(id, ev);
   const d = ev.data ?? {};
   switch (ev.type) {
@@ -410,9 +491,11 @@ function applyEvent(ev) {
 }
 function snapshot() {
   const nowMs = Date.now();
-  const multi = multiCatalog(false);
+  const force = forceCatalogRescan;
+  forceCatalogRescan = false;
+  const multi = multiCatalog(force);
   const cat = multi.dsh;
-  const ws = workspaceIndex(false);
+  const ws = workspaceIndex(force);
   // ---- Token 用量：慢缓存 → 会话行附带 + 全局 usage 块（首轮未完成时 {pending:true}）----
   const usage = usageCache.data;
   const usageBySid = new Map();                          // 'source:sessionId' → 扁平 usage（源内会话 id 不重复）
@@ -719,6 +802,7 @@ function snapshot() {
       ? { generatedAt: usageCache.at, refreshing: usageCache.busy, ...usage.overview }
       : { pending: true },
     inputs: state.inputs.filter(i => i.status && i.status !== 'delivered').reverse(),
+    inFlight: headlessInFlight(),   // PERF-5：CLI 无头投递在途台账（pid/来源/开始时间/日志文件）
     lastEvent: state.lastEvent,
     inputChannel: (() => {
       const cli = cliChannelsCache();
@@ -756,7 +840,20 @@ function snapshot() {
     modelRegistry: modelRegistrySnapshot(),
   };
 }
-function broadcast() { const payload = 'data: ' + JSON.stringify(snapshot()) + '\n\n'; for (const res of clients) { try { res.write(payload); } catch { clients.delete(res); } } }
+function broadcast() {
+  if (!clients.size) { snapshotDirty = true; return; }   // 无连接：不重建，留脏标记待有客户端时再推
+  let payload;
+  try { payload = 'data: ' + JSON.stringify(snapshot()) + '\n\n'; }
+  catch (e) { console.error('[framed] snapshot 构建失败（保留脏标记待重试）：' + (e?.stack || e)); return; }   // 构建成功才清脏：异常不再静默丢一次推送
+  snapshotDirty = false;   // 快照已含最新状态（构建期间 markDirty 的变化也已包含在本帧）
+  for (const res of clients) { try { res.write(payload); } catch { clients.delete(res); } }
+}
+/** PERF-1 轻量心跳：仅带 ts（qa M4 语义保留——无 DSH 会话日志也有消息流；相对时间由客户端本地补写）。 */
+function broadcastTick() {
+  if (!clients.size) return;
+  const payload = 'data: ' + JSON.stringify({ v: 1, tick: true, ts: Date.now() }) + '\n\n';
+  for (const res of clients) { try { res.write(payload); } catch { clients.delete(res); } }
+}
 
 // ---------- DSH 会话日志跟随 ----------
 let offset = 0, mapper = null, target = null;
@@ -772,25 +869,58 @@ function newestMainLog() {
 function startFollower() {
   target = SESSION ? findSessionLog(SESSION) : (newestMainLog() || findSessionLog(null));
   if (!target) { console.error('未找到 DSH 会话日志；悬浮窗将只显示空状态。可用 --session 指定。'); return; }
+  // PERF-2（docs/25）：增量尾读——只读 offset 之后的新字节（fs.open + 定长 read），
+  // 不再每 800ms readFileSync 整文件（跟随大日志时读放大 N×文件大小/分钟）。
+  // 未完成帧留在 pending 缓冲与下一段拼接；轮转/截断（size<offset）从头重读。
+  let pending = Buffer.alloc(0);
+  let stall = 0;   // 末帧连续「疑似不完整」轮数：≥3 放行（防真实无换行尾帧永久滞留）
+  let lastInode = null;   // 轮转检测：同路径被替换（inode 变）/ 文件缩小 → 从头重读（避免把新文件当旧偏移续读）
   const read = () => {
-    let buf; try { buf = fs.readFileSync(target.file); } catch { return; }
-    if (offset > buf.length) offset = 0;
-    const { events, nextOffset } = decodeFrames(buf.subarray(offset));
-    offset += nextOffset;
-    for (const native of events) {
-      if (native.type === 'session') { mapper = makeMapper(native); continue; }
-      if (!mapper) mapper = makeMapper({ id: 'unknown', cwd: null, createdAt: Date.now() });
-      for (const ev of mapper(native)) applyEvent(ev);
+    let st; try { st = fs.statSync(target.file); } catch { return; }
+    if (lastInode !== null && st.ino !== undefined && st.ino !== lastInode) { offset = 0; pending = Buffer.alloc(0); stall = 0; }
+    lastInode = st.ino ?? lastInode;
+    if (st.size < offset) { offset = 0; pending = Buffer.alloc(0); stall = 0; }
+    let gotNewBytes = false;
+    if (st.size !== offset) {                           // 无新字节：零读取；有新字节：只读增量
+      const len = st.size - offset;
+      let fh, n = 0;
+      try {
+        const chunk = Buffer.alloc(len);
+        fh = fs.openSync(target.file, 'r');
+        n = fs.readSync(fh, chunk, 0, len, offset);
+        if (n > 0) {
+          offset += n;                                  // 短读只推进实际读到的字节（不再用 stat 尺寸盲目前跳）
+          pending = Buffer.concat([pending, chunk.subarray(0, n)]);
+          perfIo.readBytes += n; perfIo.readOps++;
+          gotNewBytes = true;
+        }
+      } catch { n = 0; } finally { if (fh !== undefined) { try { fs.closeSync(fh); } catch { /* ignore */ } } }
+      if (gotNewBytes) {
+        const { events, nextOffset } = decodeFrames(pending, stall >= 3);
+        if (nextOffset > 0) { pending = pending.subarray(nextOffset); stall = 0; }
+        else if (events.length || !pending.length) stall = 0;
+        else stall++;   // 尾帧疑似写到一半：留在 pending 等下一段拼齐
+        for (const native of events) {
+          if (native.type === 'session') { mapper = makeMapper(native); continue; }
+          if (!mapper) mapper = makeMapper({ id: 'unknown', cwd: null, createdAt: Date.now() });
+          for (const ev of mapper(native)) applyEvent(ev);
+        }
+      }
     }
+    // B7 修复：offline 边沿判定不再被“无新字节提前 return”跳过（纯静默 45s 后 counters.offline 仍能翻转）
     const offline = Date.now() - state.lastEventAt > 45000;
     if (offline && !state.counters.offline) { state.counters.offline = 1; broadcast(); }
     else if (!offline && state.counters.offline) { state.counters.offline = 0; broadcast(); }
   };
   read();
-  try { fs.watch(target.file, () => read()); } catch {}
-  setInterval(read, 800);
+  // fs.watch 500ms 去抖（一次写入常触发多次事件）；5s 低频兜底校准（watch 不可用/丢事件时兜住，增量读近零成本）
+  let watchTimer = null;
+  try {
+    fs.watch(target.file, () => { if (watchTimer) return; watchTimer = setTimeout(() => { watchTimer = null; read(); }, 500); });
+  } catch { /* ignore */ }
+  setInterval(read, 5000);
   // 心跳广播不在这里：无 DSH 会话日志的机器上本函数会提前返回，2s 刷新（计时/相对时间）
-  // 必须照常推送——见 listen 回调里的 setInterval(broadcast, 2000)（qa M4）。
+  // 必须照常推送——见 listen 回调里的 2s 节拍（qa M4；PERF-1 后为 脏冲刷+轻量 tick）。
 }
 
 // ---------- 输入投递 ----------
@@ -884,6 +1014,7 @@ async function deliverInputInner(text, targetId, targetSource, targetKey = null,
       if (r.settle) Object.defineProperty(item, 'settle', { value: r.settle });
       if (r.ok) { item.status = r.settle ? 'pending' : 'delivered'; item.accepted = true; item.detail = 'via ' + r.via; }
       else if (r.error === 'cli-not-found') { item.status = 'queued'; item.detail = '已入队（' + r.detail + '）：CLI 可用后自动重试投递即新建'; }
+      else if (r.error === 'busy') { item.status = 'queued'; item.autoRetry = true; item.detail = '已入队（' + r.detail + '）'; }   // PERF-5：并发满，20s 自动重试
       else { item.status = 'failed'; item.accepted = !!r.accepted; item.detail = '新建/首条消息失败：' + (r.detail || r.error) + (r.sessionId ? '；会话已存在，请向该会话重发' : ''); }
     } else {
       item.status = 'queued'; item.detail = '新建目标暂无 CLI 通道，已入队';
@@ -904,6 +1035,7 @@ async function deliverInputInner(text, targetId, targetSource, targetKey = null,
     const r = await deliverControl(targetSource, sess, text);
     if (r.settle) Object.defineProperty(item, 'settle', { value: r.settle });
     if (r.ok) { item.status = r.settle ? 'pending' : 'delivered'; item.accepted = true; item.detail = 'via ' + r.via; }
+    else if (r.error === 'busy') { item.status = 'queued'; item.autoRetry = true; item.detail = '已入队（' + r.detail + '）'; }   // PERF-5：并发满，20s 自动重试
     else { item.status = 'failed'; item.accepted = !!r.accepted; item.detail = '投递失败：' + (r.detail || r.error); }
     if (record) upsertInput(item); broadcast(); return item;
   }
@@ -979,7 +1111,8 @@ async function retryInput(id) {
       if (fresh.status === 'delivered') items.splice(index, 1);
       else items[index] = { ...items[index], status: fresh.status, detail: fresh.detail,
         accepted: fresh.accepted, sessionId: fresh.sessionId || items[index].sessionId,
-        targetKey: fresh.targetKey || items[index].targetKey };
+        targetKey: fresh.targetKey || items[index].targetKey,
+        ...(fresh.autoRetry ? { autoRetry: true } : {}) };   // PERF-5：busy 重试后仍满并发 → 保住自动重试标记
       writeInputFile(items);
       state.inputs = items;
       broadcast();
@@ -998,14 +1131,18 @@ function removeInputs(pred) {
   return before.length - keep.length;
 }
 
-/** 自动冲刷「投递即新建」排队项：CLI 不在 PATH 时入队的 new:<source>:<cwd> 条目，
- *  每 20s 重试一次；送达即从队列移除（与手动重发同语义）。 */
+/** 自动冲刷排队项：①「投递即新建」new:<CLI 源>（CLI 不在 PATH 时入队）；
+ * ② PERF-5 并发满入队的条目（autoRetry，含续会话）。送达即从队列移除（与手动重发同语义）。 */
 async function flushNewQueues() {
-  // 只重试「投递即新建」可自动化的目标：new:<CLI 源>（CLI 已安装）。
-  // new:dsh 一类依赖插件/人工的目标不自动重试——此前未区分，每 20s 把不可投递项复制成新
-  // queued 条目，队列自我增殖到 200 上限（2026-10-08 实测）。record:false 保证重试不落新条目。
-  const pending = readInputFile().filter(i => i.status === 'queued' && typeof i.targetKey === 'string' && i.targetKey.startsWith('new:'))
-    .filter(i => { const s = i.targetKey.split(':')[1] || ''; return !!CLI_TARGETS[s] && !!resolveCliBin(s); });
+  // 只重试可自动化的目标：CLI 源。new:dsh 一类依赖插件/人工的目标不自动重试——此前未区分，
+  // 每 20s 把不可投递项复制成新 queued 条目，队列自我增殖到 200 上限（2026-10-08 实测）。
+  // record:false 保证重试不落新条目。
+  const pending = readInputFile().filter(i => i.status === 'queued')
+    .filter(i => {
+      const isNew = typeof i.targetKey === 'string' && i.targetKey.startsWith('new:');
+      const src = isNew ? (i.targetKey.split(':')[1] || '') : (i.source || '');
+      return (isNew || i.autoRetry) && !!CLI_TARGETS[src] && !!resolveCliBin(src);
+    });
   if (!pending.length) return;
   for (const orig of pending) {
     await retryInput(orig.id);
@@ -1214,6 +1351,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/usage/calendar') {
+    // PERF-3：用量视图打开即按需触发重扫（≥60s 陈旧时异步重扫，响应仍回当前缓存；首轮 pending:true）
+    if (!usageCache.busy && (!usageCache.data || Date.now() - usageCache.at > 60_000)) refreshUsage();
     const u = usageCache.data;
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end(JSON.stringify(u ? {
@@ -1222,8 +1361,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/usage') {
-    // 全量用量明细（overview + 每源 byModel/bySession）；?refresh=1 异步触发重扫（响应仍返回当前缓存）
-    if (url.searchParams.get('refresh') === '1') refreshUsage();
+    // 全量用量明细（overview + 每源 byModel/bySession）；?refresh=1 五源强制重扫（P0-2：含 zcode）
+    if (url.searchParams.get('refresh') === '1') refreshUsage(true);
+    else if (!usageCache.busy && (!usageCache.data || Date.now() - usageCache.at > 60_000)) refreshUsage();   // PERF-3：同日历端点的懒触发
     const u = usageCache.data;
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(u ? {
@@ -1370,10 +1510,42 @@ server.listen(PORT, '127.0.0.1', () => {
   try { const n = recoverZcodePendingRollbacks(); if (n) console.log('  ZCode 管道回滚补偿：已恢复 ' + n + ' 个会话的模型选择'); } catch { /* ignore */ }
   refreshAgentStatus();
   setInterval(probePlugin, 30_000);
-  setInterval(refreshAgentStatus, 3000);   // 软件四态（ps + mtime 探测，实测 ~40ms）
-  setInterval(broadcast, 2000);            // 心跳 + 计时刷新（qa M4：不依赖 DSH 会话日志是否存在）
-  refreshUsage();                          // Token 用量：首轮全量后 60s 增量轮询（usage-collect 文件级缓存）
-  setInterval(refreshUsage, 60_000);
-  setInterval(flushNewQueues, 20_000);     // 投递即新建的排队项：CLI 恢复可用后自动重试
+  setInterval(refreshAgentStatus, 15_000);  // PERF-4：软件四态 3s→15s（ps+mtime 探测实测 ~40ms；静默变化走脏标记，不再依赖高频广播兜底）
+  // PERF-1：2s 节拍 = 脏冲刷 + 轻量心跳（qa M4 保留：无 DSH 会话日志也持续有消息流，相对时间客户端本地补）
+  let lastSignalCheck = 0;
+  let lastAutoRefresh = Date.now();   // 锚定启动时刻：首个周期从服务启动起算（锚 0 会让「首个客户端连上的节拍」立即触发——perf-verify P1-a/P2/P3① 窗口被首轮强制重扫污染）
+  setInterval(() => {
+    if (Date.now() - lastSignalCheck >= 5000) { lastSignalCheck = Date.now(); checkWorkspaceSignal(); }   // B4：注册表静默变化自驱（5s 廉价 stat）
+    // 分钟兜底刷新（2026-10-19 用户反馈）：空闲期快照只在脏时重建，而 TTL 目录缓存是惰性的——无人调用就
+    // 永不重扫，不改活动目录 mtime 的变化（CLI 会话收尾状态、用量日历桶计数）会无限滞留（PERF-1 的盲区）。
+    // 有 SSE 客户端时每 REFRESH_MS 强制重扫目录五源 + 触发用量重扫并推全量快照：mini 条状态与日历桶计数
+    // 最迟 ~1 分钟可见；无客户端则跳过，保住 PERF-3「纯空闲零后台扫描」口径（perf-verify P3③）。
+    if (clients.size && Date.now() - lastAutoRefresh >= REFRESH_MS) {
+      lastAutoRefresh = Date.now();
+      forceCatalogRescan = true;   // 消费点在 snapshot()：本轮即重扫五源目录，变化经 stableJson 比较入脏
+      markDirty();
+      if (!usageCache.busy) refreshUsage();   // 完成即 broadcast：客户端按 usage.generatedAt 翻新重拉日历
+    }
+    if (snapshotDirty) broadcast(); else broadcastTick();
+  }, 2000);
+  // PERF-3：用量扫描懒触发——去掉 60s 周期与启动即扫；首轮延后 5min（首屏不阻塞），
+  // 打开用量视图（/api/usage*）按需触发；完成由 refreshUsage 内的 broadcast() 推新。
+  setTimeout(() => { if (!usageCache.data) refreshUsage(); }, 5 * 60_000).unref();
+  setInterval(flushNewQueues, FLUSH_MS);   // 投递即新建 / busy 入队的排队项：CLI 恢复或槽位释放后自动重试
+  // PERF-0（docs/25）：可选资源探针——PET_PERF_PROBE=<file> 时每 5s 追加一行采样
+  //（CPU µs / 读写次数 / RSS）。默认不开启，零行为影响；仅供 scripts/perf-baseline.mjs 基线测量。
+  if (process.env.PET_PERF_PROBE) {
+    const probeTimer = setInterval(() => {
+      try {
+        const ru = process.resourceUsage(), mu = process.memoryUsage();
+        fs.appendFile(process.env.PET_PERF_PROBE, JSON.stringify({
+          t: Date.now(), cpuU: ru.userCPUTime, cpuS: ru.systemCPUTime,
+          fsRead: ru.fsRead, fsWrite: ru.fsWrite, rss: mu.rss,
+          readBytes: perfIo.readBytes, readOps: perfIo.readOps,   // PERF-2 证据：跟随器累计读字节/读次数
+        }) + '\n', () => {});
+      } catch { /* 探针自身失败不影响服务 */ }
+    }, 5000);
+    probeTimer.unref();
+  }
 });
 export { snapshot, deliverInput };

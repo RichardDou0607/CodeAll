@@ -1,0 +1,18 @@
+# v0.1.1 真优化验证（2026-10-18T09:35:42.715Z · node v24.18.0）
+
+✅ PASS  P1-a 空闲心跳为轻量 tick（平均字节 / 全量条数） — 消息 11 条（全量 2、tick 9），平均 2845B/条（窗口 20003ms）
+✅ PASS  P1-b① 事件追加 → 全量推送（脏冲刷不漏推，lastEvent.ts≈追加时刻） — 追加后 505ms 收到含新事件 full；lastEvent.ts-追加时刻=0ms
+✅ PASS  P3① 启动不扫用量（readiness 后即查为 pending） — pending:true（首轮未发生）
+✅ PASS  P3② 用量端点触发重扫并完成 — generatedAt=09:36:16
+✅ PASS  P3③ 70s 内无后台重扫（60s 周期已移除） — generatedAt 稳定 1792316176251
+✅ PASS  P4-a 静默新会话信号驱动可见（四态活动目录 mtime 15s 轮询 + 2s 节拍，8～18s 出现在 SSE 全量快照） — 10.8s 可见（SSE-only）
+✅ PASS  P4-a2 注册表静默变化 → SSE 全量推送（workspace.json title 改写 ≤10s 可见） — 1.7s 可见（SSE-only，B4）
+✅ PASS  P2-diff 增量读：8MB 日志 20s 空闲 readBytes 增量 <1MB（旧实现线性放大）+ CPU 不随体积涨 — 1MB CPU=53ms/20s，8MB CPU=44ms/20s，差 -9ms（阈 400）；8MB 空闲 20s readBytes 增量 0B（readOps 0，阈 1MB，旧实现量级≈8MB×25≈200MB）
+✅ PASS  P2-large 增量读不随体积放大：64MB（>50MB 档）日志 20s 空闲 readBytes 增量 <1KB（旧整文件读推算 GB 量级/窗口） — 64MB 空闲 20s readBytes 增量 0B（readOps 0，阈 1KB）；CPU 44ms/20s；旧实现推算 ≈64MB×25≈1.6GB（800ms 定时整读）+ watch 双触发 GB 量级（非实测）
+✅ PASS  P2-correct 跟随正确性：半帧跨追加完整解码 + 截断轮转重读 + 坏帧重同步 + 乱序不丢不回退 — 半帧补齐 ✓ / 轮转重读 ✓ / 坏帧后合法帧 ✓ / 乱序帧入机 ✓
+✅ PASS  P4-b ZCode 空闲间隔显著增长（gaps 最大 ≥10× 基准）+ 取到新行后回基准（下一行 ≤600ms） — 空闲 5s 6 轮，间隔 [101,201,402,802,1601]ms（最大 1601）；新行1 已取到；回基准 backoff=100ms/实际间隔 100ms；新行2 209ms 取到
+✅ PASS  P6-a 指纹去重：同数据 touch 不重放、行内 UPDATE 重放 — 首播 1 → touch 后 1（应相等）→ 改数据后 2（应增加）
+✅ PASS  P6-b 指纹表瘦身：2.5 万行×6KB 差分内存（live heapUsed 增量 <8MB，rows===25000） — live heapUsed 基线 4.50MB → 挂 follower 5.37MB，增量 0.86MB（阈 8；旧全文本留存 ≈+30MB 应失败）；RSS 参考 39.1MB（非判据：V8 高水位不回缩）；follower rows=25000（应 25000）
+✅ PASS  P5 无头并发上限 2 + 台账 + busy 入队（test-headless-cap） — PERF-5 并发上限：默认 2 在途封顶、busy 入队 autoRetry 且不 spawn、退出即释放台账；PET_FLUSH_MS=1500 下续会话 busy 条目被 flush 自动重投、跨重启仍重投 —— 全部通过
+
+# 汇总：14/14 通过，耗时 282s

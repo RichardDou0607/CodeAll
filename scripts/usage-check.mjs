@@ -196,14 +196,144 @@ check('UCB4', 'Codex：重复上报（累计值不动）不计 token 但仍计�
     && cx2.stats.duplicateReports === 1,
   { days: [...cx2.byDay.entries()].map(([k, u]) => [k, u.input, u.requests]), dup: cx2.stats.duplicateReports, mism: cx2.stats.dayIdentityMismatched });
 
+// ================================================================ UC-B2：Codex 尾读（第 4b 步）
+{
+  const eqScan = (a, b) => JSON.stringify(a.totals) === JSON.stringify(b.totals) && JSON.stringify([...a.byDay]) === JSON.stringify([...b.byDay]);
+  // ① 追加 token 事件 → Δ累计续账
+  fs.appendFileSync(cxFile, cxTok(noon(5), { input_tokens: 2600, cached_input_tokens: 1100, cache_write_input_tokens: 0, output_tokens: 40 }, { input_tokens: 600, cached_input_tokens: 200, cache_write_input_tokens: 0, output_tokens: 15 }) + '\n');
+  const cx3 = await scanCodexUsage({ root: CX_ROOT });
+  const EXP3 = { input: CX_EXP.input + 600, output: CX_EXP.output + 15, cacheRead: CX_EXP.cacheRead + 200, cacheWrite: 0, requests: CX_EXP.requests + 1 };
+  check('UCB2-a', 'Codex 尾读：追加 token 事件 → Δ累计续账（resumed=1、== 全量重读）',
+    cx3.stats.resumedFiles === 1 && eqUsage(cx3.totals, EXP3) && eqScan(cx3, await scanCodexUsage({ root: CX_ROOT, refresh: true })),
+    { totals: cx3.totals, resumed: cx3.stats.resumedFiles });
+  // ② fork 子文件累计跨界：prevTotal 从 parserState 延续——last(999) ≠ Δ(600)，丢状态必多计
+  const childFile = path.join(CX2_DIR, 'rollout-2026-10-09T00-01-00-' + CX2_CHILD + '.jsonl');
+  fs.appendFileSync(childFile, cx2Tok(noon(2), { input_tokens: 3200, cached_input_tokens: 1300, cache_write_input_tokens: 0, output_tokens: 50 }, { input_tokens: 999, cached_input_tokens: 200, cache_write_input_tokens: 0, output_tokens: 10 }) + '\n');
+  const cx2b = await scanCodexUsage({ root: CX2_ROOT });
+  const EXP2B = { input: CX2_EXP.input + 600, output: CX2_EXP.output + 10, cacheRead: CX2_EXP.cacheRead + 200, cacheWrite: 0, requests: CX2_EXP.requests + 1 };
+  check('UCB2-b', 'Codex 尾读：fork 累计跨 checkpoint 边界（prevTotal 延续，按 Δ=600 而非 last=999）',
+    eqUsage(cx2b.totals, EXP2B) && eqScan(cx2b, await scanCodexUsage({ root: CX2_ROOT, refresh: true })),
+    { totals: cx2b.totals });
+  // ③ 半行（无 \n）→ 不消费；补齐 → 吸收
+  const partialLine = cxTok(noon(6), { input_tokens: 4000, cached_input_tokens: 1500, cache_write_input_tokens: 0, output_tokens: 60 }, { input_tokens: 100, cached_input_tokens: 50, cache_write_input_tokens: 0, output_tokens: 5 });
+  fs.appendFileSync(cxFile, partialLine.slice(0, 40));
+  const cxHalf = await scanCodexUsage({ root: CX_ROOT });
+  check('UCB2-c', 'Codex 尾读：半行不消费（总量不变，下轮补齐后吸收）',
+    eqUsage(cxHalf.totals, EXP3),
+    { totals: cxHalf.totals });
+  fs.appendFileSync(cxFile, partialLine.slice(40) + '\n');
+  const cxHealed = await scanCodexUsage({ root: CX_ROOT });
+  const EXP3H = { input: EXP3.input + 1400, output: EXP3.output + 20, cacheRead: EXP3.cacheRead + 400, cacheWrite: 0, requests: EXP3.requests + 1 };
+  check('UCB2-d', 'Codex 尾读：半行补齐吸收（== 全量重读）',
+    eqUsage(cxHealed.totals, EXP3H) && eqScan(cxHealed, await scanCodexUsage({ root: CX_ROOT, refresh: true })),
+    { totals: cxHealed.totals });
+  // ④ 同路径替换成更大文件（rename → inode/anchor 失配）→ 整读回退不双计
+  const swapLine = cxTok(noon(7), { input_tokens: 5000, cached_input_tokens: 1800, cache_write_input_tokens: 0, output_tokens: 80 }, { input_tokens: 1, cached_input_tokens: 1, cache_write_input_tokens: 0, output_tokens: 1 }) + '\n';
+  const tmp = cxFile + '.swap';
+  fs.writeFileSync(tmp, Buffer.concat([fs.readFileSync(cxFile), Buffer.from(swapLine)]));
+  fs.renameSync(tmp, cxFile);
+  const cxRot = await scanCodexUsage({ root: CX_ROOT });
+  const EXP3R = { input: EXP3H.input + 1000, output: EXP3H.output + 20, cacheRead: EXP3H.cacheRead + 300, cacheWrite: 0, requests: EXP3H.requests + 1 };
+  check('UCB2-e', 'Codex 尾读：同路径替换（inode 变）→ 整读回退且账目精确',
+    eqUsage(cxRot.totals, EXP3R) && eqScan(cxRot, await scanCodexUsage({ root: CX_ROOT, refresh: true })),
+    { totals: cxRot.totals });
+}
+
 check('UCC1', 'Kimi：每请求累加（含子代理 wire 并入同会话）+ model 别名取尾段 + sid=state.json.id + composer→desktop',
   eqUsage(km1.totals, KM_EXP) && eqUsage(km1.bySession.get('km-sess-1'), KM_EXP) && km1.byModel.get('k3').requests === 2 && !!km1.byModel.get('flash') && km1.byVariantFlat.get('desktop') && eqUsage(km1.byVariantFlat.get('desktop'), KM_EXP),
   { got: km1.totals, models: [...km1.byModel.entries()].map(([m, u]) => [m, u.requests]) });
 check('UCC2', 'Kimi：半扫会话不落账护栏不存在误触发（本 fixture 全量通过，sessions=1）', km1.stats.sessions === 1 && km1.stats.partial === false, { sessions: km1.stats.sessions });
 
+// ================================================================ UC-C3：Kimi 尾读（第 4b 步）
+{
+  const wireMain = path.join(kmSessDir, 'agents', 'main', 'wire.jsonl');
+  const eqScan = (a, b) => JSON.stringify(a.totals) === JSON.stringify(b.totals) && JSON.stringify([...a.callsByDay]) === JSON.stringify([...b.callsByDay]);
+  const toolLine = (uuid, name) => JSON.stringify({ type: 'context.append_loop_event', time: noon(1), event: { type: 'tool.call', uuid, name } });
+  // ① 追加 usage + 新 tool call → 尾读吸收
+  fs.appendFileSync(wireMain, JSON.stringify({ type: 'usage.record', agentId: 'main', model: 'kimi-code/k3', usageScope: 'turn', time: noon(1), usage: { inputOther: 70, output: 7, inputCacheRead: 20, inputCacheCreation: 0 } }) + '\n');
+  fs.appendFileSync(wireMain, toolLine('kx-1', 'mcp__demo__run') + '\n');
+  const km2 = await scanKimiUsage({ root: KM_ROOT });
+  const EXP2 = { input: KM_EXP.input + 70, output: KM_EXP.output + 7, cacheRead: KM_EXP.cacheRead + 20, cacheWrite: 0, requests: KM_EXP.requests + 1 };
+  const dayKey = (() => { const d = new Date(noon(1)); return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate(); })();
+  const toolsAfter1 = (km2.callsByDay.get(dayKey) || { toolCalls: 0 }).toolCalls;
+  check('UCC3-a', 'Kimi 尾读：追加 usage/tool → 吸收（resumed=1、== 全量重读）',
+    km2.stats.resumedFiles >= 1 && eqUsage(km2.totals, EXP2) && eqScan(km2, await scanKimiUsage({ root: KM_ROOT, refresh: true })),
+    { totals: km2.totals, tools: toolsAfter1 });
+  // ② 同 uuid 重报跨尾读边界 → seen 延续，toolCalls 不多计
+  fs.appendFileSync(wireMain, toolLine('kx-1', 'mcp__demo__run') + '\n');
+  const km3 = await scanKimiUsage({ root: KM_ROOT });
+  const toolsAfter2 = (km3.callsByDay.get(dayKey) || { toolCalls: 0 }).toolCalls;
+  check('UCC3-b', 'Kimi 尾读：seenCallIds 跨边界延续（重复 uuid 不多计 toolCalls）',
+    toolsAfter2 === toolsAfter1 && eqScan(km3, await scanKimiUsage({ root: KM_ROOT, refresh: true })),
+    { before: toolsAfter1, after: toolsAfter2 });
+}
+
 check('UCD1', 'DSH：多帧 zstd 解压 + v3/v4 并存只取最高代（v3 的 99999 不计）+ session 首行 id + 恒等式零失配',
   eqUsage(dsh1.totals, DSH_EXP) && eqUsage(dsh1.bySession.get('dsh-sess-1'), DSH_EXP) && dsh1.stats.identityMismatched === 0 && dsh1.stats.files === 1,
   { got: dsh1.totals, files: dsh1.stats.files, identityMismatched: dsh1.stats.identityMismatched, zstd: zstdOk });
+
+// ================================================================ UC-D2：DSH 尾读（第 4a 步）
+if (zstdOk) {
+  const frame = (lines) => zlib.zstdCompressSync(Buffer.from(lines.join('\n') + '\n'));
+  const file4 = path.join(dshDir, 'session.v4.jsonl.zstd');
+  const normTotals = (sc) => JSON.stringify(sc.totals) + JSON.stringify([...sc.byDay.entries()].sort((a, b) => a[0] - b[0])) + JSON.stringify(sc.stats.usageLines);
+  const base = await scanDshUsage({ root: DSH_ROOT, refresh: true });
+  // ① 追加完整帧（新 usage + 新 tool call）→ 尾读续账 == 全量重读
+  const msg4 = dshMsg(4, noon(0), { inputTokens: 777, outputTokens: 77, cacheReadTokens: 7, cacheWriteTokens: 0, totalTokens: 861 });
+  const call4 = JSON.stringify({ type: 'tool/call', time: noon(0), data: { callId: 'tc-1', toolName: 'mcp__x__y' } });
+  fs.appendFileSync(file4, frame([msg4, call4]));
+  const grown = await scanDshUsage({ root: DSH_ROOT });
+  const grownFull = await scanDshUsage({ root: DSH_ROOT, refresh: true });
+  const EXP2 = { input: DSH_EXP.input + 777, output: DSH_EXP.output + 77, cacheRead: DSH_EXP.cacheRead + 7, cacheWrite: DSH_EXP.cacheWrite, requests: DSH_EXP.requests + 1 };
+  check('UCD2-a', 'DSH 尾读：追加完整帧 → 续读吸收（resumedFiles=1、readBytes<corpus、== 全量重读）',
+    grown.stats.resumedFiles === 1 && grown.stats.readBytes < grown.stats.corpusBytes
+      && eqUsage(grown.totals, EXP2) && normTotals(grown) === normTotals(grownFull),
+    { resumed: grown.stats.resumedFiles, readBytes: grown.stats.readBytes, corpus: grown.stats.corpusBytes, totals: grown.totals });
+  // ② 半写帧（截断 8B → 解压得 ""）→ 不消费不推进、总量不变；补齐剩余字节 → 吸收
+  const msg5 = dshMsg(5, noon(0), { inputTokens: 555, outputTokens: 55, cacheReadTokens: 5, cacheWriteTokens: 0, totalTokens: 615 });
+  const f5 = frame([msg5]);
+  fs.appendFileSync(file4, f5.subarray(0, f5.length - 8));
+  const half = await scanDshUsage({ root: DSH_ROOT });
+  check('UCD2-b', 'DSH 尾读：半写末帧不消费（总量不变，下轮再试）',
+    eqUsage(half.totals, EXP2) && half.stats.resumedFiles === 1,
+    { totals: half.totals });
+  fs.appendFileSync(file4, f5.subarray(f5.length - 8));
+  const healed = await scanDshUsage({ root: DSH_ROOT });
+  const EXP3 = { input: EXP2.input + 555, output: EXP2.output + 55, cacheRead: EXP2.cacheRead + 5, cacheWrite: EXP2.cacheWrite, requests: EXP2.requests + 1 };
+  check('UCD2-c', 'DSH 尾读：半写帧补齐后吸收（== 全量重读）',
+    eqUsage(healed.totals, EXP3) && normTotals(healed) === normTotals(await scanDshUsage({ root: DSH_ROOT, refresh: true })),
+    { totals: healed.totals });
+  // ③ 同路径替换成更大文件（rename，inode 变）→ 尾读锚点失效 → 整读回退，不多计
+  const bigger = Buffer.concat([fs.readFileSync(file4), frame([dshMsg(6, noon(0), { inputTokens: 111, outputTokens: 11, cacheReadTokens: 1, cacheWriteTokens: 0, totalTokens: 123 })])]);
+  const tmpFile = file4 + '.swap';
+  fs.writeFileSync(tmpFile, bigger); fs.renameSync(tmpFile, file4);
+  const rot = await scanDshUsage({ root: DSH_ROOT });
+  const EXP4 = { input: EXP3.input + 111, output: EXP3.output + 11, cacheRead: EXP3.cacheRead + 1, cacheWrite: EXP3.cacheWrite, requests: EXP3.requests + 1 };
+  check('UCD2-d', 'DSH 尾读：同路径替换（inode 变）→ 整读回退且账目精确（不双计）',
+    eqUsage(rot.totals, EXP4) && normTotals(rot) === normTotals(await scanDshUsage({ root: DSH_ROOT, refresh: true })),
+    { totals: rot.totals });
+  // ⑤ 工具调用去重跨尾读边界：同 callId 再报一次不多计
+  fs.appendFileSync(file4, frame([JSON.stringify({ type: 'tool/call', time: noon(0), data: { callId: 'tc-1', toolName: 'mcp__x__y' } })]));
+  const dupCall = await scanDshUsage({ root: DSH_ROOT });
+  const toolDayKey = (() => { const d = new Date(noon(0)); return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate(); })();
+  const before = rot.callsByDay.get(toolDayKey) || { toolCalls: 0, mcpCalls: 0 };
+  const after = dupCall.callsByDay.get(toolDayKey) || { toolCalls: 0, mcpCalls: 0 };
+  check('UCD2-e', 'DSH 尾读：seenCallIds 跨边界延续（重复 callId 不多计 toolCalls）',
+    before.toolCalls === after.toolCalls,
+    { before: before.toolCalls, after: after.toolCalls });
+  // ⑥ 尾读状态跨重启：export → reset（模拟重启）→ load → 追加帧 → 仍走续读路径
+  const { exportCheckpoint, loadCheckpoint, resetCaches } = await import('../adapters/usage-collect.mjs');
+  const cpD = exportCheckpoint();
+  resetCaches();
+  const sumD = loadCheckpoint(JSON.parse(JSON.stringify(cpD)));
+  fs.appendFileSync(file4, frame([dshMsg(7, noon(0), { inputTokens: 222, outputTokens: 22, cacheReadTokens: 2, cacheWriteTokens: 0, totalTokens: 246 })]));
+  const afterRestart = await scanDshUsage({ root: DSH_ROOT });
+  const EXP5 = { input: EXP4.input + 222, output: EXP4.output + 22, cacheRead: EXP4.cacheRead + 2, cacheWrite: EXP4.cacheWrite, requests: EXP4.requests + 1 };
+  const ref = await scanDshUsage({ root: DSH_ROOT, refresh: true });
+  check('UCD2-f', 'DSH 尾读状态随检查点跨重启（load 后追加帧仍续读、账目==全量重读）',
+    sumD.dropped === 0 && afterRestart.stats.resumedFiles === 1 && eqUsage(afterRestart.totals, EXP5) && normTotals(afterRestart) === normTotals(ref),
+    { dropped: sumD.dropped, resumed: afterRestart.stats.resumedFiles, totals: afterRestart.totals });
+}
 
 {
   // UC-E 汇总层：命中率 + ranges（合成 now = fixture 生成时刻）
@@ -244,6 +374,45 @@ check('UCD1', 'DSH：多帧 zstd 解压 + v3/v4 并存只取最高代（v3 的 9
   check('UCE4', 'serializeUsageScan 结构（byDay/byVariant/inputIncludesCache/identityMismatched）',
     !!ser.byDay && Object.keys(ser.byDay).length === 2 && ser.inputIncludesCache === false && ser.byVariant.length === 1 && ser.byVariant[0].variant === null,
     { byDay: Object.keys(ser.byDay), inputIncludesCache: ser.inputIncludesCache });
+}
+
+// ================================================================ UC-G：检查点（跨重启持久化，第 2 步 PERF-7）
+{
+  const { exportCheckpoint, loadCheckpoint, resetCaches } = await import('../adapters/usage-collect.mjs');
+  // 等价性口径：排除轮次相关字段（generatedAt/elapsedMs/cachedFiles/readBytes/corpusBytes）
+  const norm = (sc) => { const c = JSON.parse(JSON.stringify(serializeUsageScan(sc))); delete c.generatedAt; delete c.elapsedMs; delete c.stats.cachedFiles; delete c.stats.readBytes; delete c.stats.corpusBytes; return c; };
+  const fresh = await scanClaudeUsage({ root: CC_ROOT, refresh: true });     // 全量基准
+  const cp = exportCheckpoint();
+  check('UCG1', '检查点导出：JSON 可序列化、含版本号与四源 section',
+    (() => { const j = JSON.parse(JSON.stringify(cp)); return typeof j.version === 'number' && Object.keys(j.sources).length === 4 && Object.keys(j.sources['claude-code'] || {}).length >= 2; })(),
+    { sources: Object.keys(cp.sources || {}) });
+  resetCaches();
+  const sum = loadCheckpoint(JSON.parse(JSON.stringify(cp)));
+  const resumed = await scanClaudeUsage({ root: CC_ROOT });
+  check('UCG2', '重启模拟：清缓存→载检查点→重扫，归一化结果与全量基准逐字段一致且全命中（readBytes=0）',
+    sum.dropped === 0 && resumed.stats.cachedFiles === resumed.stats.files && resumed.stats.readBytes === 0
+      && JSON.stringify(norm(fresh)) === JSON.stringify(norm(resumed)),
+    { loaded: sum.loaded['claude-code'], cached: resumed.stats.cachedFiles + '/' + resumed.stats.files, equal: JSON.stringify(norm(fresh)) === JSON.stringify(norm(resumed)) });
+  // 文件被删：条目残留在检查点里无害（扫描时 stat 失败走 skipped，不计入结果）
+  const ghost = JSON.parse(JSON.stringify(cp)); const gk = Object.keys(ghost.sources['claude-code'])[0];
+  ghost.sources['claude-code'][path.join(TMP, 'ghost', 'deleted.jsonl')] = ghost.sources['claude-code'][gk];
+  resetCaches();
+  const sumGhost = loadCheckpoint(ghost);
+  const afterGhost = await scanClaudeUsage({ root: CC_ROOT });
+  check('UCG3', '已删文件的检查点条目无害（加载成功、扫描 skipped 不计）',
+    sumGhost.dropped === 0 && afterGhost.stats.files === fresh.stats.files && JSON.stringify(norm(fresh)) === JSON.stringify(norm(afterGhost)),
+    { files: afterGhost.stats.files + '/' + fresh.stats.files });
+  // 版本不符整体作废 + 坏条目只丢该条 + 8MB 护栏
+  const badVer = loadCheckpoint({ ...JSON.parse(JSON.stringify(cp)), version: 99999 });
+  const badEnt = JSON.parse(JSON.stringify(cp)); badEnt.sources['claude-code'][gk] = { size: 'not-a-number', mtimeMs: 1 };
+  resetCaches();
+  const sumBad = loadCheckpoint(badEnt);
+  check('UCG4', '版本不符整体作废 + 单条目形状异常只丢该条',
+    badVer.reason === 'version-mismatch' && sumBad.dropped === 1 && sumBad.loaded['claude-code'] === sum.loaded['claude-code'] - 1,
+    { badVerReason: badVer.reason, dropped: sumBad.dropped });
+  check('UCG5', '8MB 护栏：超限导出返回 null（调用方跳过写入）',
+    exportCheckpoint({ maxBytes: 1 }) === null && exportCheckpoint({ maxBytes: 8 * 1024 * 1024 }) !== null,
+    { tiny: exportCheckpoint({ maxBytes: 1 }) === null });
 }
 
 // ================================================================ 报告与清理
