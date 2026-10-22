@@ -562,7 +562,7 @@ function pct(r){return (r==null||isNaN(r))?'—':(r*100).toFixed(1)+'%'}
 const INPUT_INCLUDES_CACHE={codex:1,zcode:1};
 function promptOf(t,source){const x=t||{};const v=Number(x.promptTokens);if(Number.isFinite(v))return v;return Number(x.input||0)+(INPUT_INCLUDES_CACHE[source]?0:Number(x.cacheRead||0))}
 function totalOf(t,source){const x=t||{};const v=Number(x.totalTokens);if(Number.isFinite(v))return v;return promptOf(x,source)+Number(x.cacheWrite||0)+Number(x.output||0)}
-function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);if(s.usage&&(s.usage.input||s.usage.output))p.push('tok 全量 '+fmtTok(totalOf(s.usage,s.source||'dsh'))+'（in '+fmtTok(s.usage.input)+'/out '+fmtTok(s.usage.output)+'）');return p.join(' · ')}
+function metaLine(s){const p=[];if(s.agentName)p.push(s.agentName);if(s.model)p.push(s.model);if(s.reasoningEffort)p.push('th:'+s.reasoningEffort);if(s.usage&&(s.usage.input||s.usage.output)){const e=(s.source==='qoder'||s.source==='cursor');p.push((e?'≈':'')+'tok 全量 '+fmtTok(totalOf(s.usage,s.source||'dsh'))+(e?'（估算）':'')+'（in '+fmtTok(s.usage.input)+'/out '+fmtTok(s.usage.output)+'）')}return p.join(' · ')}
 const USAGE_RANGES=[['all','全部'],['today','当日'],['d7','7 日内'],['d30','30 日内']];
 const CALENDAR_METRICS=[
   ['tokens','Token','chart-no-axes-column','Token'],
@@ -801,12 +801,13 @@ function usageHtml(us,now){
     const d=view.bySource&&view.bySource[src];
     if(!d){ if(src==='qoder')h+='<tr><td>'+esc(srcLabel({source:src}))+'</td><td colspan="7" style="color:var(--dim)">暂不可用：Qoder 本地数据（segments/sqlite）不可读</td></tr>';
       else if(src==='cursor')h+='<tr><td>'+esc(srcLabel({source:src}))+'</td><td colspan="7" style="color:var(--dim)">暂不可用：Cursor 本地数据库（state.vscdb）不可读</td></tr>'; continue; }
-    if(d&&d.tokensUnavailable&&src!=='dsh')h+='<tr style="color:var(--dim)"><td colspan="8" style="font-size:11px;padding:2px 8px">'+esc(srcLabel({source:src}))+'：请求级计数（'+fmtTok(d.totals?.requests||0)+' 次请求真实计入）；token 真值在云端，本地不落盘——不虚估</td></tr>';
+    if(d&&d.estimatedTokens&&src!=='dsh')h+='<tr style="color:var(--dim)"><td colspan="8" style="font-size:11px;padding:2px 8px">'+esc(srcLabel({source:src}))+'：请求为真实计数（'+fmtTok(d.totals?.requests||0)+' 次）；token 为包络估算（≈ 前缀·随回合内迭代增长，误差大——真值在厂商云端，本地经五轮穷尽确认不落盘）</td></tr>';
     const vs=(SRC_SPLIT[src]&&d.variants&&d.variants.length)?d.variants:[{variant:null,totals:d.totals}];
-    const noTok=!!d.tokensUnavailable;   // Qoder/Cursor：token 真值在云端（本地不落盘，实测字段恒 0）——列示「—」不冒充 0
+    const est=!!d.estimatedTokens, noTok=!!d.tokensUnavailable&&!est;   // 估算模式：≈ 前缀（dim）；未估算时列「—」
+    const et=(x)=>est&&Number(x)>0?'<span style="color:var(--dim)">≈'+fmtTok(x)+'</span>':(noTok?'—':fmtTok(x));
     for(const v of vs){
       const t2=v.totals||{};
-      h+='<tr><td>'+esc(srcLabel({source:src,variant:v.variant}))+'</td><td>'+(noTok?'—':fmtTok(promptOf(t2,src)))+'</td><td>'+(noTok?'—':fmtTok(t2.cacheRead))+'</td><td>'+(noTok?'—':fmtTok(t2.cacheWrite))+'</td><td>'+(noTok?'—':fmtTok(t2.output))+'</td><td>'+(noTok?'—':pct(t2.hitRate))+'</td><td>'+fmtTok(t2.requests)+'</td><td style="color:var(--dim)">'+(v.variant?'—':((d.models||[]).length+(d.partial?' · 部分':'')))+'</td></tr>';
+      h+='<tr><td>'+esc(srcLabel({source:src,variant:v.variant}))+(est?' <span style="color:var(--dim);font-size:11px">估</span>':'')+'</td><td>'+et(promptOf(t2,src))+'</td><td>'+(est||noTok?'—':fmtTok(t2.cacheRead))+'</td><td>'+(est||noTok?'—':fmtTok(t2.cacheWrite))+'</td><td>'+et(t2.output)+'</td><td>'+(est||noTok?'—':pct(t2.hitRate))+'</td><td>'+fmtTok(t2.requests)+'</td><td style="color:var(--dim)">'+(v.variant?'—':((d.models||[]).length+(d.partial?' · 部分':'')))+'</td></tr>';
     }
   }
   h+='</table></div>';
@@ -815,7 +816,7 @@ function usageHtml(us,now){
     const d=view.bySource&&view.bySource[src];if(!d)continue;
     h+='<div class="u-src-h">'+esc(srcLabel({source:src}))+' · '+(d.partial?'<span style="color:var(--wait)">部分扫描（下轮续）</span>':(d.models||[]).length+' 个模型')+'</div>'+uTable(d.models||[],false,src);
   }
-  h+='<div class="u-note">Token 合计不含 Qoder/Cursor（其 token 计费在云端，本地不落盘——表内「—」即此口径；两源的请求/模型/工具调用为本地真实数据已计入请求列与合计）。生成于 '+(us.generatedAt?new Date(us.generatedAt).toLocaleString('zh-CN'):'—')+'（60s 增量缓存）· 时间窗按本地自然日归桶 · 命中率=cacheRead/(fresh+cacheRead)，fresh 按源语义折算（Codex/ZCode 的 input 含 cache）· 形态：Claude=entrypoint / Codex=originator / Kimi=clientMetadata · OpenCode 的 input 不含 cache（CLI/桌面共用库不拆形态）· Qoder/Cursor 为请求级计数（请求/模型/工具调用真实；token 真值在云端，本地 token 字段实测恒 0——不虚估）</div>';
+  h+='<div class="u-note">Token 合计为精确口径（不含 Qoder/Cursor——其 token 计费在云端、本地不落盘；两源表内 ≈ 前缀为包络估算值，请求/模型/工具调用为本地真实数据已计入请求列与合计）。生成于 '+(us.generatedAt?new Date(us.generatedAt).toLocaleString('zh-CN'):'—')+'（60s 增量缓存）· 时间窗按本地自然日归桶 · 命中率=cacheRead/(fresh+cacheRead)，fresh 按源语义折算（Codex/ZCode 的 input 含 cache）· 形态：Claude=entrypoint / Codex=originator / Kimi=clientMetadata · OpenCode 的 input 不含 cache（CLI/桌面共用库不拆形态）· Qoder/Cursor 为请求级计数（请求/模型/工具调用真实；token 真值在云端，本地 token 字段实测恒 0——不虚估）</div>';
   return h;
 }
 function projNameOf(s,projList){

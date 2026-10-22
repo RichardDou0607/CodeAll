@@ -144,7 +144,7 @@ export function parseQoderSegmentUsage(file) {
       let j; try { j = JSON.parse(l); } catch { continue; }
       const ts = Date.parse(j.ts || '');
       if (j.type === 'model.response.completed') {
-        out.push({ ts: Number.isFinite(ts) ? ts : Date.now(), sessionId, model: typeof j.data?.model === 'string' ? j.data.model : null, requests: 1, toolCalls: 0 });
+        out.push({ ts: Number.isFinite(ts) ? ts : Date.now(), sessionId, model: typeof j.data?.model === 'string' ? j.data.model : null, requests: 1, toolCalls: 0, requestIndex: Number.isFinite(j.data?.request_index) ? j.data.request_index : 1 });
       } else if (j.type === 'tool.execution.finished') {
         out.push({ ts: Number.isFinite(ts) ? ts : Date.now(), sessionId, model: null, requests: 0, toolCalls: 1 });
       }

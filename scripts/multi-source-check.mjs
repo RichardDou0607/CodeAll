@@ -519,12 +519,22 @@ let cx;
     }
     // 单位回归（2026-10-22 用户报障「明显不正确」）：计数基元必须是 model.response.completed
     // （一回合含多次 agentic 模型请求 + fork 后台代理不写 turn 边界——按回合计数曾把量级压低 14×）
-    check('MU12', 'Qoder 用量：请求级真实计数（基元=model.response.completed，单位=模型请求；token 真值在云端不虚估）',
-      qd?.degraded !== true && (qd?.totals?.requests ?? 0) >= 159 && (qd?.totals?.input ?? 0) === 0 && qd?.tokensUnavailable === true && [...qd.byModel.entries()].every(([k]) => /model/.test(k)) && [...qd.byModel.values()].reduce((a, u) => a + u.requests, 0) === (qd?.totals?.requests ?? -1),
+    check('MU12', 'Qoder 用量：请求级真实计数（基元=model.response.completed，单位=模型请求；token 为估算或零，真值在云端）',
+      qd?.degraded !== true && (qd?.totals?.requests ?? 0) >= 159 && qd?.tokensUnavailable === true && (qd?.estimatedTokens ? (qd?.totals?.input ?? 0) > 0 : (qd?.totals?.input ?? 0) === 0) && [...qd.byModel.entries()].every(([k]) => /model/.test(k)) && [...qd.byModel.values()].reduce((a, u) => a + u.requests, 0) === (qd?.totals?.requests ?? -1),
       { requests: qd?.totals?.requests, models: [...qd.byModel.entries()].map(([k, u]) => k + ':' + u.requests), toolCalls: [...qd.callsByDay.values()].reduce((a, c) => a + c.toolCalls, 0) });
-    check('MU13', 'Cursor 用量：请求级真实计数（assistant 泡；token 真值在云端不虚估）',
-      cs?.degraded !== true && (cs?.totals?.requests ?? 0) >= 1 && (cs?.totals?.input ?? 0) === 0 && cs?.tokensUnavailable === true,
+    check('MU13', 'Cursor 用量：请求级真实计数（assistant 泡；token 真值在云端）',
+      cs?.degraded !== true && (cs?.totals?.requests ?? 0) >= 1 && cs?.tokensUnavailable === true,
       { requests: cs?.totals?.requests, toolCalls: [...cs.callsByDay.values()].reduce((a, c) => a + c.toolCalls, 0) });
+    // 估算模式（用户定向 2026-10-22）：≈ 前缀呈现、绝不并入精确合计
+    {
+      const ov = usageOverview({ qd, cs }, Date.now());
+      const estOn = qd?.estimatedTokens === true && (qd?.totals?.input ?? 0) > 0 && (qd?.totals?.output ?? 0) > 0;
+      const isolated = ov.totals.input === 0 && ov.totals.output === 0 && ov.totals.requests === (qd?.totals?.requests ?? 0) + (cs?.totals?.requests ?? 0)
+        && !(ov.byModel || []).some((m) => /dfmodel|qfmodel|模型未落盘/.test(m.model));
+      check('MU14', '估算模式：Qoder/Cursor token 为包络估算（≈ 呈现；in 随 requestIndex 增长）且不并入精确合计',
+        estOn && isolated && ov.bySource?.qoder?.estimated === true && ov.bySource?.cursor?.estimated === true,
+        { qdIn: qd?.totals?.input, qdOut: qd?.totals?.output, ovTotalsIn: ov.totals.input, isolated });
+    }
   }
 
   // MU7 DSH：① 解析恒等式（∑(input+output+cacheRead+cacheWrite) = ∑totalTokens，全文件零失配）；

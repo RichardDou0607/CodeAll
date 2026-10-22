@@ -1186,9 +1186,23 @@ export async function scanOpencodeUsage(opts = {}) {
 // 客户端不落盘 per-request token 计数，2026-10-22 本机实测）——如实降级，不虚估。
 // ---------------------------------------------------------------------------
 
+// 估算模式（用户定向 2026-10-22「使用估算模式」）：Qoder/Cursor 的 token 真值经五轮穷尽
+// 扫荡确认不在本地（云端计费）。以下为**文档化包络假设**——基于真实信号调制：
+//   Qoder：一回合内第 i 次请求 in ≈ base + i×step（agentic 循环上下文逐迭代增长；事件自带
+//          request_index 真值）；out 恒定包络。chat_model_preferences 实测 context_window=1M，
+//          按实用 200k 截断。
+//   Cursor：无模型/迭代信息（泡内不落盘），统一包络。
+// 纪律：估算值 UI 带 ≈ 前缀、绝不并入精确合计（usageOverview 跳过 estimated 源的 token 合并，
+//       只并真实的 requests）；PET_USAGE_ESTIMATE=0 可整体关闭（退回纯请求级计数）。
+const ESTIMATE_ENABLED = process.env.PET_USAGE_ESTIMATE !== '0';
+const EST_PARAMS = {
+  qoder: { baseIn: 6_000, stepIn: 2_500, capIn: 200_000, out: 700 },
+  cursor: { in: 9_000, out: 550 },
+};
+
 // Qoder：token 真值在云端（segments 的 token 字段实测恒 0：1190 个 model.response.completed
-// + 6 个 fork.agent.completed 全零；context_usage.tokenCountsAvailable=false）——不虚估；
-// 请求/模型/工具调用是本地真实数据（segments turn 事件），如实计入。文件级增量（size+mtime）。
+// + 6 个 fork.agent.completed 全零；context_usage.tokenCountsAvailable=false）——估算模式见上表；
+// 请求/模型/工具调用是本地真实数据（segments 事件），如实计入。文件级增量（size+mtime）。
 const qoderSegmentCache = makeFileCache();
 
 export function scanQoderUsage() {
@@ -1205,7 +1219,10 @@ export function scanQoderUsage() {
       files++;
       for (const r of recs) {
         const day = dayKeyOf(r.ts);
-        const d = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: r.requests };
+        // 估算：in 随回合内迭代序号增长（request_index 为事件真值；缺席按首轮）
+        const estIn = ESTIMATE_ENABLED && r.requests ? Math.min(EST_PARAMS.qoder.baseIn + Math.max(0, (r.requestIndex ?? 1) - 1) * EST_PARAMS.qoder.stepIn, EST_PARAMS.qoder.capIn) : 0;
+        const estOut = ESTIMATE_ENABLED && r.requests ? EST_PARAMS.qoder.out : 0;
+        const d = { input: estIn, output: estOut, cacheRead: 0, cacheWrite: 0, requests: r.requests };
         const calls = r.toolCalls ? new Map([[day, { toolCalls: r.toolCalls, mcpCalls: 0 }]]) : new Map();
         // 工具调用行（requests=0）只进 callsByDay，不进模型桶（免造空 '(unknown)' 桶）
         const modelBuckets = r.requests && r.model ? new Map([[r.model, d]]) : new Map();
@@ -1226,7 +1243,7 @@ export function scanQoderUsage() {
     return finishScan('qoder', acc, t0, { inputIncludesCache: false, degraded: true, tokensUnavailable, error: 'qoder-segments:' + String(e.message || e).slice(0, 120) });
   }
   acc.stats.sessions = acc.bySession.size;
-  return finishScan('qoder', acc, t0, { inputIncludesCache: false, tokensUnavailable });
+  return finishScan('qoder', acc, t0, { inputIncludesCache: false, tokensUnavailable, estimatedTokens: ESTIMATE_ENABLED });
 }
 
 // ---------------------------------------------------------------------------
@@ -1254,7 +1271,9 @@ export function scanCursorUsage() {
     }
     for (const r of records) {
       const day = dayKeyOf(r.ts);
-      const d = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: r.requests };
+      const estIn = ESTIMATE_ENABLED ? EST_PARAMS.cursor.in : 0;
+      const estOut = ESTIMATE_ENABLED ? EST_PARAMS.cursor.out : 0;
+      const d = { input: estIn, output: estOut, cacheRead: 0, cacheWrite: 0, requests: r.requests };
       foldFile(acc, {
         flat: d,
         days: new Map([[day, d]]),
@@ -1270,7 +1289,7 @@ export function scanCursorUsage() {
     return finishScan('cursor', acc, t0, { inputIncludesCache: false, degraded: true, tokensUnavailable: true, error: 'cursor-bubbles:' + String(e.message || e).slice(0, 120) });
   }
   acc.stats.sessions = acc.bySession.size;
-  return finishScan('cursor', acc, t0, { inputIncludesCache: false, tokensUnavailable: true });
+  return finishScan('cursor', acc, t0, { inputIncludesCache: false, tokensUnavailable: true, estimatedTokens: ESTIMATE_ENABLED });
 }
 
 // ---------------------------------------------------------------------------
@@ -1528,15 +1547,24 @@ export function usageOverview(scansByKey, nowMs = Date.now()) {
     let mergedFresh = 0, mergedPrompt = 0, mergedTotal = 0;
     for (const [, sc] of Object.entries(scans)) {
       if (!sc || sc.degraded) continue;
+      const estimated = !!sc.estimatedTokens;
       const view = dayPred ? scanRangeView(sc, dayPred) : { totals: sc.totals, byModel: sc.byModel, byVariant: variantTotalsOf(sc) };
+      const decTotals = decorate(view.totals, sc.inputIncludesCache);
+      if (estimated) decTotals.hitRate = null;                 // 估算值无缓存语义，命中率不显示
       bySource[sc.source] = {
-        totals: decorate(view.totals, sc.inputIncludesCache),
+        totals: decTotals,
         partial: !!sc.stats?.partial,
         elapsedMs: sc.elapsedMs ?? null,
         inputIncludesCache: !!sc.inputIncludesCache,
-        models: decModel(sc, view.byModel),
+        estimated,
+        models: estimated ? decModel(sc, view.byModel).map((m) => ({ ...m, hitRate: null })) : decModel(sc, view.byModel),
         variants: [...view.byVariant.entries()].map(([v, u]) => ({ variant: v, totals: decorate(u, sc.inputIncludesCache) })),
       };
+      if (estimated) {
+        // 估算源：requests（真实）并入合计；token（估算）绝不并入精确口径
+        addInto(totals, { ...newUsage(), requests: view.totals.requests });
+        continue;
+      }
       for (const [model, u] of view.byModel) {
         let m = merged.get(model);
         if (!m) { m = { ...newUsage(), sources: [], freshInput: 0, promptTokens: 0, totalTokens: 0 }; merged.set(model, m); }
@@ -1600,7 +1628,7 @@ export function serializeUsageScan(sc) {
     source: sc.source, generatedAt: sc.generatedAt, elapsedMs: sc.elapsedMs,
     // totals 附展示口径派生值（promptTokens/totalTokens），与日历/图表同源
     totals: { ...sc.totals, ...(() => { const d = decorate(sc.totals, sc.inputIncludesCache); return { freshInput: d.freshInput, promptTokens: d.promptTokens, totalTokens: d.totalTokens, hitRate: d.hitRate }; })() },
-    inputIncludesCache: !!sc.inputIncludesCache, dayApproximate: !!sc.dayApproximate, tokensUnavailable: !!sc.tokensUnavailable,
+    inputIncludesCache: !!sc.inputIncludesCache, dayApproximate: !!sc.dayApproximate, tokensUnavailable: !!sc.tokensUnavailable, estimatedTokens: !!sc.estimatedTokens,
     byModel: [...sc.byModel.entries()].map(([model, u]) => ({ model, ...u })).sort(byTotalDesc),
     byVariant: [...variantTotalsOf(sc).entries()].map(([variant, u]) => ({ variant, totals: { ...u } })),
     byDay, callsByDay: Object.fromEntries(sc.callsByDay || []),
@@ -1623,7 +1651,7 @@ export function usageCalendar(scans) {
     for (const [day, counts] of sc?.callsByDay || []) days[day] = { ...(days[day] ?? { ...newUsage(), tokens: 0, promptTokens: 0, freshInput: 0 }), ...counts };
     const stats = sc?.stats ?? {};
     sources[source] = {
-      days, available: !!sc && !sc.degraded,
+      days, available: !!sc && !sc.degraded, estimated: !!sc?.estimatedTokens,
       partial: !!(stats.partial || stats.parseErrors || stats.skippedLines || stats.skippedFiles || stats.undatedCalls),
       dayApproximate: !!sc?.dayApproximate,
       undatedCalls: stats.undatedCalls || 0,

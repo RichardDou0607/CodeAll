@@ -1,6 +1,13 @@
 # 变更日志（文档与契约）
 
-## 2026-10-22（八）
+## 2026-10-22（九）
+### 估算模式上线【未发版】：Qoder/Cursor token 以包络估算呈现（用户定向「使用估算模式」；≈ 前缀、绝不并入精确合计）
+
+- **估算模型（文档化假设 + 真实信号调制）**：Qoder——一回合内第 i 次请求 `in ≈ 6k + (i-1)×2.5k`（事件自带的 request_index 是**真值**；agentic 循环上下文逐迭代增长），out ≈ 700，按 200k 截断（chat_model_preferences 实测 context_window=1M 的实用上限）；Cursor——无模型/迭代信息，统一 in ≈ 9k / out ≈ 550。本机估算结果：Qoder in 72.6M / out 833K（1190 请求），Cursor in 765K / out 46.75K（85 请求）。
+- **纪律（估算与精确不混排）**：`estimatedTokens` 标记贯通 scan→serialize→overview→calendar→UI；usageOverview 对估算源**只并入真实的 requests**，token 不进合计与跨源合并模型表（实测 merged byModel 无 dfmodel）；bySource/byModel 的估算值 hitRate 置 null；UI 每源表 ≈ 前缀（dim）+「估」徽标 + 行下注记，会话行 meta 显示「≈tok 全量 …（估算）」，u-note 置顶声明「Token 合计为精确口径（不含 Qoder/Cursor）」。`PET_USAGE_ESTIMATE=0` 可整体关闭（退回纯请求级）。
+- **MU14 断言**：估算开启（in/out>0 且 estimatedTokens）+ 隔离性（overview 只含两源 requests、无估算 token、合并模型表无估算模型）+ bySource.estimated 标记——全绿。
+
+
 ### Qoder/Cursor token=0 定性收口【未发版】：UI 从「0（像坏了）」改「—（云端计费）」（用户反馈「tokens 始终为 0，之前的软件都正常」——穷尽本地路径后维持不虚估口径）
 
 - **第五轮穷尽扫荡（全部落空，铁证收口）**：Qoder——main.sqlite 全库 schema 无 usage 表、context_usage 12 行 totalTokens/rawMaxTokens 全 0、qoder-data.v1.json 零数值命中（turns 空）、turn-payload-buffer 瞬态空表、partner_plan_snapshots 仅订阅元数据、segments 1190 事件 token 字段全 0；Cursor——ItemTable 139 键无 usage、cursorDiskKV 11 类键前缀（泡 tokenCount 全 {0,0}）、全部 CLI store.db blob 零 usage 命中、ai-tracking 仅代码行数。
