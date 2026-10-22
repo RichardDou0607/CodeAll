@@ -1,6 +1,14 @@
 # 变更日志（文档与契约）
 
-## 2026-10-22（七）
+## 2026-10-22（八）
+### Qoder/Cursor token=0 定性收口【未发版】：UI 从「0（像坏了）」改「—（云端计费）」（用户反馈「tokens 始终为 0，之前的软件都正常」——穷尽本地路径后维持不虚估口径）
+
+- **第五轮穷尽扫荡（全部落空，铁证收口）**：Qoder——main.sqlite 全库 schema 无 usage 表、context_usage 12 行 totalTokens/rawMaxTokens 全 0、qoder-data.v1.json 零数值命中（turns 空）、turn-payload-buffer 瞬态空表、partner_plan_snapshots 仅订阅元数据、segments 1190 事件 token 字段全 0；Cursor——ItemTable 139 键无 usage、cursorDiskKV 11 类键前缀（泡 tokenCount 全 {0,0}）、全部 CLI store.db blob 零 usage 命中、ai-tracking 仅代码行数。
+- **根因（结构性，非实现缺口）**：「之前的软件正常」是因为 DSH/Claude/Codex/Kimi/ZCode/OpenCode 都是引擎/CLI 产品、逐请求写本地日志；Qoder 与 Cursor 是云端围墙花园——**计费 token 只存在厂商服务器**，本地字段是占位（写 0 或不写）。读云端需拿凭证调官方 API（cursorAuth/accessToken 等）——触碰凭证违反安全红线，不做。
+- **UX 修正**：tokensUnavailable 源的 token 五列（in/cache读/cache写/out/命中率）显示「—」而非误导性的 0；请求列与模型数保持真实值；u-note 置顶说明「Token 合计不含 Qoder/Cursor……两源请求/模型/工具调用为本地真实数据已计入」。
+- **不做的事（红线重申）**：不估算——按「每请求约 N token」造数会污染精确累计口径与跨源合并表，且误差不可控；若未来厂商落盘真值（BYOK/新版本），采集字段已在位、非零即自动入账。
+
+
 ### Qoder 用量计数单位修正【未发版】：回合 → 模型请求（用户报障「明显用量不正确」）
 
 - **问题（用户报障）**：上一轮 Qoder 计入 119 次「请求」明显偏低。复盘定位**计数单位错误**：以 turn.started/finished 配对计请求，但实测 159 个回合内含 **1190 次 `model.response.completed`**（Qoder 一回合跑多次 agentic 模型请求，主回合分布：68% 为 1-3 次、6 个回合 9-15 次）——与其它源（Claude usage.requests=API 调用、ZCode=message 行）的「模型请求级」单位不可比，量级压低约 14×。
