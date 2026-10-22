@@ -73,7 +73,8 @@ import { SESSIONS_ROOT as CODEX_ROOT, threadIdOf } from './codex-adapter.mjs';
 import { SESSIONS_ROOT as KIMI_ROOT } from './kimi-code-adapter.mjs';
 import { openZcodeDb, ZCODE_DB } from './zcode-adapter.mjs';
 import { openOpencodeDb, OPENCODE_DB } from './opencode-adapter.mjs';
-import { CURSOR_GLOBAL_DB } from './cursor-adapter.mjs';
+import { CURSOR_GLOBAL_DB, collectCursorRequestCounts } from './cursor-adapter.mjs';
+import { listSegmentFiles as listQoderSegmentFiles, parseQoderSegmentUsage } from './qoder-adapter.mjs';
 import { SESSIONS_ROOT as DSH_ROOT, pickLogFile } from './session-catalog.mjs';
 
 export const DEFAULT_OPTS = Object.freeze({
@@ -1185,13 +1186,47 @@ export async function scanOpencodeUsage(opts = {}) {
 // 客户端不落盘 per-request token 计数，2026-10-22 本机实测）——如实降级，不虚估。
 // ---------------------------------------------------------------------------
 
+// Qoder：token 真值在云端（segments 的 token 字段实测恒 0：1190 个 model.response.completed
+// + 6 个 fork.agent.completed 全零；context_usage.tokenCountsAvailable=false）——不虚估；
+// 请求/模型/工具调用是本地真实数据（segments turn 事件），如实计入。文件级增量（size+mtime）。
+const qoderSegmentCache = makeFileCache();
+
 export function scanQoderUsage() {
+  const t0 = process.hrtime.bigint();
   const acc = newAcc();
-  return finishScan('qoder', acc, process.hrtime.bigint(), {
-    inputIncludesCache: false,
-    degraded: true,
-    error: 'qoder-tokens-unavailable（Qoder 客户端不落盘 token 计数，无法精确累计；context_usage 仅百分比）',
-  });
+  let files = 0, cached = 0, tokensUnavailable = true;
+  try {
+    for (const { file } of listQoderSegmentFiles()) {
+      let st; try { st = fs.statSync(file); } catch { continue; }
+      const hit = cachedEntry(qoderSegmentCache, file, st);
+      let recs;
+      if (hit) { recs = hit.result; cached++; }
+      else { recs = parseQoderSegmentUsage(file); qoderSegmentCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, result: recs }); }
+      files++;
+      for (const r of recs) {
+        const day = dayKeyOf(r.ts);
+        const d = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: r.requests };
+        const calls = r.toolCalls ? new Map([[day, { toolCalls: r.toolCalls, mcpCalls: 0 }]]) : new Map();
+        // 工具调用行（requests=0）只进 callsByDay，不进模型桶（免造空 '(unknown)' 桶）
+        const modelBuckets = r.requests && r.model ? new Map([[r.model, d]]) : new Map();
+        foldFile(acc, {
+          flat: d,
+          days: new Map(r.requests ? [[day, d]] : []),
+          models: modelBuckets,
+          modelDays: r.requests && r.model ? new Map([[r.model, new Map([[day, d]])]]) : new Map(),
+          callDays: calls,
+          variant: null,
+        }, r.sessionId);
+        acc.stats.readBytes += hit ? 0 : st.size;
+      }
+    }
+    acc.stats.files = files; acc.stats.cachedFiles = cached;
+    acc.stats.corpusBytes = [...qoderSegmentCache.entries()].reduce((a, [, e]) => a + (e.size || 0), 0);
+  } catch (e) {
+    return finishScan('qoder', acc, t0, { inputIncludesCache: false, degraded: true, tokensUnavailable, error: 'qoder-segments:' + String(e.message || e).slice(0, 120) });
+  }
+  acc.stats.sessions = acc.bySession.size;
+  return finishScan('qoder', acc, t0, { inputIncludesCache: false, tokensUnavailable });
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,13 +1234,43 @@ export function scanQoderUsage() {
 // 如实降级，不虚估。
 // ---------------------------------------------------------------------------
 
+// Cursor：token 真值在云端（99 个消息泡 tokenCount 全 {0,0}、CLI store.db 响应 blob 无
+// usage）——不虚估；请求/工具调用是本地真实数据（assistant 泡计数），如实计入。
+// 库级缓存：state.vscdb（size+mtime）不变 → 复用整轮结果。
+let cursorUsageCache = { file: '', size: 0, mtimeMs: 0, records: [] };
+
 export function scanCursorUsage() {
+  const t0 = process.hrtime.bigint();
   const acc = newAcc();
-  return finishScan('cursor', acc, process.hrtime.bigint(), {
-    inputIncludesCache: false,
-    degraded: true,
-    error: 'cursor-tokens-unavailable（Cursor 用量在云端，客户端不落盘 per-request token；ai-tracking 仅代码行数）',
-  });
+  let cached = false;
+  try {
+    let st = null; try { st = fs.statSync(CURSOR_GLOBAL_DB); } catch { /* 未安装 */ }
+    if (st && cursorUsageCache.file === CURSOR_GLOBAL_DB && cursorUsageCache.size === st.size && cursorUsageCache.mtimeMs === st.mtimeMs) cached = true;
+    let records = cached ? cursorUsageCache.records : null;
+    if (!records) {
+      const r = collectCursorRequestCounts();
+      records = r.ok ? r.records : [];
+      if (st) cursorUsageCache = { file: CURSOR_GLOBAL_DB, size: st.size, mtimeMs: st.mtimeMs, records };
+    }
+    for (const r of records) {
+      const day = dayKeyOf(r.ts);
+      const d = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, requests: r.requests };
+      foldFile(acc, {
+        flat: d,
+        days: new Map([[day, d]]),
+        models: new Map([['(模型未落盘)', d]]),   // 泡内 modelInfo 不落盘（实测仅 2/99 且为 'default'）——不虚构模型名
+        modelDays: new Map([['(模型未落盘)', new Map([[day, d]])]]),
+        callDays: r.toolCalls ? new Map([[day, { toolCalls: r.toolCalls, mcpCalls: 0 }]]) : new Map(),
+        variant: null,
+      }, r.sessionId);
+    }
+    acc.stats.files = 1; acc.stats.cachedFiles = cached ? 1 : 0;
+    if (st) acc.stats.corpusBytes = st.size;
+  } catch (e) {
+    return finishScan('cursor', acc, t0, { inputIncludesCache: false, degraded: true, tokensUnavailable: true, error: 'cursor-bubbles:' + String(e.message || e).slice(0, 120) });
+  }
+  acc.stats.sessions = acc.bySession.size;
+  return finishScan('cursor', acc, t0, { inputIncludesCache: false, tokensUnavailable: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -1535,7 +1600,7 @@ export function serializeUsageScan(sc) {
     source: sc.source, generatedAt: sc.generatedAt, elapsedMs: sc.elapsedMs,
     // totals 附展示口径派生值（promptTokens/totalTokens），与日历/图表同源
     totals: { ...sc.totals, ...(() => { const d = decorate(sc.totals, sc.inputIncludesCache); return { freshInput: d.freshInput, promptTokens: d.promptTokens, totalTokens: d.totalTokens, hitRate: d.hitRate }; })() },
-    inputIncludesCache: !!sc.inputIncludesCache, dayApproximate: !!sc.dayApproximate,
+    inputIncludesCache: !!sc.inputIncludesCache, dayApproximate: !!sc.dayApproximate, tokensUnavailable: !!sc.tokensUnavailable,
     byModel: [...sc.byModel.entries()].map(([model, u]) => ({ model, ...u })).sort(byTotalDesc),
     byVariant: [...variantTotalsOf(sc).entries()].map(([variant, u]) => ({ variant, totals: { ...u } })),
     byDay, callsByDay: Object.fromEntries(sc.callsByDay || []),

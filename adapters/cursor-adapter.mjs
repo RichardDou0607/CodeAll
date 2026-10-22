@@ -252,6 +252,41 @@ export function scanCursorCatalog(opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// 1.5 用量计数（请求级；token 真值在 Cursor 云端，客户端不落盘——实测 99 泡 tokenCount 全
+//      {0,0}、CLI store.db 响应 blob 无 usage。请求/工具调用是本地真实数据，如实计数）
+// ---------------------------------------------------------------------------
+
+/**
+ * 桌面消息泡 → 请求级记录（usage-collect 调用）：
+ *   assistant 泡（type=2，带 completedAtMs）= 1 次请求；toolResults 数组长度 = 工具调用数。
+ *   只读 type/completedAtMs/toolResults.length 计数字段——text/thinking 等原文字段不取不存
+ *   （读取本地库做统计与 Kimi wire.jsonl 同口径，红线是「不外传原文」）。
+ *   只枚举非归档非子代理 composer（与目录口径一致）；CLI store.db 是请求转录原文，不读。
+ */
+export function collectCursorRequestCounts(dbPath = CURSOR_GLOBAL_DB) {
+  const out = [];
+  const db = openCursorDb(dbPath);
+  if (!db) return { ok: false, records: out };
+  try {
+    const composers = db.prepare('SELECT composerId FROM composerHeaders WHERE isArchived = 0 AND isSubagent = 0 AND composerId != ?').all('empty-state-draft');
+    const stmt = db.prepare("SELECT CAST(value AS TEXT) AS v FROM cursorDiskKV WHERE key LIKE 'bubbleId:' || ? || ':%'");
+    for (const c of composers) {
+      let bubbles;
+      try { bubbles = stmt.all(c.composerId); } catch { continue; }
+      for (const b of bubbles) {
+        let j; try { j = JSON.parse(b.v); } catch { continue; }
+        if (j?.type !== 2) continue;                                  // 只数 assistant 泡（一次模型请求一个泡）
+        const ts = Number.isFinite(j.completedAtMs) ? j.completedAtMs : (Number.isFinite(j.startedAtMs) ? j.startedAtMs : null);
+        if (ts === null) continue;
+        const tools = Array.isArray(j.toolResults) ? j.toolResults.length : 0;
+        out.push({ ts, sessionId: c.composerId, requests: 1, toolCalls: tools });
+      }
+    }
+  } finally { try { db.close(); } catch { /* ignore */ } }
+  return { ok: true, records: out };
+}
+
+// ---------------------------------------------------------------------------
 // 2. 状态跟随（桌面 sqlite 轮询 → agent.status 状态级事件；CLI 目录仅 session.start）
 // ---------------------------------------------------------------------------
 

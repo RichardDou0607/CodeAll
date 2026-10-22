@@ -107,7 +107,7 @@ function stateFromTurnReason(reason) {
 }
 
 /** 枚举全部 segment 文件：[{file, sessionId}]。 */
-function listSegmentFiles(rootDir = QODER_SEGMENTS) {
+export function listSegmentFiles(rootDir = QODER_SEGMENTS) {
   const out = [];
   try {
     for (const proj of fs.readdirSync(rootDir, { withFileTypes: true })) {
@@ -122,6 +122,30 @@ function listSegmentFiles(rootDir = QODER_SEGMENTS) {
       }
     }
   } catch { /* 无目录 = 未使用 */ }
+  return out;
+}
+
+/** 单个 segment 文件 → 用量记录（请求级，token 真值在云端不虚估；usage-collect 调用）：
+ *  turn.started/finished 配对 → 1 次请求（带 turn.started.model）；tool.execution.finished → 1 次工具调用。
+ *  子代理回合（is_subagent）跳过（与跟随器口径一致）。只输出计数级字段，不解析 text_preview。
+ */
+export function parseQoderSegmentUsage(file) {
+  const out = [];
+  try {
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    const sessionId = path.basename(path.dirname(path.dirname(file)));
+    let pendingModel = null, pendingSubagent = false;
+    for (const l of lines) {
+      let j; try { j = JSON.parse(l); } catch { continue; }
+      const ts = Date.parse(j.ts || '');
+      if (j.type === 'turn.started') { pendingModel = typeof j.data?.model === 'string' ? j.data.model : null; pendingSubagent = !!j.data?.is_subagent; continue; }
+      if (j.type === 'tool.execution.finished') { out.push({ ts, sessionId, model: null, requests: 0, toolCalls: 1 }); continue; }
+      if (j.type === 'turn.finished') {
+        if (pendingSubagent) { pendingSubagent = false; continue; }
+        out.push({ ts: Number.isFinite(ts) ? ts : Date.now(), sessionId, model: pendingModel, requests: 1, toolCalls: 0 });
+      }
+    }
+  } catch { /* 读失败：整文件跳过（下轮 mtime 变化会重读） */ }
   return out;
 }
 

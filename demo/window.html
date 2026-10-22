@@ -799,8 +799,9 @@ function usageHtml(us,now){
   h+='<div class="u-src-h">各 Agent 消耗量'+(rl?'（'+rl+'）':'')+'</div><div class="utable-wrap"><table class="utable"><tr><th>Agent</th><th>in（含缓存读）</th><th>cache读</th><th>cache写</th><th>out</th><th>命中率</th><th>请求</th><th>模型数</th></tr>';
   for(const src of SRC_ORDER){
     const d=view.bySource&&view.bySource[src];
-    if(!d){ if(src==='qoder')h+='<tr><td>'+esc(srcLabel({source:src}))+'</td><td colspan="7" style="color:var(--dim)">暂不可用：Qoder 客户端不落盘 token 计数（context_usage 仅百分比）</td></tr>';
-      else if(src==='cursor')h+='<tr><td>'+esc(srcLabel({source:src}))+'</td><td colspan="7" style="color:var(--dim)">暂不可用：Cursor 用量在云端，客户端不落盘 per-request token</td></tr>'; continue; }
+    if(!d){ if(src==='qoder')h+='<tr><td>'+esc(srcLabel({source:src}))+'</td><td colspan="7" style="color:var(--dim)">暂不可用：Qoder 本地数据（segments/sqlite）不可读</td></tr>';
+      else if(src==='cursor')h+='<tr><td>'+esc(srcLabel({source:src}))+'</td><td colspan="7" style="color:var(--dim)">暂不可用：Cursor 本地数据库（state.vscdb）不可读</td></tr>'; continue; }
+    if(d&&d.tokensUnavailable&&src!=='dsh')h+='<tr style="color:var(--dim)"><td colspan="8" style="font-size:11px;padding:2px 8px">'+esc(srcLabel({source:src}))+'：请求级计数（'+fmtTok(d.totals?.requests||0)+' 次请求真实计入）；token 真值在云端，本地不落盘——不虚估</td></tr>';
     const vs=(SRC_SPLIT[src]&&d.variants&&d.variants.length)?d.variants:[{variant:null,totals:d.totals}];
     for(const v of vs){
       const t2=v.totals||{};
@@ -813,7 +814,7 @@ function usageHtml(us,now){
     const d=view.bySource&&view.bySource[src];if(!d)continue;
     h+='<div class="u-src-h">'+esc(srcLabel({source:src}))+' · '+(d.partial?'<span style="color:var(--wait)">部分扫描（下轮续）</span>':(d.models||[]).length+' 个模型')+'</div>'+uTable(d.models||[],false,src);
   }
-  h+='<div class="u-note">生成于 '+(us.generatedAt?new Date(us.generatedAt).toLocaleString('zh-CN'):'—')+'（60s 增量缓存）· 时间窗按本地自然日归桶 · 命中率=cacheRead/(fresh+cacheRead)，fresh 按源语义折算（Codex/ZCode 的 input 含 cache）· 形态：Claude=entrypoint / Codex=originator / Kimi=clientMetadata · OpenCode 的 input 不含 cache（CLI/桌面共用库不拆形态）· Qoder/Cursor 客户端不落盘 token（无表）</div>';
+  h+='<div class="u-note">生成于 '+(us.generatedAt?new Date(us.generatedAt).toLocaleString('zh-CN'):'—')+'（60s 增量缓存）· 时间窗按本地自然日归桶 · 命中率=cacheRead/(fresh+cacheRead)，fresh 按源语义折算（Codex/ZCode 的 input 含 cache）· 形态：Claude=entrypoint / Codex=originator / Kimi=clientMetadata · OpenCode 的 input 不含 cache（CLI/桌面共用库不拆形态）· Qoder/Cursor 为请求级计数（请求/模型/工具调用真实；token 真值在云端，本地 token 字段实测恒 0——不虚估）</div>';
   return h;
 }
 function projNameOf(s,projList){

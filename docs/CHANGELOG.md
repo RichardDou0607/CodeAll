@@ -1,6 +1,17 @@
 # 变更日志（文档与契约）
 
-## 2026-10-22（五）
+## 2026-10-22（六）
+### Qoder/Cursor 计入用量【未发版】：请求级真实计数（用户反馈「没有被计入 tokens 用量」——三重证据确认 token 真值不在本地，不虚估；请求/模型/工具调用如实计入）
+
+- **token 真值三重证据（本地不存在）**：Qoder——segments 的 token 字段实测恒 0（1190 个 model.response.completed + 6 个 fork.agent.completed 全零，provider 全为 qoder 托管模型）、main.sqlite context_usage.tokenCountsAvailable=false、turn-payload-buffer 为瞬态空表；Cursor——99 个消息泡 tokenCount 全 {inputTokens:0,outputTokens:0}（modelInfo 仅 2/99 且为 'default'）、CLI store.db 响应 blob 无 usage 字段、ai-tracking 只有代码行数。计费均在厂商云端 → **token 不虚估**（估算百分比会造垃圾数据，违反「如实」红线）。
+- **请求级真实计数（新口径 `tokensUnavailable`）**：
+  - Qoder：segments 的 turn.started/finished 配对 → 1 次请求（带真实模型名 qfmodel/dfmodel/mmodel/dmodel/qmodel_38max——**唯一拿到 per-request 模型归属的新源**）+ tool.execution.finished → 工具调用；本机实测 119 请求 / 68 会话 / 1454 工具调用；文件级增量缓存（size+mtime，241 文件二轮全命中）。
+  - Cursor：assistant 泡（type=2 + completedAtMs）= 1 次请求，toolResults 长度 = 工具调用；只枚举非归档非子代理 composer；本机实测 35 请求。模型名如实标「(模型未落盘)」。库级缓存（state.vscdb size+mtime）。
+  - 两源从 `degraded`（此前整体缺席）改为可用源进入 overview/bySource/byModel/日历（tokens 0 / requests 真实）；`serializeUsageScan` 透出 `tokensUnavailable` 标记，UI 用量表下追加「请求级计数（N 次请求真实计入）；token 真值在云端——不虚估」注记行。
+- **隐私口径微调（MG7 改判据）**：Cursor 消息泡允许**计数级**读取（type/completedAtMs/toolResults.length——与 Kimi wire.jsonl 用量采集同口径）；红线聚焦「原文不取不外传」：subtitle（prompt 原文）/text_preview/.text/.thinking/.richText 断言不出现。Qoder 侧 parseQoderSegmentUsage 同样只读 turn 事件计数字段。
+- **回归**：MU12/MU13 重写为请求级断言（requests≥1 且 tokens=0 且 tokensUnavailable）全绿；demo 21 项 exit 0（test-tick/test-crash-window 一次并发环境竞争失败、单独复跑均过）；/api/usage 实测 overview.requests 58,169 含 qoder 119 + cursor 35。
+
+
 ### Qoder CLI 接入【未发版】：qoderclicn 通道 + segments 事件流——Qoder 从「观察-only」升级为全通道（用户定向「现在把 qoder CLI 也接入」）
 
 - **侦察修正（推翻上午「无 CLI」结论）**：Qoder CLI = `qoderclicn`（~/.qoder-cn/bin/qoderclicn/qoderclicn-<版本>，版本化命名；~/.local/bin 有符号链接；用户 14:41 装入）。与桌面**共用 chat_sessions 库**（`--list-sessions` 按项目列出同一批 UUID）——桌面会话可经 CLI 续接、反之亦然。

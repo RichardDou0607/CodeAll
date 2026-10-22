@@ -250,12 +250,15 @@ let cx;
       s1.state === 'done' && s2.state === 'aborted' && s3.state === 'idle',
       { s1: s1.state, s2: s2.state, s3: s3.state });
   }
-  // 隐私红线：cursor-adapter 源码（剥离注释后）不出现 subtitle 字段与 bubbleId/agentKv 消息泡键
+  // 隐私红线：cursor-adapter 源码（剥离注释后）不取原文字段——subtitle（prompt 原文）/
+  // text_preview / .text / .thinking / .richText 一律不出现；消息泡允许**计数级**读取
+  // （type/completedAtMs/toolResults.length，与 Kimi wire.jsonl 用量采集同口径）。
   {
     const self = fs.readFileSync(new URL('../adapters/cursor-adapter.mjs', import.meta.url), 'utf8');
     const code = self.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
-    check('MG7', '隐私红线：cursor-adapter 不取 subtitle（prompt 原文）、不读 bubbleId/agentKv 消息泡',
-      !code.includes('subtitle') && !code.includes('bubbleId') && !code.includes('agentKv'),
+    const collector = code.slice(code.indexOf('collectCursorRequestCounts'));
+    check('MG7', '隐私红线：不取 subtitle/text_preview/.text/.thinking/.richText（原文）；消息泡仅计数级字段',
+      !code.includes('subtitle') && !code.includes('text_preview') && !collector.includes('.thinking') && !collector.includes('.richText') && !collector.match(/[^A-Za-z]\.text/),
       {});
   }
   {
@@ -514,12 +517,12 @@ let cx;
         drift(oc.totals.cacheRead, agg.cr) < 0.005 && drift(oc.totals.input, agg.i) < 0.005 && drift(oc.totals.output, agg.o) < 0.005 && oc.inputIncludesCache === false,
         { scanCacheRead: oc.totals.cacheRead, aggCacheRead: agg.cr, inputDrift: Number(drift(oc.totals.input, agg.i).toFixed(5)), cacheDrift: Number(drift(oc.totals.cacheRead, agg.cr).toFixed(5)) });
     }
-    check('MU12', 'Qoder 用量：如实降级（tokenCountsAvailable=false，不虚估）',
-      qd?.degraded === true && String(qd?.error || '').includes('qoder-tokens-unavailable') && qd?.totals?.input === 0,
-      { error: String(qd?.error || '').slice(0, 48) });
-    check('MU13', 'Cursor 用量：如实降级（per-request token 在云端，不虚估）',
-      cs?.degraded === true && String(cs?.error || '').includes('cursor-tokens-unavailable') && cs?.totals?.input === 0,
-      { error: String(cs?.error || '').slice(0, 48) });
+    check('MU12', 'Qoder 用量：请求级真实计数（segments turn 事件；token 真值在云端不虚估——token 字段实测恒 0）',
+      qd?.degraded !== true && (qd?.totals?.requests ?? 0) >= 1 && (qd?.totals?.input ?? 0) === 0 && qd?.tokensUnavailable === true && [...qd.byModel.keys()].some((k) => /^(q|d|m)f?model/.test(k)),
+      { requests: qd?.totals?.requests, models: [...qd.byModel.keys()], toolCalls: [...qd.callsByDay.values()].reduce((a, c) => a + c.toolCalls, 0) });
+    check('MU13', 'Cursor 用量：请求级真实计数（assistant 泡；token 真值在云端不虚估）',
+      cs?.degraded !== true && (cs?.totals?.requests ?? 0) >= 1 && (cs?.totals?.input ?? 0) === 0 && cs?.tokensUnavailable === true,
+      { requests: cs?.totals?.requests, toolCalls: [...cs.callsByDay.values()].reduce((a, c) => a + c.toolCalls, 0) });
   }
 
   // MU7 DSH：① 解析恒等式（∑(input+output+cacheRead+cacheWrite) = ∑totalTokens，全文件零失配）；
