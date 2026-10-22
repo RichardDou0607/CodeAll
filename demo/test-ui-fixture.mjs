@@ -24,6 +24,12 @@ return {
     { id: 'kimi-cli', name: 'Kimi CLI', source: 'kimi-code', base: 'kimi-code', variantTag: 'cli', status: 'closed', installed: true, running: false, connected: false, processes: 0, evidence: ['~/.kimi-code/bin/kimi'] },
     { id: 'kimi-desktop', name: 'Kimi Code 桌面端', source: 'kimi-code', base: 'kimi-code', variantTag: 'desktop', status: 'closed', installed: true, running: false, connected: false, processes: 0, lastActivityMs: now - 7200000, version: '1.0.4', sessionCount: 9, evidence: ['/Applications/Kimi Code.app'] },
     { id: 'zcode', name: 'ZCode', source: 'zcode', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 8, lastActivityMs: now - 1000, version: '3.14.4', sessionCount: 39, variants: { desktop: 2 }, evidence: ['/Applications/ZCode.app'] },
+    { id: 'opencode-cli', name: 'OpenCode CLI', source: 'opencode', base: 'opencode', variantTag: 'cli', status: 'closed', installed: true, running: false, connected: false, processes: 0, lastActivityMs: now - 600000, sessionCount: 69, evidence: ['~/.opencode/bin/opencode'] },
+    { id: 'opencode-desktop', name: 'OpenCode 桌面端', source: 'opencode', base: 'opencode', variantTag: 'desktop', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 5, lastActivityMs: now - 600000, version: '2.1.2', evidence: ['/Applications/OpenCode.app'] },
+    { id: 'qoder-cli', name: 'Qoder CLI', source: 'qoder', base: 'qoder', variantTag: 'cli', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 2, lastActivityMs: now - 30000, evidence: ['~/.local/bin/qoderclicn'] },
+    { id: 'qoder-desktop', name: 'Qoder 桌面端', source: 'qoder', base: 'qoder', variantTag: 'desktop', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 5, lastActivityMs: now - 300000, version: '0.4.8', sessionCount: 11, evidence: ['/Applications/Qoder CN.app'] },
+    { id: 'cursor-cli', name: 'Cursor CLI', source: 'cursor', base: 'cursor', variantTag: 'cli', status: 'closed', installed: true, running: false, connected: false, processes: 0, evidence: ['~/.local/bin/cursor-agent'] },
+    { id: 'cursor-desktop', name: 'Cursor 桌面端', source: 'cursor', base: 'cursor', variantTag: 'desktop', status: 'connected', installed: true, running: true, connected: true, connectionKind: 'observe', processes: 5, lastActivityMs: now - 800000, version: '3.26.16', variants: { desktop: 2 }, evidence: ['/Applications/Cursor.app'] },
   ],
   // 队列：一条已送达（不得显示）、一条待投递、一条失败（都要显示）
   inputs: [
@@ -46,6 +52,7 @@ return {
       codex: { totals: { input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, promptTokens: 40000000, totalTokens: 40500000, hitRate: 0.23 }, inputIncludesCache: true, partial: false, elapsedMs: 430, variants: [{ variant: 'desktop', totals: { input: 39000000, output: 490000, cacheRead: 11900000, cacheWrite: 0, requests: 296, hitRate: 0.23 } }], models: [{ model: 'gpt-6-sol', input: 40000000, output: 500000, cacheRead: 12000000, cacheWrite: 0, requests: 300, hitRate: 0.23 }] },
       'kimi-code': { totals: { input: 2600000, output: 609000, cacheRead: 0, cacheWrite: 0, requests: 181, promptTokens: 2600000, totalTokens: 3209000, hitRate: 0 }, inputIncludesCache: false, partial: false, elapsedMs: 300, variants: [{ variant: 'desktop', totals: { input: 2400000, output: 577000, cacheRead: 0, cacheWrite: 0, requests: 170, hitRate: 0 } }], models: [{ model: 'k3', input: 1600000, output: 161000, cacheRead: 0, cacheWrite: 0, requests: 181, hitRate: 0 }] },
       zcode: { totals: { input: 1670000000, output: 5000000, cacheRead: 990000000, cacheWrite: 0, requests: 6300, promptTokens: 1670000000, totalTokens: 1675000000, hitRate: 0.6 }, inputIncludesCache: true, partial: false, elapsedMs: 24, variants: [], models: [{ model: 'GLM-5.3', input: 807000000, output: 1900000, cacheRead: 700000000, cacheWrite: 0, requests: 2810, hitRate: 0.65 }] },
+      opencode: { totals: { input: 7276805, output: 865627, cacheRead: 157436199, cacheWrite: 0, requests: 2220, promptTokens: 164713004, totalTokens: 165578631, hitRate: 0.9559 }, inputIncludesCache: false, partial: false, elapsedMs: 297, variants: [], models: [{ model: 'moonshotai-cn/kimi-k3', input: 3657697, output: 437033, cacheRead: 90216720, cacheWrite: 0, requests: 1118, hitRate: 0.9611 }] },
     },
     ranges: {
       today: {
@@ -78,7 +85,7 @@ return {
       { value: 'account:plan/glm', label: 'Account GLM', providerId: 'account:plan', modelId: 'glm', reasoningEfforts: ['high'], canCreate: false },
     ] },
   },
-  capabilities: { canCatalog: true, canOpen: true, canCreate: true, canInput: true, cliChannels: [{ source: 'claude-code' }, { source: 'codex' }, { source: 'kimi-code' }, { source: 'zcode' }], plugin: { available: false } },
+  capabilities: { canCatalog: true, canOpen: true, canCreate: true, canInput: true, cliChannels: [{ source: 'claude-code' }, { source: 'codex' }, { source: 'kimi-code' }, { source: 'zcode' }, { source: 'opencode' }, { source: 'cursor' }, { source: 'qoder' }], plugin: { available: false } },
   catalog: {
     elapsedMs: 55,
     projects: [
@@ -93,6 +100,10 @@ return {
       { sessionId: 'hist-cx', title: 'SVG鹈鹕动画', state: 'done', source: 'codex', agentName: 'Codex', model: 'gpt-6-sol', updatedAt: now - 6600000, kind: 'main', projectKey: 'ws-2', variant: 'desktop' },
       { sessionId: 'hist-km', title: '前端简洁科技感重设计', state: 'idle', source: 'kimi-code', agentName: 'Kimi Code', model: 'k3', updatedAt: now - 9000000, kind: 'main', projectKey: '__none__' },
       { sessionId: 'hist-zc', title: '清理混入教材图片并重新整理', state: 'done', source: 'zcode', agentName: 'ZCode', model: 'GLM-5.3', updatedAt: now - 7200000, kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
+      { sessionId: 'hist-oc', title: 'OpenCode token用量测算与套餐选择', state: 'done', source: 'opencode', agentName: 'OpenCode', model: 'glm-5.3', updatedAt: now - 4500000, kind: 'main', projectKey: 'ws-2' },
+      { sessionId: 'hist-qd', title: '分析软件高开销原因', state: 'done', source: 'qoder', agentName: 'Qoder', model: 'dfmodel', updatedAt: now - 1800000, kind: 'main', projectKey: 'ws-1' },
+      { sessionId: 'hist-cs', title: 'Deepseek API configuration', state: 'done', source: 'cursor', agentName: 'Cursor', updatedAt: now - 2400000, kind: 'main', projectKey: 'ws-2', variant: 'desktop' },
+      { sessionId: 'hist-cs-cli', title: null, state: 'unknown', source: 'cursor', agentName: 'Cursor', updatedAt: now - 3600000, kind: 'main', projectKey: 'ws-1', variant: 'cli' },
       { sessionId: 'hist-act', title: '半小时前完成的会话', state: 'done', source: 'dsh', agentName: 'DSH', model: 'deepseek-flash', updatedAt: now - 1800000, kind: 'main', projectKey: 'ws-1', variant: 'desktop' },
       { sessionId: 'hist-ended', title: '昨天正常结束的会话', state: 'ended', source: 'dsh', agentName: 'DSH', model: 'deepseek-flash', updatedAt: now - 86400000, kind: 'main', projectKey: 'ws-2', variant: 'desktop' },
       { sessionId: 'hist-sub', title: '子代理历史', state: 'idle', agentName: 'DSH', kind: 'subagent', projectKey: 'ws-1', updatedAt: now - 1000 },

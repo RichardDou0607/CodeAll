@@ -23,6 +23,9 @@
 | 10 | **Aider** | 无 hook；JSON 输出/历史文件/进程观测 | 3～4 类（进程级为主） | **P2** | 3～4 人日 |
 | 11 | **进程/日志兜底层** | ps / lsof / 文件监听 | 2 类（session.start/end 级别） | **P1（兜底）** | 2～3 人日 |
 | 12 | **Kimi Code**（桌面 App + CLI，1.0.4） | `~/.kimi-code/` 文件级数据（state.json + agents/main/wire.jsonl 事件流）+ 内置 hooks（20 事件，未用） | wire 实测可映射 8 类（含**原生审批对**） | **首批（A 路径 ✅）** | 已落地（hooks 升级项另计） |
+| 13 | **OpenCode**（CLI + 桌面 2.1.2，2026-10-22 已落地） | opencode.db（WAL 只读；CLI/桌面共用后台服务）；双消息存储（≤1.18 message/part + ≥2.x session_message，迁移双写按 v2 去重） | 回合/工具/文本/状态全链（MO1–MO10） | **已落地** | 用量对账 MU11（input 不含 cache）；控制 `opencode run --session`/`run -m`（PWD 修复） |
+| 14 | **Qoder**（Qoder CN 0.4.8 桌面 + qoderclicn 1.1.76 CLI，2026-10-22 已落地） | 桌面 main.sqlite 结构化列（**消息原文列列级排除**）+ `~/.qoder-cn/logs/sessions/**/segments/*.jsonl` 事件流（桌面/CLI 共用；CLI 回合唯一落点，不回写 sqlite） | 会话/回合级（MQ1–MQ11；工具级需原文→红线缺席；segments token 字段实测恒 0→用量如实降级） | **已落地** | 控制走 `qoderclicn -p -r <id>`（CLI 与桌面会话可互相续接，共用 chat_sessions）；不用 --dangerously-skip-permissions |
+| 15 | **Cursor**（桌面 3.26.16 + cursor-agent CLI，2026-10-22 已落地） | 桌面 state.vscdb（composerHeaders + composerData.status；不读消息泡/subtitle）；CLI chats meta.json（store.db 转录原文红线不读） | 桌面：会话/状态级（agent.status）；CLI：会话级（MG1–MG9） | **已落地** | 控制 `cursor-agent -p --resume`（CLI 会话）；桌面 composer 无通道；用量云端 → 如实降级 |
 | 13 | **ZCode**（桌面 App 3.14.4，CLI 0.16.9 随包分发） | `~/.zcode/cli/db/db.sqlite`（WAL；session/message/part 三表，node:sqlite 只读并发）+ 包内 `zcode.cjs` CLI（--resume/--prompt） | sqlite 实测可映射 8 类（turn/step/tool/message；**无审批流**——permission 表为项目配置） | **首批 ✅（M-L）** | 已落地（无头投递对 account:* provider 会话受上游登录态限制，见 §3.12） |
 
 **三条结论**：

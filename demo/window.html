@@ -476,15 +476,18 @@ const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',workin
 const COLOR={idle:'var(--idle)',thinking:'var(--think)',running:'var(--run)',working:'var(--run)',delegated:'var(--acc)','transient-error':'var(--wait)',error:'var(--err)',waiting:'var(--wait)',done:'var(--done)',ended:'var(--done)',aborted:'var(--done)',unknown:'var(--idle)'};
 const AGENT_STATUS_LABEL={connected:'已连接','open-unconnected':'已打开 · 未连接',closed:'未打开','not-installed':'未下载'};
 const AGENT_STATUS_COLOR={connected:'var(--run)','open-unconnected':'var(--wait)',closed:'var(--idle)','not-installed':'var(--dim)'};
-const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI'],['zcode','ZCODE']];
+const AGENT_TABS=[['','全部'],['dsh','DSH'],['claude-code','CLAUDE'],['codex','CODEX'],['kimi-code','KIMI'],['zcode','ZCODE'],['opencode','OPENCODE'],['qoder','QODER'],['cursor','CURSOR']];
 const SOURCE_META={
   dsh:{name:'DeepSeek Harness',logo:'/assets/agents/deepseek.png',color:'#159b76'},
   'claude-code':{name:'Claude Code',logo:'/assets/agents/claude.png',color:'#d46e4b'},
   codex:{name:'Codex',logo:'/assets/agents/codex.png',color:'#6478e8'},
   'kimi-code':{name:'Kimi Code',logo:'/assets/agents/kimi.png',color:'#3889e9'},
-  zcode:{name:'ZCode',logo:'/assets/agents/zcode.png',color:'#46505a'}
+  zcode:{name:'ZCode',logo:'/assets/agents/zcode.png',color:'#46505a'},
+  opencode:{name:'OpenCode',logo:'/assets/agents/opencode.svg',color:'#f2994a'},
+  qoder:{name:'Qoder',logo:'/assets/agents/qoder.svg',color:'#7d6bff'},
+  cursor:{name:'Cursor',logo:'/assets/agents/cursor.svg',color:'#d5d9e2'}
 };
-const SOURCE_ORDER=['dsh','claude-code','codex','kimi-code','zcode'];
+const SOURCE_ORDER=['dsh','claude-code','codex','kimi-code','zcode','opencode','qoder','cursor'];
 const $=id=>document.getElementById(id);
 function icon(name){return '<svg class="icon" aria-hidden="true"><use href="#i-'+name+'"></use></svg>'}
 function esc(s){return String(s).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]))}
@@ -546,8 +549,11 @@ function classifySession(s, now){
   return fresh ? 'all' : 'hidden';   // idle / error / unknown
 }
 const VARIANT_LABEL={cli:'CLI',desktop:'桌面',ide:'IDE'};
-// 每源可出现的会话形态（结构性能力，供形态筛选收窄）：DSH / ZCode 均无独立 CLI 产品（纯桌面）；Claude 有 IDE 插件形态
-const SOURCE_VARIANTS={dsh:['desktop'],'claude-code':['cli','desktop','ide'],codex:['cli','desktop'],'kimi-code':['cli','desktop'],zcode:['desktop']};
+// 每源可出现的会话形态（结构性能力，供形态筛选收窄）：DSH / ZCode / Qoder 均无独立 CLI 产品（纯桌面）；
+// Claude 有 IDE 插件形态；OpenCode 有 CLI 与桌面双产品但共用库、会话形态库内不可分 → 不给形态档（只「全部」）
+// Cursor 桌面与 CLI 各有独立存储（composer / chats）→ 会话形态可分，cli+desktop 双档；
+// Qoder 与 OpenCode 同为「CLI/桌面共用库且无来源标记」→ 不给形态档（只「全部」）
+const SOURCE_VARIANTS={dsh:['desktop'],'claude-code':['cli','desktop','ide'],codex:['cli','desktop'],'kimi-code':['cli','desktop'],zcode:['desktop'],cursor:['cli','desktop']};
 function srcLabel(s){const base=String(s&&s.source||'dsh').toUpperCase().replace('CLAUDE-CODE','CLAUDE').replace('KIMI-CODE','KIMI');return base+(s&&s.variant&&VARIANT_LABEL[s.variant]?'·'+VARIANT_LABEL[s.variant]:'')}
 function fmtTok(n){n=Number(n)||0;return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'k':String(n)}
 function pct(r){return (r==null||isNaN(r))?'—':(r*100).toFixed(1)+'%'}
@@ -787,12 +793,14 @@ function usageHtml(us,now){
   const t=view.totals||{};
   h+='<div class="u-tot"><span class="chip" title="in = 全量 prompt（含缓存读）">in（含缓存读） '+fmtTok(t.promptTokens??t.input)+'</span><span class="chip">Token 全量 '+fmtTok(t.totalTokens??((Number(t.input)||0)+(Number(t.output)||0)))+'</span><span class="chip">out '+fmtTok(t.output)+'</span><span class="chip">cache读 '+fmtTok(t.cacheRead)+'</span><span class="chip">cache写 '+fmtTok(t.cacheWrite)+'</span><span class="chip">命中率 '+pct(t.hitRate)+'</span><span class="chip">请求 '+fmtTok(t.requests)+'</span>'+(us.refreshing?'<span class="chip">扫描中…</span>':'')+'<span class="chip">当前窗口：'+(rl||'全部时间')+'</span>'+'</div>';
   // 各 Agent 消耗量：claude/codex/kimi 按 CLI/桌面/IDE 形态拆行（与会话目录/软件状态页同口径）；dsh/zcode 单行
-  const SRC_ORDER=['dsh','claude-code','codex','kimi-code','zcode'];
+  const SRC_ORDER=['dsh','claude-code','codex','kimi-code','zcode','opencode','qoder','cursor'];
   const SRC_SPLIT={ 'claude-code':1, codex:1, 'kimi-code':1 };
   h+='<section class="chart-section" aria-label="Agent 用量图表"><h2 class="chart-title">来源对比</h2><div class="chart-caption">图表按选定时间范围（'+(rl||'全部时间')+'）聚合；Token 为全量口径（prompt 含缓存读 + cache写 + out，与各 Agent 自带计数一致），缓存分项见下方明细。上方日历为「单日」口径（默认今天），与本图窗口不同，两张数不可直接相加比对。</div>'+usageSourceChart(view)+'</section>';
   h+='<div class="u-src-h">各 Agent 消耗量'+(rl?'（'+rl+'）':'')+'</div><div class="utable-wrap"><table class="utable"><tr><th>Agent</th><th>in（含缓存读）</th><th>cache读</th><th>cache写</th><th>out</th><th>命中率</th><th>请求</th><th>模型数</th></tr>';
   for(const src of SRC_ORDER){
-    const d=view.bySource&&view.bySource[src];if(!d)continue;
+    const d=view.bySource&&view.bySource[src];
+    if(!d){ if(src==='qoder')h+='<tr><td>'+esc(srcLabel({source:src}))+'</td><td colspan="7" style="color:var(--dim)">暂不可用：Qoder 客户端不落盘 token 计数（context_usage 仅百分比）</td></tr>';
+      else if(src==='cursor')h+='<tr><td>'+esc(srcLabel({source:src}))+'</td><td colspan="7" style="color:var(--dim)">暂不可用：Cursor 用量在云端，客户端不落盘 per-request token</td></tr>'; continue; }
     const vs=(SRC_SPLIT[src]&&d.variants&&d.variants.length)?d.variants:[{variant:null,totals:d.totals}];
     for(const v of vs){
       const t2=v.totals||{};
@@ -805,7 +813,7 @@ function usageHtml(us,now){
     const d=view.bySource&&view.bySource[src];if(!d)continue;
     h+='<div class="u-src-h">'+esc(srcLabel({source:src}))+' · '+(d.partial?'<span style="color:var(--wait)">部分扫描（下轮续）</span>':(d.models||[]).length+' 个模型')+'</div>'+uTable(d.models||[],false,src);
   }
-  h+='<div class="u-note">生成于 '+(us.generatedAt?new Date(us.generatedAt).toLocaleString('zh-CN'):'—')+'（60s 增量缓存）· 时间窗按本地自然日归桶 · 命中率=cacheRead/(fresh+cacheRead)，fresh 按源语义折算（Codex/ZCode 的 input 含 cache）· 形态：Claude=entrypoint / Codex=originator / Kimi=clientMetadata</div>';
+  h+='<div class="u-note">生成于 '+(us.generatedAt?new Date(us.generatedAt).toLocaleString('zh-CN'):'—')+'（60s 增量缓存）· 时间窗按本地自然日归桶 · 命中率=cacheRead/(fresh+cacheRead)，fresh 按源语义折算（Codex/ZCode 的 input 含 cache）· 形态：Claude=entrypoint / Codex=originator / Kimi=clientMetadata · OpenCode 的 input 不含 cache（CLI/桌面共用库不拆形态）· Qoder/Cursor 客户端不落盘 token（无表）</div>';
   return h;
 }
 function projNameOf(s,projList){
@@ -1346,7 +1354,9 @@ function showNewDialog(){
   const projList=(snap.catalog&&snap.catalog.projects)||[];
   const caps=snap.capabilities||{};
   const p=projList.find(x=>x.key===(window.__PROJECT__||''));
-  const choices=AGENT_TABS.filter(([id])=>id);
+  // 只列「有新建通道」的来源：DSH（插件）+ 已解析到 CLI 的源；Qoder 无通道不列（观察-only，不宣称新建）
+  const creatableIds=new Set(['dsh',...((caps.cliChannels||[]).map(c=>c.source))]);
+  const choices=AGENT_TABS.filter(([id])=>id&&creatableIds.has(id));
   $('new-source').innerHTML=choices.map(([id,name])=>'<option value="'+id+'">'+name+((id==='dsh'||id==='zcode')?' · 桌面':' · CLI')+'</option>').join('');
   $('new-source').value=window.__AGENT__||(p?.sources||[]).find(id=>sourceCan(id,'Create',caps))||choices.find(([id])=>sourceCan(id,'Create',caps))?.[0]||'dsh';
   $('new-error').hidden=true;

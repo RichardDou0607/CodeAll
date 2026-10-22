@@ -25,6 +25,9 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { KIMI_LEVELDB, scanKimiCatalog, scanKimiLegacyCount } from './kimi-code-adapter.mjs';
 import { scanZcodeCatalog } from './zcode-adapter.mjs';
+import { scanOpencodeCatalog } from './opencode-adapter.mjs';
+import { scanQoderCatalog } from './qoder-adapter.mjs';
+import { scanCursorCatalog } from './cursor-adapter.mjs';
 
 const execFileP = promisify(execFile);
 const HOME = os.homedir();
@@ -112,9 +115,57 @@ export const LOCAL_AGENTS = Object.freeze([
     activity: [{ dir: path.join(HOME, '.zcode', 'cli', 'db'), depth: 1, fileRe: /^db\.sqlite(-wal|-shm)?$/ }],
     note: 'GLM 系桌面 Agent：观察 = sqlite 只读（WAL 并发读）',
   },
-  // v0.1.0 首发仅收录五源（DSH / Claude Code / Codex / Kimi Code / ZCode）。
-  // AgentOS（远端执行体，docs/21 §6）与 OpenCode（ACP 接入，docs/21 M-I）未随首发，
-  // 待接入落地后再回到此注册表。
+  {
+    id: 'opencode-cli', name: 'OpenCode CLI', source: 'opencode', base: 'opencode', variantTag: 'cli',
+    installPaths: [path.join(HOME, '.opencode', 'bin', 'opencode'), path.join(HOME, '.local', 'share', 'opencode')],
+    processRe: /^\s*\d+\s+opencode\s|\/(\.opencode\/bin|\.local\/bin)\/opencode(\s|$)/,  // ucomm 锚定（同 claude/codex）
+    processExclude: /\.app\/|ai\.opencode\.desktop/,      // 排除桌面 App 及其内置 serve 服务进程
+    activity: [{ dir: path.join(HOME, '.local', 'share', 'opencode'), depth: 0, fileRe: /^opencode\.db(-wal|-shm)?$/ }],
+    note: '命令行版：~/.opencode/bin/opencode（与桌面共用后台服务与库，会话形态库内不可分）',
+  },
+  {
+    id: 'opencode-desktop', name: 'OpenCode 桌面端', source: 'opencode', base: 'opencode', variantTag: 'desktop',
+    installPaths: ['/Applications/OpenCode.app', path.join(HOME, 'Library/Application Support/ai.opencode.desktop')],
+    appBundle: '/Applications/OpenCode.app',
+    processRe: /OpenCode\.app\/|ai\.opencode\.desktop/,   // 含 App 包内进程与 opencode-cli serve --service 后台服务
+    activity: [{ dir: path.join(HOME, '.local', 'share', 'opencode'), depth: 0, fileRe: /^opencode\.db(-wal|-shm)?$/ }],
+    note: '桌面版：OpenCode.app（内置 opencode-cli serve 后台服务，写共用库）',
+  },
+  {
+    id: 'cursor-cli', name: 'Cursor CLI', source: 'cursor', base: 'cursor', variantTag: 'cli',
+    installPaths: [path.join(HOME, '.local', 'bin', 'cursor-agent'), path.join(HOME, '.cursor', 'chats')],
+    processRe: /^\s*\d+\s+cursor-agent\s|\/cursor-agent(\s|$)/,  // ucomm 锚定
+    processExclude: /\.app\//,
+    activity: [{ dir: path.join(HOME, '.cursor', 'chats'), depth: 2, fileRe: /^(meta\.json|.+\.jsonl?)$/ }],
+    note: '命令行版：~/.local/bin/cursor-agent（cursor-agent -p --resume 续接；控制走 CLI）',
+  },
+  {
+    id: 'cursor-desktop', name: 'Cursor 桌面端', source: 'cursor', base: 'cursor', variantTag: 'desktop',
+    installPaths: ['/Applications/Cursor.app', path.join(HOME, 'Library/Application Support/Cursor')],
+    appBundle: '/Applications/Cursor.app',
+    processRe: /Cursor\.app\//,
+    processExclude: /TextInputUIMacHelper/,           // 系统输入法服务「CursorUIViewService」不是 Cursor 本体
+    activity: [{ dir: path.join(HOME, 'Library/Application Support/Cursor/User/globalStorage'), depth: 0, fileRe: /^state\.vscdb(-wal|-shm)?$/ }],
+    note: '桌面版：Cursor.app（composerHeaders sqlite 只读观察；桌面会话无外部控制通道）',
+  },
+  {
+    id: 'qoder-cli', name: 'Qoder CLI', source: 'qoder', base: 'qoder', variantTag: 'cli',
+    installPaths: [path.join(HOME, '.qoder-cn', 'bin', 'qoderclicn'), path.join(HOME, '.qoder-cn')],
+    processRe: /^\s*\d+\s+qoderclicn|\/\.qoder-cn\/bin\/qoderclicn\//,   // ucomm 锚定（qoderclicn-<版本>）
+    processExclude: /\.app\//,
+    activity: [{ dir: path.join(HOME, 'Library/Application Support/com.qodercn.app.stable'), depth: 0, fileRe: /^main\.sqlite(-wal|-shm)?$/ }],
+    note: '命令行版：~/.qoder-cn/bin/qoderclicn/qoderclicn-<版本>（与桌面共用会话库，可互相续接；会话形态库内不可分）',
+  },
+  {
+    id: 'qoder-desktop', name: 'Qoder 桌面端', source: 'qoder', base: 'qoder', variantTag: 'desktop',
+    installPaths: ['/Applications/Qoder CN.app', '/Applications/Qoder.app', path.join(HOME, 'Library/Application Support/com.qodercn.app.stable')],
+    appBundle: '/Applications/Qoder CN.app',
+    processRe: /Qoder( CN)?\.app\//,                     // ucomm 为「Qoder CN」；只认 App 路径段，防误伤
+    activity: [{ dir: path.join(HOME, 'Library/Application Support/com.qodercn.app.stable'), depth: 0, fileRe: /^main\.sqlite(-wal|-shm)?$/ }],
+    note: '桌面版：Qoder CN.app（Electron）——观察 = sqlite 只读（chat_sessions/messages 结构化列，不读消息原文）',
+  },
+  // v0.1.0 首发收录五源；OpenCode（docs/21 M-I）与 Qoder（docs/22 AGT-3）已于本轮接入回到注册表。
+  // AgentOS（远端执行体，docs/21 §6）仍未落地，待接入后再回到此注册表。
 ]);
 
 // ---------------------------------------------------------------------------
@@ -194,6 +245,36 @@ function zcodeSessionCount() {
   return zcodeCountCache;
 }
 
+/** OpenCode 会话计数（30s 缓存；CLI 与桌面共用库——计数挂在 CLI 行，桌面行不重复计）。 */
+let opencodeCountCache = { at: 0, count: null };
+function opencodeSessionCount() {
+  if (opencodeCountCache.count === null || Date.now() - opencodeCountCache.at > 30_000) {
+    try { opencodeCountCache = { at: Date.now(), count: scanOpencodeCatalog().sessionCount }; }
+    catch { opencodeCountCache = { at: Date.now(), count: null }; }
+  }
+  return opencodeCountCache;
+}
+
+/** Cursor 会话计数（30s 缓存，桌面+CLI 主会话；桌面行持计数，CLI 行不重复计）。 */
+let cursorCountCache = { at: 0, count: null };
+function cursorSessionCount() {
+  if (cursorCountCache.count === null || Date.now() - cursorCountCache.at > 30_000) {
+    try { cursorCountCache = { at: Date.now(), count: scanCursorCatalog().sessionCount }; }
+    catch { cursorCountCache = { at: Date.now(), count: null }; }
+  }
+  return cursorCountCache;
+}
+
+/** Qoder 会话计数（30s 缓存，standard 主会话）。 */
+let qoderCountCache = { at: 0, count: null };
+function qoderSessionCount() {
+  if (qoderCountCache.count === null || Date.now() - qoderCountCache.at > 30_000) {
+    try { qoderCountCache = { at: Date.now(), count: scanQoderCatalog().sessionCount }; }
+    catch { qoderCountCache = { at: Date.now(), count: null }; }
+  }
+  return qoderCountCache;
+}
+
 // ---------------------------------------------------------------------------
 // 四态计算
 // ---------------------------------------------------------------------------
@@ -247,7 +328,12 @@ export async function scanLocalAgents(ctx = {}) {
       installed, running: procs.length > 0, connected, connectionKind,
       processes: procs.length, pids: procs,
       lastActivityMs, lastActivityWithinWindow: !!(lastActivityMs && now - lastActivityMs < windowMs),
-      sessionCount: a.id === 'kimi-desktop' ? kimiSessionCount().count : a.id === 'zcode' ? zcodeSessionCount().count : undefined,
+      sessionCount: a.id === 'kimi-desktop' ? kimiSessionCount().count
+        : a.id === 'zcode' ? zcodeSessionCount().count
+        : a.id === 'opencode-cli' ? opencodeSessionCount().count
+        : a.id === 'qoder-desktop' ? qoderSessionCount().count
+        : a.id === 'cursor-desktop' ? cursorSessionCount().count
+        : undefined,
       sessionCountApproximate: a.id === 'kimi-desktop' ? kimiSessionCount().approximate || undefined : undefined,
       version: (await macAppVersion(a.appBundle))
         ?? (a.id === 'claude-code-cli' ? pkgVersion(['/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json', path.join(HOME, '.local/lib/node_modules/@anthropic-ai/claude-code/package.json')]) : null)

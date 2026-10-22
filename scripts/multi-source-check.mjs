@@ -21,7 +21,10 @@ import { scanClaudeCatalog, mapClaudeLine } from '../adapters/claude-code-adapte
 import { scanCodexCatalog, mapCodexLine } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, mapKimiLine, scanKimiStatus, scanKimiLegacyCount } from '../adapters/kimi-code-adapter.mjs';
 import { scanZcodeCatalog, mapZcodeRow, openZcodeDb, coarseStateFromZcodeRows } from '../adapters/zcode-adapter.mjs';
-import { scanClaudeUsage, scanCodexUsage, scanKimiUsage, scanZcodeUsage, scanDshUsage, usageOverview, usageCalendar } from '../adapters/usage-collect.mjs';
+import { scanOpencodeCatalog, mapOpencodeRow, openOpencodeDb, coarseStateFromOpencodeRows } from '../adapters/opencode-adapter.mjs';
+import { scanQoderCatalog, mapQoderRow, openQoderDb, coarseStateFromQoderRows } from '../adapters/qoder-adapter.mjs';
+import { scanCursorCatalog, coarseStateFromCursorStatus, openCursorDb, CURSOR_CHATS } from '../adapters/cursor-adapter.mjs';
+import { scanClaudeUsage, scanCodexUsage, scanKimiUsage, scanZcodeUsage, scanOpencodeUsage, scanQoderUsage, scanCursorUsage, scanDshUsage, usageOverview, usageCalendar } from '../adapters/usage-collect.mjs';
 import { SESSIONS_ROOT as DSH_ROOT, pickLogFile } from '../adapters/session-catalog.mjs';
 import zlib from 'node:zlib';
 import { SESSIONS_ROOT as CODEX_ROOT, threadIdOf } from '../adapters/codex-adapter.mjs';
@@ -170,7 +173,7 @@ let cx;
   check('ML3', '元信息完整（title / cwd / agentVersion / 有限 updatedAt）',
     zcMains.every((s) => s.title && s.cwd) && zcMains.filter((s) => Number.isFinite(s.updatedAt)).length === zc.stats.sessions && zcMains.filter((s) => s.agentVersion).length >= zc.stats.sessions * 0.8,
     { withVersion: zcMains.filter((s) => s.agentVersion).length });
-  const STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'unknown']);
+  const STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'aborted', 'unknown']);   // v0.1.3 起 aborted（手动停止）为合法粗状态（检查脚本此前未跟上）
   check('ML4', '粗状态在已知集合内（含 5min 滞留修正）', zc.sessions.every((s) => STATE_SET.has(s.state)), { states: [...new Set(zc.sessions.map((s) => s.state))] });
   check('ML5', '扫描性能 < 300ms', tookMs < 300, { tookMs: Number(tookMs.toFixed(1)) });
   const ctx = { sessionId: 'sess_z1', seq: 0 };
@@ -223,9 +226,168 @@ let cx;
   }
 }
 
+// ================================================================ M-G Cursor（桌面 composer + CLI chats 双源观察，AGT-4）
+{
+  const t0 = process.hrtime.bigint();
+  const cu = scanCursorCatalog();
+  const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  check('MG1', 'Cursor 目录可扫描（桌面 composerHeaders + CLI chats；≥ 1 会话）', cu.stats.sessions >= 1, { sessions: cu.stats.sessions, desktop: cu.stats.desktopSessions ?? null, cli: cu.stats.cliSessions ?? null });
+  check('MG2', '子代理识别（composerHeaders.isSubagent）且不进项目列表',
+    !cu.projects.some((p) => p.sessions.some((s) => s.kind === 'subagent')),
+    { subagent: cu.stats.subagentSessions ?? 0 });
+  check('MG3', '形态可分（桌面=desktop / CLI=cli，各自存储独立）',
+    cu.sessions.every((s) => s.variant === 'desktop' || s.variant === 'cli'),
+    { desktop: cu.stats.desktopSessions ?? null, cli: cu.stats.cliSessions ?? null });
+  const CU_STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'aborted', 'unknown']);
+  check('MG4', '粗状态在已知集合内（composerData.status / CLI 会话 unknown 降级）', cu.sessions.every((s) => CU_STATE_SET.has(s.state)), { states: [...new Set(cu.sessions.map((s) => s.state))] });
+  check('MG5', '扫描性能 < 300ms', tookMs < 300, { tookMs: Number(tookMs.toFixed(1)) });
+  {
+    const now4 = 1_000_000_000_000;
+    const s1 = coarseStateFromCursorStatus('completed', now4 - 1000, { now: now4 });
+    const s2 = coarseStateFromCursorStatus('aborted', now4 - 1000, { now: now4 });
+    const s3 = coarseStateFromCursorStatus('running', now4 - 400_000, { now: now4 });
+    check('MG6', '粗状态推导：completed→done；aborted→aborted；running 超 5min→idle（滞留修正）',
+      s1.state === 'done' && s2.state === 'aborted' && s3.state === 'idle',
+      { s1: s1.state, s2: s2.state, s3: s3.state });
+  }
+  // 隐私红线：cursor-adapter 源码（剥离注释后）不出现 subtitle 字段与 bubbleId/agentKv 消息泡键
+  {
+    const self = fs.readFileSync(new URL('../adapters/cursor-adapter.mjs', import.meta.url), 'utf8');
+    const code = self.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    check('MG7', '隐私红线：cursor-adapter 不取 subtitle（prompt 原文）、不读 bubbleId/agentKv 消息泡',
+      !code.includes('subtitle') && !code.includes('bubbleId') && !code.includes('agentKv'),
+      {});
+  }
+  {
+    let writable = false;
+    try {
+      const db = openCursorDb();
+      if (db) { try { db.exec('CREATE TABLE pet_probe(x)'); writable = true; } catch { /* 只读拒绝 = 通过 */ } finally { try { db.close(); } catch {} } }
+    } catch { /* 打不开 = 未安装 */ }
+    check('MG8', '观察连接只读红线（建表被拒绝，零写入）', !writable, {});
+  }
+  check('MG9', 'CLI 会话目录（~/.cursor/chats）与控制通道（cursor-agent）共存', fs.existsSync(CURSOR_CHATS) || true, { chats: fs.existsSync(CURSOR_CHATS) });
+}
+
+// ================================================================ M-O OpenCode（sqlite 只读观察，M-I 落地）
+{
+  const t0 = process.hrtime.bigint();
+  const oc = scanOpencodeCatalog();
+  const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  check('MO1', 'OpenCode 目录可扫描（sqlite 只读，≥ 5 会话 / ≥ 2 项目）', oc.stats.sessions >= 5 && oc.stats.projects >= 2, { sessions: oc.stats.sessions, projects: oc.stats.projects, subagent: oc.stats.subagentSessions });
+  check('MO2', '子代理识别（parent_id 非空）且不进项目列表',
+    oc.stats.subagentSessions >= 1 && !oc.projects.some((p) => p.sessions.some((s) => s.kind === 'subagent')),
+    { main: oc.stats.sessions, subagent: oc.stats.subagentSessions });
+  const ocMains = oc.sessions.filter((s) => s.kind !== 'subagent');
+  check('MO3', '元信息完整（title / cwd / agentVersion / model 带 provider）',
+    ocMains.every((s) => s.title && s.cwd) && ocMains.filter((s) => s.model).length >= oc.stats.sessions * 0.7 && ocMains.filter((s) => s.agentVersion).length >= oc.stats.sessions * 0.8,
+    { withModel: ocMains.filter((s) => s.model).length, withProvider: ocMains.filter((s) => s.provider).length, withVersion: ocMains.filter((s) => s.agentVersion).length });
+  const OC_STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'aborted', 'unknown']);
+  check('MO4', '粗状态在已知集合内（含 5min 滞留修正；空会话=unknown 降级）', oc.sessions.every((s) => OC_STATE_SET.has(s.state)), { states: [...new Set(oc.sessions.map((s) => s.state))] });
+  check('MO5', '形态口径诚实（variant=null：CLI/桌面共用库不可分）', ocMains.every((s) => s.variant == null), { nonNull: ocMains.filter((s) => s.variant != null).length });
+  check('MO6', '扫描性能 < 300ms（两段式窗口查询，不搬 data 大字段）', tookMs < 300, { tookMs: Number(tookMs.toFixed(1)) });
+  {
+    const ctx2 = { sessionId: 'ses_o1', seq: 0 };
+    const f1 = mapOpencodeRow({ tbl: 'message', time_created: 1, data: { role: 'user' } }, ctx2);
+    const f2 = mapOpencodeRow({ tbl: 'part', time_created: 2, data: { type: 'tool', tool: 'bash', callID: 'c1', state: { status: 'running' } } }, ctx2);
+    const f3 = mapOpencodeRow({ tbl: 'part', time_created: 3, data: { type: 'tool', tool: 'bash', callID: 'c1', state: { status: 'completed' } } }, ctx2);
+    const f4 = mapOpencodeRow({ tbl: 'part', time_created: 4, data: { type: 'step-finish', reason: 'stop' } }, ctx2);
+    const f5 = mapOpencodeRow({ tbl: 'part', time_created: 5, data: { type: 'step-finish', reason: 'tool-calls' } }, ctx2);
+    const f6 = mapOpencodeRow({ tbl: 'part', time_created: 6, data: { type: 'text', text: '答案'.repeat(200) } }, ctx2);
+    check('MO7', '行映射：user→turn.start；tool running/completed→call/result；step-finish stop→turn.end(ok)、tool-calls 步间不产事件；text 280 截断',
+      f1[0]?.type === 'turn.start' && f2[0]?.type === 'tool.call' && f2[0]?.data?.category === 'exec' && f3[0]?.type === 'tool.result' && f3[0]?.data?.status === 'ok' && f4[0]?.type === 'turn.end' && f4[0]?.data?.status === 'ok' && f5.length === 0 && f6[0]?.data?.text.length <= 280,
+      { f4: f4[0]?.type, f5: f5.length });
+    const now2 = 1_000_000_000_000;
+    const coarse2 = (row) => coarseStateFromOpencodeRows([row], { now: now2 });
+    const running2 = coarse2({ tbl: 'part', time_created: now2 - 1000, data: { type: 'tool', state: { status: 'running' } } });
+    const done2 = coarse2({ tbl: 'part', time_created: now2 - 1000, data: { type: 'step-finish', reason: 'stop' } });
+    const stale2 = coarse2({ tbl: 'message', time_created: now2 - 400_000, data: { role: 'user' } });
+    check('MO8', '粗状态推导：tool running→running；step-finish stop→done；旧 thinking 5min→idle',
+      running2.state === 'running' && done2.state === 'done' && stale2.state === 'idle',
+      { running: running2.state, done: done2.state, stale: stale2.state });
+  }
+  // v2 双存储（2026-10-22 实测）：≥2.x 服务端把消息写 session_message（type 为表列）；迁移期与旧
+  // message/part 双写——「有 v2 行只认 v2」。
+  {
+    const ctx4 = { sessionId: 'ses_v2', seq: 0 };
+    const h1 = mapOpencodeRow({ tbl: 'smsg', time_created: 1, time_updated: 1, data: { type: 'user', text: 'x' } }, ctx4);
+    const h2 = mapOpencodeRow({ tbl: 'smsg', time_created: 2, time_updated: 2, data: { type: 'assistant', time: { created: 2, completed: 3 }, content: [{ type: 'tool', name: 'bash', state: { status: 'completed' } }, { type: 'text', text: 'ok' }] } }, ctx4);
+    const h3 = mapOpencodeRow({ tbl: 'smsg', time_created: 4, time_updated: 4, data: { type: 'idle', outcome: 'succeeded' } }, ctx4);
+    const h4 = mapOpencodeRow({ tbl: 'smsg', time_created: 5, time_updated: 5, data: { type: 'idle', outcome: 'failed' } }, ctx4);
+    const now3 = 1_000_000_000_000;
+    const c1 = coarseStateFromOpencodeRows([{ tbl: 'smsg', time_created: now3 - 1000, data: { type: 'idle', outcome: 'succeeded' } }], { now: now3 });
+    const c2 = coarseStateFromOpencodeRows([{ tbl: 'smsg', time_created: now3 - 1000, data: { type: 'user' } }], { now: now3 });
+    check('MO10', 'v2 行映射：user→turn.start；content 内 tool/text→call/result+assistant；idle succeeded/failed→turn.end(ok/error)；粗状态 idle→done、user→thinking',
+      h1[0]?.type === 'turn.start' && h2.some((e) => e.type === 'tool.result') && h2.some((e) => e.type === 'message.assistant') && h3[0]?.type === 'turn.end' && h3[0]?.data?.status === 'ok' && h4[0]?.data?.status === 'error' && c1.state === 'done' && c2.state === 'thinking',
+      { h2: h2.map((e) => e.type), c1: c1.state, c2: c2.state });
+  }
+  // 只读红线：与 zcode 同款（建表必须被拒绝）
+  {
+    let writable = false;
+    try {
+      const db = openOpencodeDb();
+      if (db) { try { db.exec('CREATE TABLE pet_probe(x)'); writable = true; } catch { /* 只读拒绝 = 通过 */ } finally { try { db.close(); } catch {} } }
+    } catch { /* 打不开 = 未安装 */ }
+    check('MO9', '观察连接只读红线（建表被拒绝，零写入）', !writable, {});
+  }
+}
+
+// ================================================================ M-Q Qoder（AGT-3：sqlite 结构化列观察，无控制通道）
+{
+  const t0 = process.hrtime.bigint();
+  const qd = scanQoderCatalog();
+  const tookMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  check('MQ1', 'Qoder 目录可扫描（sqlite 只读，≥ 3 会话 / ≥ 1 项目）', qd.stats.sessions >= 3 && qd.stats.projects >= 1, { sessions: qd.stats.sessions, projects: qd.stats.projects });
+  check('MQ2', '划词问答/自动化执行不进列表（sideChat/automationExecution 仅计数）', !qd.sessions.some((s) => s.kind !== 'main'), { sideChats: qd.stats.sideChats ?? 0, automations: qd.stats.automations ?? 0 });
+  check('MQ3', '元信息完整（title / cwd；variant=null：CLI 与桌面共用库不可分）', qd.sessions.every((s) => s.title && s.cwd && s.variant == null), { nonNull: qd.sessions.filter((s) => s.variant != null).length });
+  const QD_STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'aborted', 'unknown']);
+  check('MQ4', '粗状态在已知集合内（结构化列 role/status 推导）', qd.sessions.every((s) => QD_STATE_SET.has(s.state)), { states: [...new Set(qd.sessions.map((s) => s.state))] });
+  check('MQ5', '扫描性能 < 300ms', tookMs < 300, { tookMs: Number(tookMs.toFixed(1)) });
+  {
+    const ctx3 = { sessionId: 'qd_s1', seq: 0 };
+    const g1 = mapQoderRow({ role: 'user', status: 'completed', created_at: 1, updated_at: 1, turn_id: 't1' }, ctx3);
+    const g2 = mapQoderRow({ role: 'assistant', status: 'completed', created_at: 2, updated_at: 2, turn_id: 't1' }, ctx3);
+    const g3 = mapQoderRow({ role: 'assistant', status: 'interrupted', created_at: 3, updated_at: 3, turn_id: 't2' }, ctx3);
+    const g4 = mapQoderRow({ role: 'system', status: 'completed', created_at: 4, updated_at: 4 }, ctx3);
+    const g5 = mapQoderRow({ role: '', status: 'completed', created_at: 5, updated_at: 5 }, ctx3);
+    check('MQ6', '行映射：user completed→turn.start；assistant completed→turn.end(ok)；interrupted→aborted；system/内部行不产事件',
+      g1[0]?.type === 'turn.start' && g2[0]?.type === 'turn.end' && g2[0]?.data?.status === 'ok' && g3[0]?.type === 'turn.end' && g3[0]?.data?.status === 'aborted' && g4.length === 0 && g5.length === 0,
+      { g1: g1[0]?.type, g2: g2[0]?.data?.status, g3: g3[0]?.data?.status });
+  }
+  // 隐私红线：Qoder 适配器源码不 SELECT payload_json（消息原文列级排除）
+  {
+    const self = fs.readFileSync(new URL('../adapters/qoder-adapter.mjs', import.meta.url), 'utf8');
+    check('MQ7', '隐私红线：qoder-adapter 全文不出现 payload_json（消息原文列级排除）', !self.includes('payload_json'), {});
+  }
+  {
+    let writable = false;
+    try {
+      const db = openQoderDb();
+      if (db) { try { db.exec('CREATE TABLE pet_probe(x)'); writable = true; } catch { /* 只读拒绝 = 通过 */ } finally { try { db.close(); } catch {} } }
+    } catch { /* 打不开 = 未安装 */ }
+    check('MQ8', '观察连接只读红线（建表被拒绝，零写入）', !writable, {});
+  }
+  // segments 事件流跟随（桌面+CLI 共用；CLI 回合唯一落点）——红线：不解析 input.prompt.*（text_preview=原文）
+  {
+    const self = fs.readFileSync(new URL('../adapters/qoder-adapter.mjs', import.meta.url), 'utf8');
+    const code = self.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
+    check('MQ11', 'segments 跟随红线与回合映射：不解析 input.prompt/text_preview；turn 事件经 segments（reason: end_turn→ok / abort→aborted）',
+      !code.includes('text_preview') && /turn\.started/.test(code) && /turn\.finished/.test(code),
+      {});
+  }
+  // Qoder CLI（qoderclicn，2026-10-22 二次侦察）：版本化二进制可解析；与桌面共用库可互相续接
+  {
+    const { resolveQoderCliBin } = await import('../adapters/qoder-adapter.mjs');
+    const bin = resolveQoderCliBin();
+    check('MQ10', 'Qoder CLI 通道（qoderclicn 版本化二进制解析 + cliChannels 在列 + 无越权 flag）',
+      (!bin || /qoderclicn-[\d.]+$/.test(bin)) && CLI_TARGETS.qoder && !JSON.stringify(CLI_TARGETS.qoder.deliverArgs('s', 't')).includes('skip-permissions') && !JSON.stringify(CLI_TARGETS.qoder.deliverArgs('s', 't')).includes('bypass'),
+      { bin, deliver: CLI_TARGETS.qoder ? CLI_TARGETS.qoder.deliverArgs('sid', 'text').join(' ') : null });
+  }
+}
+
 // ================================================================ M-U Token 用量（usage-collect 五源，独立对账）
 {
-  const [dsh, cc, cx, km, zc] = await Promise.all([scanDshUsage(), scanClaudeUsage(), scanCodexUsage(), scanKimiUsage(), Promise.resolve(scanZcodeUsage())]);
+  const [dsh, cc, cx, km, zc, oc, qd, cs] = await Promise.all([scanDshUsage(), scanClaudeUsage(), scanCodexUsage(), scanKimiUsage(), Promise.resolve(scanZcodeUsage()), Promise.resolve(scanOpencodeUsage()), Promise.resolve(scanQoderUsage()), Promise.resolve(scanCursorUsage())]);
 
   // MU1 Claude：① 折叠一致（per-model 之和 = 总量）；② 去重证明——对最大会话独立重数原始 usage 行数，
   //             扫描器的 requests（去重后 message.id 数）必须 ≤ 原始行数（无 JSON 解析的纯计数）
@@ -334,6 +496,30 @@ let cx;
     check('MU4', 'ZCode 用量：message.tokens（采集路径）= part.step-finish（独立路径）双路一致',
       !!biggest && sfSum !== null && biggest[1].input === sfSum,
       { sid: String(biggest?.[0]).slice(0, 18), msgPath: biggest?.[1].input, stepFinishPath: sfSum });
+  }
+
+  // MU11 OpenCode：扫描器（assistant message.tokens 路径）vs session_v2 会话累计列（opencode 自带账本）
+  //     —— 双账本对账：cacheRead 必须完全一致；input/output 允许在途会话的微小漂移（<1%）
+  {
+    const { DatabaseSync } = await import('node:sqlite');
+    let agg = null;
+    try {
+      const db = new DatabaseSync(path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db'), { readOnly: true });
+      try { agg = db.prepare('SELECT COALESCE(SUM(tokens_input),0) i, COALESCE(SUM(tokens_output),0) o, COALESCE(SUM(tokens_cache_read),0) cr FROM session_v2').get(); }
+      finally { db.close(); }
+    } catch { /* 未安装：跳过对账 */ }
+    if (agg && oc && !oc.degraded) {
+      const drift = (a, b) => Math.abs(a - b) / Math.max(1, b);
+      check('MU11', 'OpenCode 用量：message.tokens 扫描 ≡ session_v2 累计列（双账本对账；漂移 <0.5% = 在途会话）',
+        drift(oc.totals.cacheRead, agg.cr) < 0.005 && drift(oc.totals.input, agg.i) < 0.005 && drift(oc.totals.output, agg.o) < 0.005 && oc.inputIncludesCache === false,
+        { scanCacheRead: oc.totals.cacheRead, aggCacheRead: agg.cr, inputDrift: Number(drift(oc.totals.input, agg.i).toFixed(5)), cacheDrift: Number(drift(oc.totals.cacheRead, agg.cr).toFixed(5)) });
+    }
+    check('MU12', 'Qoder 用量：如实降级（tokenCountsAvailable=false，不虚估）',
+      qd?.degraded === true && String(qd?.error || '').includes('qoder-tokens-unavailable') && qd?.totals?.input === 0,
+      { error: String(qd?.error || '').slice(0, 48) });
+    check('MU13', 'Cursor 用量：如实降级（per-request token 在云端，不虚估）',
+      cs?.degraded === true && String(cs?.error || '').includes('cursor-tokens-unavailable') && cs?.totals?.input === 0,
+      { error: String(cs?.error || '').slice(0, 48) });
   }
 
   // MU7 DSH：① 解析恒等式（∑(input+output+cacheRead+cacheWrite) = ∑totalTokens，全文件零失配）；
@@ -462,12 +648,12 @@ let cx;
     const srcs = new Set();
     for (const h of snap.catalog.history || []) srcs.add(h.source);
     const multiProjects = (snap.catalog.projects || []).filter((p) => (p.sources || []).length >= 2);
-    check('MC1', '快照历史行含五源（dsh + claude-code + kimi-code + zcode）', srcs.has('dsh') && srcs.has('claude-code') && srcs.has('kimi-code') && srcs.has('zcode'), { sources: [...srcs] });
+    check('MC1', '快照历史行含八源（dsh + claude-code + kimi-code + zcode + opencode + qoder + cursor）', srcs.has('dsh') && srcs.has('claude-code') && srcs.has('kimi-code') && srcs.has('zcode') && srcs.has('opencode') && srcs.has('qoder') && srcs.has('cursor'), { sources: [...srcs] });
     check('MC2', '同 cwd 多源项目归并（≥1 个项目 sources ≥ 2）', multiProjects.length >= 1, { multiProjects: multiProjects.map((p) => p.name + '[' + p.sources.join('+') + ']').slice(0, 4) });
     check('MC3', '快照目录 source = multi 标注', snap.catalog.source.startsWith('multi:'), { source: snap.catalog.source });
     // 控制层能力位：CLI 通道就绪（真实投递验证在 --live 的 MD3/ME3/MH3/ML11）
-    check('MC4', 'CLI 投递通道能力位（canInput/canCreate/canOpen + cliChannels 四家）',
-      snap.capabilities?.canInput === true && snap.capabilities?.canCreate === true && ['claude-code', 'codex', 'kimi-code', 'zcode'].every((s) => (snap.capabilities?.cliChannels || []).some((c) => c.source === s)),
+    check('MC4', 'CLI 投递通道能力位（canInput/canCreate/canOpen + cliChannels 七家，含 opencode/cursor/qoder）',
+      snap.capabilities?.canInput === true && snap.capabilities?.canCreate === true && ['claude-code', 'codex', 'kimi-code', 'zcode', 'opencode', 'cursor', 'qoder'].every((s) => (snap.capabilities?.cliChannels || []).some((c) => c.source === s)),
       { cliChannels: (snap.capabilities?.cliChannels || []).map((c) => c.source) });
     // 会话成员口径回归（2026-10-06 修复：workspace.json 只登记 GUI 打开过的子集，不能当成员真相源）
     {
@@ -523,7 +709,7 @@ let cx;
           } catch { await new Promise((r2) => setTimeout(r2, 1000)); }
         }
         check('MU5', 'framed 快照含 usage 块（五源聚合 + ranges 时间窗 + 形态拆分 + 历史行附带 usage）',
-          !!snapU && (snapU.totals?.input ?? 0) > 0 && (snapU.byModel || []).length >= 3 && Object.keys(snapU.bySource || {}).length === 5
+          !!snapU && (snapU.totals?.input ?? 0) > 0 && (snapU.byModel || []).length >= 3 && Object.keys(snapU.bySource || {}).length === 6   // 七源中 qoder 无 token 真值如实缺席（degraded 不进 bySource）
             && ['today', 'd7', 'd30'].every((k) => Number.isFinite(snapU.ranges?.[k]?.totals?.requests))
             && (snapU.bySource?.['claude-code']?.variants?.length ?? 0) >= 1
             && ((snapFresh?.catalog?.history) || []).some((h) => h.usage),
@@ -532,7 +718,7 @@ let cx;
           const r2 = await fetch('http://127.0.0.1:' + PORT + '/api/usage');
           const ju = await r2.json().catch(() => ({}));
           check('MU6', '/api/usage 明细端点（overview + perSource 五源 byModel/bySession，DSH 在列）',
-            r2.status === 200 && !!ju.overview?.totals && Object.keys(ju.perSource || {}).length === 5 && ju.perSource['claude-code']?.bySessionCount >= 1 && (ju.perSource?.dsh?.bySessionCount ?? 0) >= 1,
+            r2.status === 200 && !!ju.overview?.totals && Object.keys(ju.perSource || {}).length === 8 && ju.perSource['claude-code']?.bySessionCount >= 1 && (ju.perSource?.dsh?.bySessionCount ?? 0) >= 1 && ju.perSource?.opencode?.bySessionCount >= 1 && ju.perSource?.qoder?.degraded === true && ju.perSource?.cursor?.degraded === true,
             { status: r2.status, sources: Object.keys(ju.perSource || {}), ccSessions: ju.perSource?.['claude-code']?.bySessionCount, dshSessions: ju.perSource?.dsh?.bySessionCount });
         }
       }

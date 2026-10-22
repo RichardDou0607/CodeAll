@@ -1,5 +1,34 @@
 # 变更日志（文档与契约）
 
+## 2026-10-22（五）
+### Qoder CLI 接入【未发版】：qoderclicn 通道 + segments 事件流——Qoder 从「观察-only」升级为全通道（用户定向「现在把 qoder CLI 也接入」）
+
+- **侦察修正（推翻上午「无 CLI」结论）**：Qoder CLI = `qoderclicn`（~/.qoder-cn/bin/qoderclicn/qoderclicn-<版本>，版本化命名；~/.local/bin 有符号链接；用户 14:41 装入）。与桌面**共用 chat_sessions 库**（`--list-sessions` 按项目列出同一批 UUID）——桌面会话可经 CLI 续接、反之亦然。
+- **控制**：`qoderclicn -p -r <id> <text>`（无头续接）/ `-p <text>`（新建+首投）/ `-m <model>`（--list-models 12 模型：Auto/Fast/Qwen3.8-Max/…/GLM-5.3）；`--reasoning-effort` 有 flag 无公开取值表 → 单 'default' 档如实标注；**不用** `--dangerously-skip-permissions`/`--permission-mode bypass_permissions`。`resolveQoderCliBin()` 解析版本化二进制（cli-control/model-registry 共用）。framed 移除上午的 qoder「只入队」守卫与「打开禁行」分支——现走 CLI 投递与 Terminal `qoderclicn -r` 续接。
+- **segments 事件流（三次侦察发现）**：`~/.qoder-cn/logs/sessions/<编码cwd>/<sid>/segments/*.jsonl` 是桌面与 CLI **共用**的结构化事件流（turn.started/turn.finished，文件名带时间戳+pid）。关键事实：**CLI 回合只写 segments、不回写 main.sqlite**（实测 -r 续接桌面会话后 chat_sessions.updated_at 不动）→ ① 目录的 updatedAt/状态以 segments 优先（sqlite 供标题/cwd/会话清单）；② 跟随器从 sqlite 轮询**重写为 segments 尾读**（文件偏移增量；turn.reason: end_turn/max_turns→ok、abort→aborted、error/failed→error；实测 144 回合分布 124/14/6）——Qoder 会话从此有**实时回合事件**（此前只有目录级），子代理回合按 is_subagent 跳过。红线：`input.prompt.*` 含 text_preview（prompt 原文）不读不解析（MQ11 扫源码）；segments token 字段实测恒 0（1123 个 model.response.completed 全零）→ **用量仍如实降级**。
+- **形态口径**：CLI/桌面共用库且无来源标记（extra_json.source=workspace、消息 source=引擎投影）→ 会话 variant=null（同 opencode），软件状态页拆 qoder-cli/qoder-desktop 两行（进程路径分家）；UI 形态筛选去掉 qoder 档。
+- **闭环实测**：经 API 向桌面创建的旧会话 5696510f 无头投递 → 回合完成（回复 ok）落 segments → 目录状态 done/快照可见；跟随器回放含该回合；用户进行中的 CLI 会话实时显示「思考中」LIVE 行。
+- **回归**：demo 21 项 exit 0（test-window 85 项：卡片 13→14）；multi-source-check MC4 七通道 + MQ3（variant=null）/MQ10（qoderclicn 通道）/MQ11（segments 红线）全绿；既有 ML5/MC5/MU5 环境失败不变（基线同样失败）。
+
+
+### 三家新源接入【未发版】：OpenCode（CLI+桌面）/ Qoder（桌面）/ Cursor（桌面+CLI）——五源扩到八源，软件状态 8 行扩到 13 行（用户定向「现在帮我把 Qoder，opencode desktop&CLI 接入 CodeAll」+「在测试完毕后对 cursor 的 desktop 和 CLI 均进行接入」；docs/22 W2 AGT-2/3/4 提前落地）
+
+- **OpenCode（`adapters/opencode-adapter.mjs`，M-I/AGT-2）**：观察 = `~/.local/share/opencode/opencode.db`（WAL 只读并发；CLI 与桌面共用同一后台服务与库）。
+  - **双消息存储**（2026-10-22 实测，v1→v2 迁移双写）：≤1.18 走 `message`+`part`（与 ZCode 同构，`step-finish.reason=stop` 收回合）；≥2.x 服务端写 `session_message`（type 是**表列**：user/assistant/idle，`idle.outcome=succeeded|failed` 收回合；tool 内联在 assistant.content）。粗状态/跟随/用量三链路都走双路径，**「有 v2 行的会话只认 v2」**去重（不去重总量精确翻倍：实测 ΣcacheRead 314.9M vs 账本 157.4M）。
+  - **用量对账**：assistant 行自带权威 tokens（input **不含** cacheRead，Anthropic 式）+ 顶层 providerID/modelID（键 `provider/model`，跨 provider 同名不混账）；MU11 双账本对账漂移 <0.5%（在途会话）。tool 调用计数走 part 的 tool 行 + v2 `json_each` 展开 content。
+  - **控制**：`opencode run --session <id>`（无头续接）/ `run -m <model> <msg>`（新建+首投，**-m 是 run 子命令 flag**，前置即错）；不用 `--auto`（无头未授权按拒绝，不越权）。**PWD 修复**：opencode v2 客户端按 `$PWD`（非 getcwd）判定会话目录——`headlessRun` 现同步 `env.PWD=cwd`（实测 spawn cwd=/tmp 仍写宿主目录）。
+  - **形态口径诚实**：CLI/桌面共用库、库内无形态标记 → 会话 `variant=null`（不冒充 cli/desktop），软件状态页仍按进程路径拆行；模型注册表 `opencode models` 45 模型（CLI 无思考档 flag → 单 'default' 档如实标注）。
+  - **性能**：目录扫描两段式窗口查询（先排 id 不搬 data 大字段——part 均值 ~50KB 的 tool 输入原文；668MB 库实测 600ms→46ms）。
+- **Qoder（`adapters/qoder-adapter.mjs`，AGT-3 spike 落地）**：阿里 AI IDE（Qoder CN 0.4.8，纯桌面无 CLI/hook/ACP）。观察 = `~/Library/Application Support/com.qodercn.app.stable/main.sqlite`（WAL 只读）的 `chat_sessions` + `chat_session_messages` **结构化列**（role/status/sequence）——**隐私最高档：任何 SQL 不 SELECT 消息原文列**（payload 与原文同列，列级排除；比 Kimi lastPrompt 更严，MQ7 断言源码字面量）。`status=interrupted` → aborted（手动停止口径一致）；划词问答（sideChat）/自动化执行不进列表；token 真值客户端不落盘（context_usage 仅百分比）→ 用量如实降级；无控制通道 → 投递只入队如实说明。
+- **Cursor（`adapters/cursor-adapter.mjs`，AGT-4）**：桌面 + CLI 双源。
+  - 桌面（3.26.16）：`User/globalStorage/state.vscdb` 的 `composerHeaders`（目录：name/isArchived/**isSubagent**/lastUpdatedAt）+ `cursorDiskKV` 的 `composerData:<id>.status`（completed→done / aborted→aborted / running→running+5min 滞留修正）；模型 best-effort 来自 `~/.cursor/ai-tracking` 的 conversation_summaries。**隐私红线**：value 里的 `subtitle` 是用户 prompt 原文——只取 name/unifiedMode；消息泡（bubbleId/agentKv blob）完全不读（MG7 断言）。workspaceId 不透明 → 桌面会话 cwd=null（如实「Cursor（未开文件夹）」组）。
+  - CLI（cursor-agent 2026.10）：`~/.cursor/chats/<hash>/<sid>/meta.json`（cwd/时间戳/hasConversation）目录级观察；会话内 `store.db` 是请求转录原文（system prompt/用户内容）——红线不读，回合级观察如实缺席；控制 = `cursor-agent -p --resume <id>`（续接）/-p（新建+首投），**不用 --force/--yolo**（Run Everything 越权）；模型注册表 `--list-models` 265 模型（档位内嵌模型名 → 单 'default' 档）。桌面 composer 会话无外部通道：投递入队如实说明、打开如实回报（不转交 DSH 插件）。
+  - 用量：per-request token 在云端（客户端不落盘）→ 如实降级。
+- **接线面**：`local-agents` 注册表 8→13 行（OpenCode CLI/桌面、Qoder、Cursor CLI/桌面，进程路径分家 + 四态验证）；`framed.mjs` 八源目录/用量/跟随器/投递/打开路由；`cli-control` 六通道（+opencode/cursor）；`model-registry` +opencode/cursor；UI 八源 tab/图标（qoder/opencode/cursor 三枚 SVG letter-mark）/形态筛选（cursor 双档、opencode 不给档）/新建对话框只列有通道的源；`usage-collect` 八源（+MU11 双账本对账/MU12·MU13 如实降级）。
+- **闭环实测（本机）**：opencode 新建+首投（zhipuai-coding-plan/glm-5.3）回合完成落库、快照 done ✅（glm-5.3-highspeed 会话被套餐拒：错误如实回报不冒充成功）；cursor-agent 新建+首投回复 ok、新会话 hasConversation=true ✅；Qoder 投递入队 ✅；三家只读红线（建表拒绝）全过。
+- **回归**：demo 全部 21 个测试 exit 0（test-window 85 项：卡片 8→13、tab 6→9、七源图表；test-ui-fixture 扩八源）；`multi-source-check` 新增 MO1–MO10（OpenCode）/MQ1–MQ8（Qoder）/MG1–MG9（Cursor）+ MU11–MU13 全绿；既有失败仅 ML5/MC5/MU5 三项——**HEAD 基线（git worktree 对照）同样失败**，属环境负载/DSH 侧既有口径问题，非本轮回归。ML4 补 `aborted` 合法态（v0.1.3 时检查脚本未跟上）。
+- **文档**：docs/40 适配矩阵补三家（含数据位置与实测口径）；docs/22 AGT-2/3/4 状态更新；README 能力表五源→八源。
+
 ## 2026-10-19（三）
 ### 手动停止 ≠ 出错【v0.1.3 · 契约 v1.4】：用户中断的会话不再永久显示「出错」（用户反馈）
 

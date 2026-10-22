@@ -27,6 +27,7 @@ import { execFile, execFileSync, spawn } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { resolveQoderCliBin } from './qoder-adapter.mjs';
 
 const execFileP = promisify(execFile);
 
@@ -119,6 +120,47 @@ export const CLI_TARGETS = Object.freeze({
       if (fs.existsSync(personal)) out.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = personal;
       return out;
     },
+  }),
+  opencode: Object.freeze({
+    name: 'OpenCode',
+    bin: 'opencode',
+    // `opencode run`（v2）：阻塞跑完回合后退出；--session <id> 续接既有会话（不存在才创建）。
+    // 不带 --auto：无头时未授权操作按拒绝处理（与 zcode 的 build 档同口径，不越权）。
+    // run 会自动接入后台服务（桌面 App 的 opencode-cli serve 或 CLI 自起），回合写入共用库。
+    // 注意：-m 是 run 子命令的 flag（顶层无 -m）——新建组参在 deliverCreateViaCli 特例处理，
+    // 这里不定义 modelArgs（TUI 交互新建也不支持 -m，与 zcode 同口径忽略模型参数）。
+    deliverArgs: (id, text) => ['run', '--session', id, text],
+    createArgs: (text) => ['run', text],
+    openArgs: (id) => ['--session', id],
+    interactiveArgs: () => [],
+    extraPaths: () => [path.join(os.homedir(), '.opencode', 'bin', 'opencode'), path.join('/Applications', 'OpenCode.app', 'Contents', 'Resources', 'opencode-cli')],
+  }),
+  qoder: Object.freeze({
+    name: 'Qoder',
+    // qoderclicn（~/.qoder-cn/bin/qoderclicn/qoderclicn-<版本>，版本化命名不在 PATH）：
+    // -p 无头（阻塞跑完回合）；-r <id> 续接——CLI 与桌面共用 chat_sessions 库，桌面会话也能续接
+    // （--list-sessions 按项目列出同一批 UUID，2026-10-22 实测）。
+    // 不用 --dangerously-skip-permissions / --permission-mode bypass_permissions：无头不越权口径。
+    bin: 'qoderclicn',
+    deliverArgs: (id, text) => ['-p', '-r', id, text],
+    createArgs: (text) => ['-p', text],
+    openArgs: (id) => ['-r', id],
+    interactiveArgs: () => [],
+    modelArgs: (model) => ['-m', model],
+    extraPaths: () => { const p = resolveQoderCliBin(); return p ? [p] : []; },
+  }),
+  cursor: Object.freeze({
+    name: 'Cursor',
+    bin: 'cursor-agent',
+    // cursor-agent（2026.10 版）：-p 无头（阻塞跑完回合）；--resume <chatId> 续接 CLI 会话
+    // （chats/<hash>/<sessionId>，按 cwd 归档——spawn 的 cwd 必须与原会话一致）。
+    // 不用 --force/--yolo（Run Everything）：无头时未授权操作按拒绝处理（不越权口径）。
+    deliverArgs: (id, text) => ['-p', '--resume', id, text],
+    createArgs: (text) => ['-p', text],
+    openArgs: (id) => ['--resume', id],
+    interactiveArgs: () => [],
+    modelArgs: (model) => ['--model', model],
+    extraPaths: () => [path.join(os.homedir(), '.local', 'bin', 'cursor-agent')],
   }),
 });
 
@@ -234,10 +276,12 @@ async function headlessRun(source, cwd, args, label, envExtra = {}) {
     fs.mkdirSync(CONTROL_DIR, { recursive: true });
     const logFile = path.join(CONTROL_DIR, source + '-' + Date.now().toString(36) + '.log');
     const out = fs.openSync(logFile, 'a', 0o600);
+    // PWD 同步 cwd：opencode v2 客户端按 $PWD（非 getcwd）判定会话项目目录——不覆盖时无头子进程
+    // 继承宿主的 PWD，会话全部落进服务进程目录（2026-10-22 实测：spawn cwd=/tmp 仍写 agent桌宠）。
     const child = spawn(bin, args, {
       cwd,
       detached: true, stdio: ['ignore', out, out],
-      env: { ...sanitizedEnv(), ...cliEnvFor(source, bin), ...envExtra },
+      env: { ...sanitizedEnv(), PWD: cwd, ...cliEnvFor(source, bin), ...envExtra },
     });
     const pid = child.pid;
     if (!pid) {
@@ -1004,6 +1048,11 @@ export async function deliverCreateViaCli(source, cwd, text, model = '', reasoni
     if (!fs.existsSync(path.join(dir, '.git'))) args.push('--skip-git-repo-check');
     if (wanted) args.push('-m', wanted);
     args.push('-c', 'model_reasoning_effort=' + JSON.stringify(reasoningEffort));
+    args.push(safe);
+  } else if (source === 'opencode') {
+    // -m 是 run 子命令的 flag（opencode 顶层无 -m，实测前置会立即报错退出）
+    args = ['run'];
+    if (wanted) args.push('-m', wanted);
     args.push(safe);
   } else {
     args = [...(wanted && t.modelArgs ? t.modelArgs(wanted) : []),

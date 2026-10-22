@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { describeModelMap, loadModelMap, mapModelName } from './model-map.mjs';
+import { resolveQoderCliBin } from './qoder-adapter.mjs';
 
 const HOME = os.homedir();
 const CACHE_MS = 30_000;
@@ -315,6 +316,98 @@ function parseZcode() {
   return source(deduped, { executable: bin, userConfig: userFile, builtinConfig: builtinFile });
 }
 
+// OpenCode: `opencode models` 每行一个 provider/model（即 -m 的取值格式）。
+// CLI 不暴露思考档选择（--thinking 只是显示开关）→ 单一 'default' 档（如实标注，不虚构档位）。
+// 只认 PATH 与 ~/.opencode/bin（独立 CLI 安装位）：不 exec /Applications 内嵌 CLI——
+// 沙箱测试（隔离 HOME）不得把真机 App 带进模型枚举（test-model-registry 踩坑）。
+function parseOpencode() {
+  const bin = findExecutable('opencode', [path.join(HOME, '.opencode', 'bin', 'opencode')]);
+  if (!bin) return emptySource('opencode-cli-not-found');
+  let payload;
+  try {
+    payload = execFileSync(bin, ['models'], {
+      encoding: 'utf8', timeout: 8_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    return emptySource('opencode-models-unreadable:' + String(error?.code || 'parse'));
+  }
+  const models = [];
+  for (const line of String(payload).split('\n')) {
+    const id = line.trim();
+    // 输出里可能有分组行（'custom/'）与表头：只收 provider/model 形态的行
+    if (!id || !/^[a-z0-9][\w.-]*\/[a-z0-9][\w.-]*$/i.test(id)) continue;
+    models.push(modelRecord({
+      value: id,
+      label: id,
+      providerId: id.split('/')[0],
+      modelId: id.split('/').slice(1).join('/'),
+      cliModel: id,
+      reasoningEfforts: ['default'],
+      defaultReasoningEffort: 'default',
+      canCreate: true,
+    }));
+  }
+  return source(models, { via: 'opencode models', executable: bin });
+}
+
+// Cursor: `cursor-agent --list-models` 输出「id - Display Name」；档位内嵌在模型名里
+// （如 gpt-5.3-codex-high）→ 单一 'default' 档（不虚构档位；同 opencode 口径）。
+function parseCursor() {
+  const bin = findExecutable('cursor-agent', [path.join(HOME, '.local', 'bin', 'cursor-agent')]);
+  if (!bin) return emptySource('cursor-cli-not-found');
+  let payload;
+  try {
+    payload = execFileSync(bin, ['--list-models'], {
+      encoding: 'utf8', timeout: 8_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    return emptySource('cursor-models-unreadable:' + String(error?.code || 'parse'));
+  }
+  const models = [];
+  for (const line of String(payload).split('\n')) {
+    const m = line.match(/^([\w.-]+)\s+-\s+(.+)$/);
+    if (!m) continue;
+    models.push(modelRecord({
+      value: m[1],
+      label: m[2].trim(),
+      cliModel: m[1],
+      reasoningEfforts: ['default'],
+      defaultReasoningEffort: 'default',
+      canCreate: true,
+    }));
+  }
+  return source(models, { via: 'cursor-agent --list-models', executable: bin });
+}
+
+// Qoder: `qoderclicn --list-models` 输出表头「MODEL」+ 每行一个模型名（Auto/Fast/Qwen3.8-Max…）。
+// --reasoning-effort 有 flag 但无公开取值表 → 单一 'default' 档（不虚构档位）。
+function parseQoder() {
+  const bin = resolveQoderCliBin();
+  if (!bin) return emptySource('qoder-cli-not-found');
+  let payload;
+  try {
+    payload = execFileSync(bin, ['--list-models'], {
+      encoding: 'utf8', timeout: 8_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    return emptySource('qoder-models-unreadable:' + String(error?.code || 'parse'));
+  }
+  const models = [];
+  for (const line of String(payload).split('\n')) {
+    const id = line.trim();
+    if (!id || id === 'MODEL' || /[\s/]/.test(id)) continue;
+    models.push(modelRecord({
+      value: id,
+      label: id,
+      cliModel: id,
+      reasoningEfforts: ['default'],
+      defaultReasoningEffort: 'default',
+      canCreate: true,
+    }));
+  }
+  return source(models, { via: 'qoderclicn --list-models', executable: bin });
+}
+
 function dshSource(selection, canCreate = false, catalog = null) {
   // 优先用插件透出的 DSH 模型目录（llm 注册表投影：provider×model×思考档位）——
   // 新建会话的模型下拉要能选任一注册模型（用户定向 2026-10-09）；目录不可用时退回单条当前选择。
@@ -381,6 +474,9 @@ export function loadModelRegistry({ dshSelection = null, dshCanCreate = false, d
     codex: safeLoad(() => parseCodex(codexMap)),
     'kimi-code': safeLoad(parseKimi),
     zcode: safeLoad(parseZcode),
+    opencode: safeLoad(parseOpencode),
+    cursor: safeLoad(parseCursor),
+    qoder: safeLoad(parseQoder),
     // 诊断用：当前生效的「注册名 → 实际请求名」映射（来自各 CLI 的实际请求配置）
     mapping: {
       'claude-code': describeModelMap(claudeMap),

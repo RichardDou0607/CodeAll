@@ -61,9 +61,9 @@
 | ID | 任务 | 估时 | 要点 |
 |---|---|---|---|
 | AGT-1（=M-F） | **ACP 统一通道**：JSON-RPC over stdio 客户端（`initialize → session/new → session/prompt`，订阅 `session/update` 15 变体 + 审批） | 8～12 人日 | docs/40 §3.8/§4.6；一次适配覆盖所有 ACP agent；OpenCode 是第一个受益者 |
-| AGT-2（=M-I） | **OpenCode**：ACP 首选；备选 `opencode.db` SQLite 只读快照（cp+只读，10s 轮询，不做 WAL tail）；CLI 控制通道按 `opencode` CLI 参数补齐；**落地后恢复 v0.1.0 移除的注册表行** | 2～4 人日（ACP 就绪后近乎免费） | docs/21 M-I；前置：确认 OpenCode CLI 回到 PATH / 仍在使用 |
-| AGT-3 | **Qoder（阿里）**：spike 先行——数据位置（~/Library/Application Support/Qoder?）、有无 CLI / hook / ACP，全部 [U]；按 spike 结论走「日志/DB 只读 → hooks → CLI 控制」既有三级路径 | spike 1～2 人日 + 适配 4～6 人日 | 遵循 Kimi 教训（docs/21 M-H 勘误）：**先穷尽数据目录探测，再下「无文件级数据」结论** |
-| AGT-4 | **Cursor**：hooks 通道（21 事件，docs/40 §3.3 [B] 证据）做观察；无 hook 时降级进程级（不虚构状态）；控制层 Cursor 无无头 CLI → 首版观察 + 四态行 | 6～8 人日 | `~/.cursor` 本机不存在，全部文档证据，漂移风险中高——hook schema 首轮实测后修订 |
+| AGT-2（=M-I） | **OpenCode**：~~ACP 首选~~ → **已按 opencode.db 只读直采落地（2026-10-22）**：双消息存储（≥2.x session_message + 旧 message/part，迁移双写按 v2 去重）+ `opencode run` 控制通道（PWD 修复）+ 用量双账本对账；注册表行已恢复（CLI/桌面拆行，形态库内不可分如实 null） | ✅ 已落地（MO1–MO10/MU11） | CHANGELOG 2026-10-22；ACP 统一通道（M-F）另计 |
+| AGT-3 | **Qoder（阿里）**：~~spike 先行~~ → **spike 完成并落地（2026-10-22）**：数据 = `com.qodercn.app.stable/main.sqlite` 结构化列（消息原文列列级排除）；无 CLI/hook/ACP → 观察-only，控制如实不宣称（入队）；token 不落盘 → 用量如实降级 | ✅ 已落地（观察，MQ1–MQ8） | CHANGELOG 2026-10-22 |
+| AGT-4 | **Cursor**：~~hooks 通道~~ → **已落地（2026-10-22，存储直采非 hooks）**：桌面 `state.vscdb`（composerHeaders + composerData.status，不读消息泡/subtitle）+ CLI `chats` 目录级（store.db 转录原文红线不读）+ `cursor-agent -p --resume` 控制通道（桌面 composer 无通道，如实入队） | ✅ 已落地（MG1–MG9） | CHANGELOG 2026-10-22；hooks 路线作废（存储直采更稳） |
 | AGT-5（可选） | **GitHub Copilot CLI**：hook 载荷与 Claude 兼容（camel/Pascal 双命名），claude 适配器改造成本低 | 3～5 人日 | docs/40 §3.5；本机 `~/.copilot` 已有数据 [A] |
 
 **通用要求**（每个新源）：契约映射表进 docs/40；multi-source-check 新增 M 组断言（目录/子代理/状态/性能/只读红线/--live 闭环）；四态面板注册行 + 原始图标（拿不到用 CodeAll 回退）；`SOURCE_META/SOURCE_LABEL/AGENT_TABS` 三处接线。

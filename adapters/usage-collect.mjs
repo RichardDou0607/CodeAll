@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * adapters/usage-collect.mjs — Token 用量采集（五源，独立于目录扫描的慢通道）
+ * adapters/usage-collect.mjs — Token 用量采集（八源，独立于目录扫描的慢通道）
  *
  * 与目录扫描（scanXCatalog，头/尾窗口、5s 热缓存）分离的原因：usage 需要**全文件**精确累计，
  * 本机 Claude 转录 1.1GB / 164 文件——不能进热路径。本模块自建 60s 慢缓存 + 文件级增量
@@ -38,17 +38,25 @@
  *                {total,input,output,reasoning,cache:{read,write}}；**input 含 cacheRead**。
  *                判定证据（2026-10-07 二次复核，用户质疑 49% 命中率后用两实验裁决）：
  *                ① 官方账本 raw_usage_json（provider 原始返回）：{inputTokens, totalTokens
- *                   = inputTokens+outputTokens, cacheReadTokens} —— inputTokens 为全量
- *                   prompt（OpenAI 式含 cache），fresh = input − cacheRead；
+ *                = inputTokens+outputTokens, cacheReadTokens} —— inputTokens 为全量
+ *                prompt（OpenAI 式含 cache），fresh = input − cacheRead；
  *                ② 同会话连续请求递推：cr[t+1] ≈ in[t]（累计误差 1.7 万）vs fresh 说的
- *                   cr[t+1] ≈ in[t]+cr[t]（误差 35 万，20 倍）——input 就是全上下文；
+ *                cr[t+1] ≈ in[t]+cr[t]（误差 35 万，20 倍）——input 就是全上下文；
  *                ③ 全日 Σ(in−cr)/请求 ≈ 5k/次 = 每请求新增内容量级（fresh 说会推出
- *                   155k/次新内容，上下文无法持续，不可能）。
+ *                155k/次新内容，上下文无法持续，不可能）。
  *                行级 SQL（session_id × modelId × time_created）JS 折叠；subagent_child 计入。
+ *   OpenCode     part 表 step-finish 的 tokens（每步一行）：{input,output,reasoning,
+ *                cache:{read,write}}，实测 total = in+out+reasoning+cache 递推成立——
+ *                **input 不含 cacheRead**（Anthropic 式，2026-10-22 本机实测）。
+ *                model 取同 message 行 data.model 的 providerID/modelID（'provider/model' 键）；
+ *                行不可变 → 水位 + seen-LRU（无 zcode 的 delta 递推）；CLI/桌面共用库无形态标记。
+ *   Qoder        无 token 真值（chat_session_context_usage.tokenCountsAvailable=false，
+ *                客户端不落盘计数）——如实降级不虚估。
+ *   Cursor       per-request token 在云端（客户端不落盘）——如实降级不虚估。
  *
  * 缓存命中率（跨源统一折算）：fresh = 含cache语义 ? input - cacheRead : input；
  *   hitRate = cacheRead / (fresh + cacheRead)。inputIncludesCache 按源标注：
- *   DSH/Claude/Kimi = false（Anthropic 式 input_tokens 不含 cache），Codex/ZCode = true。
+ *   DSH/Claude/Kimi/OpenCode/Qoder = false（Anthropic 式 input 不含 cache），Codex/ZCode = true。
  *
  * 用法：
  *   node adapters/usage-collect.mjs [--json|--refresh]
@@ -64,6 +72,8 @@ import { PROJECTS_ROOT } from './claude-code-adapter.mjs';
 import { SESSIONS_ROOT as CODEX_ROOT, threadIdOf } from './codex-adapter.mjs';
 import { SESSIONS_ROOT as KIMI_ROOT } from './kimi-code-adapter.mjs';
 import { openZcodeDb, ZCODE_DB } from './zcode-adapter.mjs';
+import { openOpencodeDb, OPENCODE_DB } from './opencode-adapter.mjs';
+import { CURSOR_GLOBAL_DB } from './cursor-adapter.mjs';
 import { SESSIONS_ROOT as DSH_ROOT, pickLogFile } from './session-catalog.mjs';
 
 export const DEFAULT_OPTS = Object.freeze({
@@ -78,7 +88,7 @@ export const DEFAULT_OPTS = Object.freeze({
  *  「?refresh=1 强制重扫」在服务端与 ZCode 上实际不存在；统一从这里取参，zcode 的 refresh
  *  语义 = 清水位/LRU 状态后全表重建（增量实现后生效）。 */
 export const FORCE_SCAN_OPTS = Object.freeze({
-  dsh: { refresh: true }, claude: { refresh: true }, codex: { refresh: true }, kimi: { refresh: true }, zcode: { refresh: true },
+  dsh: { refresh: true }, claude: { refresh: true }, codex: { refresh: true }, kimi: { refresh: true }, zcode: { refresh: true }, opencode: { refresh: true },   // cursor/qoder 无本地真值，强刷无意义
 });
 
 // ---------- 公共累计器 ----------
@@ -999,6 +1009,206 @@ export async function scanZcodeUsage(opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// OpenCode：~/.local/share/opencode/opencode.db（sqlite 只读，WAL 并发；CLI 与桌面共用库）
+//   token 在 **assistant message 行**（权威，2026-10-22 实测）：data.tokens
+//   {input, output, reasoning, cache:{read,write}} + 顶层 providerID/modelID——
+//   total = in+out+reasoning+cache 递推成立 → **input 不含 cacheRead**（Anthropic 式）。
+//   reasoning 为 output 侧细分，不单列（与 ZCode 口径一致）；model 键 'provider/model'。
+//   行内 UPDATE（流式中 tokens 快照会更新）→ 水位 + seen-LRU 指纹去重 + 同行 delta 递推
+//   （zcode 同款：LRU 缓存上次值，重复行只计增量）。tool 调用计数走 part 的 tool 行。
+//   对账基准：Σ message.tokens ≡ session_v2.tokens_*（会话累计列，实测一致）。
+// ---------------------------------------------------------------------------
+
+const OPENCODE_LRU_CAP = 6000, OPENCODE_OVERLAP_MS = 2_000;
+let opencodeState = null;
+
+export async function scanOpencodeUsage(opts = {}) {
+  const o = { ...DEFAULT_OPTS, dbPath: OPENCODE_DB, lruCap: OPENCODE_LRU_CAP, ...opts };
+  const t0 = process.hrtime.bigint();
+  if (o.refresh) opencodeState = null;                    // 强刷（P0-2 管道）：清状态全表重建
+  if (opencodeState && opencodeState.dbPath !== o.dbPath) opencodeState = null;   // 换库（测试/改 env）即全量重建
+  const incremental = !!opencodeState;
+  const acc = incremental ? opencodeState.acc : newAcc();
+  acc.stats = { ...newAcc().stats, incremental, incrementalRows: 0 };
+  acc.stats.files = 1;
+  const degradedAcc = () => { const e = newAcc(); e.stats = { ...acc.stats }; return e; };
+  try { acc.stats.corpusBytes = fs.statSync(o.dbPath).size; } catch { /* 库不存在：degraded 路径 */ }
+  const db = openOpencodeDb(o.dbPath);
+  if (!db) return finishScan('opencode', degradedAcc(), t0, { inputIncludesCache: false, degraded: true, error: 'db-unavailable' });
+  try {
+    const st = opencodeState ?? { dbPath: o.dbPath, watermark: -Infinity, msgLru: new Map(), toolLru: new Map(), acc, lruCap: o.lruCap };
+    let maxTu = Number.isFinite(st.watermark) ? st.watermark : -Infinity;
+    let rowCnt = 0;
+    const since = incremental ? st.watermark - OPENCODE_OVERLAP_MS : -Infinity;
+    // v1→v2 迁移把旧会话同时留在两条存储（实测 82 会话双写）——「有 v2 行的会话只认 v2」，
+    // 否则总量精确翻倍（实测 ΣcacheRead 314.9M vs 账本 157.4M；去重后差 0.0016% = 在途漂移）。
+    const v2Sids = new Set(db.prepare('SELECT DISTINCT session_id AS s FROM session_message').all().map((r) => r.s));
+    // ① assistant message 的 tokens（行内 UPDATE：LRU 存上次值，重复行计 delta；子代理会话一并计入）
+    const stmt = db.prepare(`
+      SELECT m.id AS rid, m.session_id AS sid, m.time_created AS tc, m.time_updated AS tu,
+             COALESCE(json_extract(m.data,'$.providerID'), '(unknown)') || '/' ||
+               COALESCE(json_extract(m.data,'$.modelID'), '(unknown)') AS model,
+             CAST(json_extract(m.data,'$.tokens.input') AS INTEGER) AS input,
+             CAST(json_extract(m.data,'$.tokens.output') AS INTEGER) AS output,
+             CAST(json_extract(m.data,'$.tokens.cache.read') AS INTEGER) AS cacheRead,
+             CAST(json_extract(m.data,'$.tokens.cache.write') AS INTEGER) AS cacheWrite
+      FROM message m WHERE ${incremental ? 'm.time_updated > ? AND ' : ''}json_extract(m.data,'$.role')='assistant'
+        AND json_extract(m.data,'$.tokens.input') IS NOT NULL
+    `);
+    const iter = incremental ? stmt.iterate(since) : stmt.iterate();
+    for (const r of iter) {
+      if ((++rowCnt & 511) === 0) await yieldNow();
+      if (Number.isFinite(r.tu)) maxTu = Math.max(maxTu, r.tu);
+      if (v2Sids.has(r.sid)) continue;                    // 旧路径行：该会话已由 v2 存储接管
+      const val = { input: fin(r.input), output: fin(r.output), cacheRead: fin(r.cacheRead), cacheWrite: fin(r.cacheWrite) };
+      const old = st.msgLru.get(r.rid);
+      let d;
+      if (old) {
+        // 已计过：delta = 新−旧（负值截 0，zcode 同款口径）；requests 已随首次入账计 1
+        d = { input: Math.max(0, val.input - old.input), output: Math.max(0, val.output - old.output),
+              cacheRead: Math.max(0, val.cacheRead - old.cacheRead), cacheWrite: Math.max(0, val.cacheWrite - old.cacheWrite), requests: 0 };
+        if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) { lruTouch(st.msgLru, r.rid, val, st.lruCap); continue; }
+        if (incremental) acc.stats.incrementalRows++;
+      } else {
+        d = { ...val, requests: 1 };
+        if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) continue;
+      }
+      lruTouch(st.msgLru, r.rid, val, st.lruCap);
+      const day = dayKeyOf(r.tc);
+      foldFile(acc, {
+        flat: d,
+        days: new Map([[day, d]]),
+        models: new Map([[r.model, d]]),
+        modelDays: new Map([[r.model, new Map([[day, d]])]]),
+        variant: null,                               // CLI 与桌面共用库，库内无形态标记（诚实：不拆形态账）
+      }, r.sid);
+    }
+    // ② v2 服务路径：session_message 的 assistant 行（≥2.x；tokens/model 内联，语义与旧路径一致）
+    //    —— LRU 键加 'v:' 前缀与旧路径 id 空间隔离（同一会话只会走一种存储，防极端混写）。
+    const v2Stmt = db.prepare(`
+      SELECT q.id AS rid, q.session_id AS sid, q.time_created AS tc, q.time_updated AS tu,
+             COALESCE(json_extract(q.data,'$.model.providerID'), '(unknown)') || '/' ||
+               COALESCE(json_extract(q.data,'$.model.modelID'), '(unknown)') AS model,
+             CAST(json_extract(q.data,'$.tokens.input') AS INTEGER) AS input,
+             CAST(json_extract(q.data,'$.tokens.output') AS INTEGER) AS output,
+             CAST(json_extract(q.data,'$.tokens.cache.read') AS INTEGER) AS cacheRead,
+             CAST(json_extract(q.data,'$.tokens.cache.write') AS INTEGER) AS cacheWrite
+      FROM session_message q WHERE ${incremental ? 'q.time_updated > ? AND ' : ''}q.type='assistant'
+        AND json_extract(q.data,'$.tokens.input') IS NOT NULL
+    `);
+    const v2Iter = incremental ? v2Stmt.iterate(since) : v2Stmt.iterate();
+    for (const r of v2Iter) {
+      if ((++rowCnt & 511) === 0) await yieldNow();
+      if (Number.isFinite(r.tu)) maxTu = Math.max(maxTu, r.tu);
+      const val = { input: fin(r.input), output: fin(r.output), cacheRead: fin(r.cacheRead), cacheWrite: fin(r.cacheWrite) };
+      const old = st.msgLru.get('v:' + r.rid);
+      let d;
+      if (old) {
+        d = { input: Math.max(0, val.input - old.input), output: Math.max(0, val.output - old.output),
+              cacheRead: Math.max(0, val.cacheRead - old.cacheRead), cacheWrite: Math.max(0, val.cacheWrite - old.cacheWrite), requests: 0 };
+        if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) { lruTouch(st.msgLru, 'v:' + r.rid, val, st.lruCap); continue; }
+        if (incremental) acc.stats.incrementalRows++;
+      } else {
+        d = { ...val, requests: 1 };
+        if (!d.input && !d.output && !d.cacheRead && !d.cacheWrite) continue;
+      }
+      lruTouch(st.msgLru, 'v:' + r.rid, val, st.lruCap);
+      const day = dayKeyOf(r.tc);
+      foldFile(acc, {
+        flat: d,
+        days: new Map([[day, d]]),
+        models: new Map([[r.model, d]]),
+        modelDays: new Map([[r.model, new Map([[day, d]])]]),
+        variant: null,
+      }, r.sid);
+    }
+    // ③ tool 调用计数（callsByDay；MCP 命名规则与其它源共用）
+    //    旧路径走 part 的 tool 行；v2 路径用 json_each 展开 assistant.content（精确、只取 name，不搬大字段）
+    const toolStmt = db.prepare(`
+      SELECT p.id AS rid, p.session_id AS sid, p.time_created AS tc, p.time_updated AS tu,
+             json_extract(p.data,'$.tool') AS toolName
+      FROM part p WHERE ${incremental ? 'p.time_updated > ? AND ' : ''}json_extract(p.data,'$.type')='tool'
+    `);
+    const toolIter = incremental ? toolStmt.iterate(since) : toolStmt.iterate();
+    for (const r of toolIter) {
+      if (Number.isFinite(r.tu)) maxTu = Math.max(maxTu, r.tu);
+      if ((++rowCnt & 511) === 0) await yieldNow();
+      if (v2Sids.has(r.sid)) continue;                    // 同上：v2 会话的旧路径 part 行不计
+      if (st.toolLru.has(r.rid)) { lruTouch(st.toolLru, r.rid, true, st.lruCap); continue; }
+      lruTouch(st.toolLru, r.rid, true, st.lruCap);
+      if (!Number.isFinite(r.tc)) { acc.stats.undatedCalls++; }
+      else {
+        const day = dayKeyOf(r.tc);
+        const row = acc.callsByDay.get(day) ?? { toolCalls: 0, mcpCalls: 0 };
+        row.toolCalls++;
+        if (MCP_NAME_RE.test(String(r.toolName ?? ''))) row.mcpCalls++;
+        acc.callsByDay.set(day, row);
+      }
+      if (!acc.bySession.has(r.sid)) acc.bySession.set(r.sid, newUsage());
+    }
+    // v2：assistant.content 的 tool 项（json_each 展开；key=数组下标与 rid 组成稳定去重键）
+    const v2ToolStmt = db.prepare(`
+      SELECT q.session_id AS sid, q.id AS rid, json_each.key AS ix, q.time_created AS tc, q.time_updated AS tu,
+             json_extract(json_each.value, '$.name') AS toolName
+      FROM session_message q, json_each(q.data, '$.content')
+      WHERE ${incremental ? 'q.time_updated > ? AND ' : ''}q.type='assistant'
+        AND json_extract(json_each.value, '$.type')='tool'
+    `);
+    const v2ToolIter = incremental ? v2ToolStmt.iterate(since) : v2ToolStmt.iterate();
+    for (const r of v2ToolIter) {
+      if (Number.isFinite(r.tu)) maxTu = Math.max(maxTu, r.tu);
+      if ((++rowCnt & 511) === 0) await yieldNow();
+      const key = 'vt:' + r.rid + ':' + r.ix;
+      if (st.toolLru.has(key)) { lruTouch(st.toolLru, key, true, st.lruCap); continue; }
+      lruTouch(st.toolLru, key, true, st.lruCap);
+      if (!Number.isFinite(r.tc)) { acc.stats.undatedCalls++; }
+      else {
+        const day = dayKeyOf(r.tc);
+        const row = acc.callsByDay.get(day) ?? { toolCalls: 0, mcpCalls: 0 };
+        row.toolCalls++;
+        if (MCP_NAME_RE.test(String(r.toolName ?? ''))) row.mcpCalls++;
+        acc.callsByDay.set(day, row);
+      }
+      if (!acc.bySession.has(r.sid)) acc.bySession.set(r.sid, newUsage());
+    }
+    opencodeState = st;
+    opencodeState.watermark = maxTu;
+    acc.stats.sessions = acc.bySession.size;
+  } catch (e) {
+    return finishScan('opencode', snapshotAcc(acc), t0, { inputIncludesCache: false, degraded: true, error: 'sqlite:' + String(e.message || e).slice(0, 120) });
+  } finally { try { db.close(); } catch { /* ignore */ } }
+  return finishScan('opencode', snapshotAcc(acc), t0, { inputIncludesCache: false });
+}
+
+// ---------------------------------------------------------------------------
+// Qoder：main.sqlite 无 token 真值（chat_session_context_usage 的 tokenCountsAvailable=false，
+// 客户端不落盘 per-request token 计数，2026-10-22 本机实测）——如实降级，不虚估。
+// ---------------------------------------------------------------------------
+
+export function scanQoderUsage() {
+  const acc = newAcc();
+  return finishScan('qoder', acc, process.hrtime.bigint(), {
+    inputIncludesCache: false,
+    degraded: true,
+    error: 'qoder-tokens-unavailable（Qoder 客户端不落盘 token 计数，无法精确累计；context_usage 仅百分比）',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Cursor：per-request token 在云端（客户端不落盘；ai-tracking 只记代码行数与摘要）——
+// 如实降级，不虚估。
+// ---------------------------------------------------------------------------
+
+export function scanCursorUsage() {
+  const acc = newAcc();
+  return finishScan('cursor', acc, process.hrtime.bigint(), {
+    inputIncludesCache: false,
+    degraded: true,
+    error: 'cursor-tokens-unavailable（Cursor 用量在云端，客户端不落盘 per-request token；ai-tracking 仅代码行数）',
+  });
+}
+
+// ---------------------------------------------------------------------------
 // 检查点（第 2 步，PERF-7）：文件级缓存跨进程持久化——重启后 size/mtime 未变的文件零重读。
 // 失效键与进程内一致（size+mtime：不匹配该文件整读回退）；解析器/result 语义变更时 bump
 // SCANNER_VERSION 使旧检查点整体作废。单条目形状异常只丢该条（永不抛）；数值字段过 fin() 防脏。
@@ -1337,7 +1547,7 @@ export function serializeUsageScan(sc) {
 /** Calendar payload has no session identities or transcripts and stays out of SSE snapshots. */
 export function usageCalendar(scans) {
   const sources = {};
-  for (const [key, source] of [['dsh', 'dsh'], ['cc', 'claude-code'], ['cx', 'codex'], ['km', 'kimi-code'], ['zc', 'zcode']]) {
+  for (const [key, source] of [['dsh', 'dsh'], ['cc', 'claude-code'], ['cx', 'codex'], ['km', 'kimi-code'], ['zc', 'zcode'], ['oc', 'opencode'], ['qd', 'qoder'], ['cs', 'cursor']]) {
     const sc = scans[key], days = {}, includesCache = !!sc?.inputIncludesCache;
     // 日桶 tokens = 全量口径（prompt 含缓存读 + cacheWrite + output），与各 Agent 自带计数一致；
     // promptTokens/freshInput 一并透出，供下钻表与对账用（2026-10-09 口径统一）。
@@ -1358,17 +1568,20 @@ export function usageCalendar(scans) {
   return { sources, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
 
-/** 供 framed 一次性跑五源（并行；单源失败降级不拖垮整体）。 */
+/** 供 framed 一次性跑七源（并行；单源失败降级不拖垮整体）。 */
 export async function scanAllUsage(opts = {}) {
   const safe = (p) => p.catch((e) => ({ degraded: true, error: String(e?.message || e).slice(0, 120), bySession: new Map(), byModel: new Map(), byDay: new Map(), byModelDay: new Map(), byVariantDay: new Map(), byVariantFlat: new Map(), totals: newUsage(), stats: { partial: false }, source: '?' }));
-  const [dsh, cc, cx, km, zc] = await Promise.all([
+  const [dsh, cc, cx, km, zc, oc, qd, cs] = await Promise.all([
     safe(scanDshUsage(opts.dsh ?? {})),
     safe(scanClaudeUsage(opts.claude ?? {})),
     safe(scanCodexUsage(opts.codex ?? {})),
     safe(scanKimiUsage(opts.kimi ?? {})),
     Promise.resolve(scanZcodeUsage(opts.zcode ?? {})),
+    Promise.resolve(scanOpencodeUsage(opts.opencode ?? {})),
+    Promise.resolve(scanQoderUsage()),
+    Promise.resolve(scanCursorUsage()),
   ]);
-  return { dsh, cc, cx, km, zc, overview: usageOverview({ dsh, cc, cx, km, zc }, Date.now()) };
+  return { dsh, cc, cx, km, zc, oc, qd, cs, overview: usageOverview({ dsh, cc, cx, km, zc, oc, qd, cs }, Date.now()) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1386,20 +1599,20 @@ async function main(argv) {
     console.log(JSON.stringify({
       generatedAt: Date.now(),
       overview: scans.overview,
-      detail: { dsh: serializeUsageScan(scans.dsh), cc: serializeUsageScan(scans.cc), cx: serializeUsageScan(scans.cx), km: serializeUsageScan(scans.km), zc: serializeUsageScan(scans.zc) },
+      detail: { dsh: serializeUsageScan(scans.dsh), cc: serializeUsageScan(scans.cc), cx: serializeUsageScan(scans.cx), km: serializeUsageScan(scans.km), zc: serializeUsageScan(scans.zc), oc: serializeUsageScan(scans.oc), qd: serializeUsageScan(scans.qd), cs: serializeUsageScan(scans.cs) },
     }, null, 2));
     return;
   }
   const ov = scans.overview;
   const t = ov.totals;
-  console.log('Token 用量（五源全量 · ' + new Date().toLocaleString('zh-CN') + '）');
+  console.log('Token 用量（八源全量 · ' + new Date().toLocaleString('zh-CN') + '）');
   console.log('  合计  in ' + fmtTok(t.input) + ' · out ' + fmtTok(t.output) + ' · cacheRead ' + fmtTok(t.cacheRead) + ' · 命中率 ' + fmtHit(t.hitRate) + ' · 请求 ' + t.requests);
   for (const [k, label] of Object.entries({ today: '当日', d7: '7日内', d30: '30日内' })) {
     const r = ov.ranges[k].totals;
     console.log('  ' + label.padEnd(4) + ' in ' + fmtTok(r.input) + ' · out ' + fmtTok(r.output) + ' · 命中率 ' + fmtHit(r.hitRate) + ' · 请求 ' + r.requests);
   }
   const V_LABEL = { cli: 'CLI', desktop: '桌面', ide: 'IDE' };
-  for (const [key, sc] of Object.entries({ dsh: scans.dsh, cc: scans.cc, cx: scans.cx, km: scans.km, zc: scans.zc })) {
+  for (const [key, sc] of Object.entries({ dsh: scans.dsh, cc: scans.cc, cx: scans.cx, km: scans.km, zc: scans.zc, oc: scans.oc, qd: scans.qd, cs: scans.cs })) {
     if (!sc || sc.degraded) { console.log('  [' + key + '] 降级：' + (sc?.error ?? '?')); continue; }
     const s = sc.stats ?? {};
     const hit = (() => { const f = sc.inputIncludesCache ? Math.max(0, sc.totals.input - sc.totals.cacheRead) : sc.totals.input; const d = f + sc.totals.cacheRead; return d > 0 ? sc.totals.cacheRead / d : null; })();

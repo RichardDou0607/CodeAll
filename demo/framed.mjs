@@ -26,6 +26,9 @@ import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../ada
 import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
 import { scanKimiCatalog, followKimiLogs, SOURCE as KM_SOURCE } from '../adapters/kimi-code-adapter.mjs';
 import { scanZcodeCatalog, followZcodeLogs, SOURCE as ZC_SOURCE } from '../adapters/zcode-adapter.mjs';
+import { scanOpencodeCatalog, followOpencodeLogs, SOURCE as OC_SOURCE } from '../adapters/opencode-adapter.mjs';
+import { scanQoderCatalog, followQoderLogs, SOURCE as QD_SOURCE } from '../adapters/qoder-adapter.mjs';
+import { scanCursorCatalog, followCursorLogs, SOURCE as CS_SOURCE } from '../adapters/cursor-adapter.mjs';
 import { scanAllUsage, serializeUsageScan, usageCalendar, FORCE_SCAN_OPTS, exportCheckpoint, loadCheckpoint } from '../adapters/usage-collect.mjs';
 import { CLI_TARGETS, availableCliChannels, deliverControl, deliverCreateViaCli, deliverCreateViaZcodePipe, headlessInFlight, openCliSession, resolveCliBin, recoverZcodePendingRollbacks } from '../adapters/cli-control.mjs';
 import { loadModelRegistry, validateModelSelection } from '../adapters/model-registry.mjs';
@@ -33,7 +36,7 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 
 /** 多源会话目录（M-C）：DSH（workspace 注册表）+ Claude Code（目录即项目）+ Codex（session_meta.cwd 归并）+ ZCode（sqlite session.path）。 */
-const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', zcode: 'ZCode' };
+const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', zcode: 'ZCode', opencode: 'OpenCode', qoder: 'Qoder', cursor: 'Cursor' };
 
 // Codex 桌面端任务工作目录（~/Documents/Codex/<日期>/<任务名>，每任务一个一次性目录）：
 // 按 cwd 归并会让侧栏出现大量单会话「项目」（he / qi / jian / xia …）——统一折叠为一个「Codex 任务目录」组
@@ -293,18 +296,25 @@ function makeTtlCache(ttlMs, scan, onError) {
 const catalog = makeTtlCache(15_000, () => scanCatalog({}), (e) => ({ projects: [], error: String(e.message).slice(0, 120) }));
 // DSH 左侧会话列表的注册表（workspace.json，只读）：列表成员与顺序以它为准（readWorkspaceIndex 内部兜底，不抛）
 const workspaceIndex = makeTtlCache(15_000, () => readWorkspaceIndex());
-// 多源目录缓存：DSH + Claude Code + Codex + Kimi Code + ZCode 五路扫描合并（各 ~20ms / zcode ~90ms，15s 复用）
+// 多源目录缓存：DSH + Claude Code + Codex + Kimi Code + ZCode + OpenCode + Qoder 七路扫描合并
+//（各 ~20ms / zcode ~90ms / opencode ~50ms / qoder ~2ms，15s 复用）
 const multiCatalog = makeTtlCache(15_000, (force) => {
   const dsh = catalog(force);
   let cc = { projects: [], sessions: [], elapsedMs: 0 };
   let cx = { projects: [], sessions: [], elapsedMs: 0 };
   let km = { projects: [], sessions: [], elapsedMs: 0 };
   let zc = { projects: [], sessions: [], elapsedMs: 0 };
+  let oc = { projects: [], sessions: [], elapsedMs: 0 };
+  let qd = { projects: [], sessions: [], elapsedMs: 0 };
+  let cs = { projects: [], sessions: [], elapsedMs: 0 };
   try { cc = scanClaudeCatalog(); } catch (e) { cc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
   try { cx = scanCodexCatalog(); } catch (e) { cx = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
   try { km = scanKimiCatalog(); } catch (e) { km = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
   try { zc = scanZcodeCatalog(); } catch (e) { zc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
-  return { dsh, cc, cx, km, zc, elapsedMs: Math.round(((dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0) + (zc.elapsedMs || 0)) * 100) / 100 };
+  try { oc = scanOpencodeCatalog(); } catch (e) { oc = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+  try { qd = scanQoderCatalog(); } catch (e) { qd = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+  try { cs = scanCursorCatalog(); } catch (e) { cs = { projects: [], sessions: [], elapsedMs: 0, error: String(e.message).slice(0, 120) }; }
+  return { dsh, cc, cx, km, zc, oc, qd, cs, elapsedMs: Math.round(((dsh.elapsedMs || 0) + (cc.elapsedMs || 0) + (cx.elapsedMs || 0) + (km.elapsedMs || 0) + (zc.elapsedMs || 0) + (oc.elapsedMs || 0) + (qd.elapsedMs || 0) + (cs.elapsedMs || 0)) * 100) / 100 };
 });
 const sessionStates = new Map(); // sessionId -> 来自目录的粗粒度状态（无实时事件时用）
 
@@ -349,7 +359,7 @@ async function refreshUsage(force = false) {
     usageCache.at = Date.now();
     saveUsageCheckpoint();
   } catch (e) {
-    usageCache.data = usageCache.data ?? { overview: null, cc: null, cx: null, km: null, zc: null, error: String(e?.message || e).slice(0, 120) };
+    usageCache.data = usageCache.data ?? { overview: null, cc: null, cx: null, km: null, zc: null, oc: null, qd: null, cs: null, error: String(e?.message || e).slice(0, 120) };
   } finally { usageCache.busy = false; }
   broadcast();                                          // 扫描完成立刻推新快照（不等 2s 心跳）
 }
@@ -499,7 +509,7 @@ function snapshot() {
   // ---- Token 用量：慢缓存 → 会话行附带 + 全局 usage 块（首轮未完成时 {pending:true}）----
   const usage = usageCache.data;
   const usageBySid = new Map();                          // 'source:sessionId' → 扁平 usage（源内会话 id 不重复）
-  if (usage) for (const sc of [usage.dsh, usage.cc, usage.cx, usage.km, usage.zc]) {
+  if (usage) for (const sc of [usage.dsh, usage.cc, usage.cx, usage.km, usage.zc, usage.oc, usage.qd, usage.cs]) {
     if (sc?.bySession) for (const [sid, r] of sc.bySession) usageBySid.set((sc.source ?? '') + ':' + sid, r);
   }
   const usageOf = (source, sid) => {
@@ -515,6 +525,9 @@ function snapshot() {
   for (const p of multi.cx.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   for (const p of multi.km.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   for (const p of multi.zc.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
+  for (const p of multi.oc.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
+  for (const p of multi.qd.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
+  for (const p of multi.cs.projects || []) for (const s of p.sessions || []) metaById.set(s.sessionId, s);
   // 子代理判定：插件 session.start 的 origin 立即可判（零延迟）；目录 kind 兜底（≤5s 滞后）
   const isSubagent = (id, s) => s?.origin === 'subagent' || (metaById.get(id)?.kind || 'main') === 'subagent';
   // projectKey：DSH 注册表优先；claude/codex 按 cwd 归并进同目录 workspace；Codex 任务目录折叠为一组；都不中 → 'path:<cwd>'（M-C）
@@ -563,7 +576,7 @@ function snapshot() {
     if (!isSubagent(id, s)) continue;
     noteSubagent(s.parentSessionId ?? metaById.get(id)?.parentSession ?? null, keyOfSession(id, s), subRunningLive(s, metaById.get(id), nowMs), s.lastAt ?? s.since ?? 0);
   }
-  for (const sc of [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc]) {   // ② 目录扫描：五源子代理行自带 parentSession + 粗粒度状态（DSH 曾漏扫——插件未挂载时宿主归因完全丢失）
+  for (const sc of [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc, multi.oc, multi.qd, multi.cs]) {   // ② 目录扫描：八源子代理行自带 parentSession + 粗粒度状态（DSH 曾漏扫——插件未挂载时宿主归因完全丢失）
     for (const s of (sc?.sessions || [])) {
       if (s.kind !== 'subagent') continue;
       noteSubagent(s.parentSession ?? null, keyOfSession(s.sessionId, s), subRunningCatalog(s, nowMs), s.updatedAt ?? 0);
@@ -646,6 +659,9 @@ function snapshot() {
   for (const s of multi.cx.sessions || []) collectExtra(s);
   for (const s of multi.km.sessions || []) collectExtra(s);
   for (const s of multi.zc.sessions || []) collectExtra(s);
+  for (const s of multi.oc.sessions || []) collectExtra(s);
+  for (const s of multi.qd.sessions || []) collectExtra(s);
+  for (const s of multi.cs.sessions || []) collectExtra(s);
 
   const sidebarProjects = [];
   const listed = new Set();
@@ -783,6 +799,9 @@ function snapshot() {
       for (const s of multi.cx.sessions || []) bump('codex', s.variant);
       for (const s of multi.km.sessions || []) bump('kimi-code', s.variant);
       for (const s of multi.zc.sessions || []) { if (s.kind !== 'subagent') bump('zcode', s.variant); }   // 纯桌面软件：恒为 desktop 计数（子代理行不计）
+      for (const s of multi.oc.sessions || []) bump('opencode', s.variant);   // CLI/桌面共用库：会话形态库内不可分（variant=null 不计，诚实留空）
+      for (const s of multi.qd.sessions || []) bump('qoder', s.variant);      // 纯桌面软件：恒为 desktop 计数
+      for (const s of multi.cs.sessions || []) bump('cursor', s.variant);      // 桌面=desktop / CLI=cli（两行拆分计数）
       // CLI/桌面端拆行后（base+variantTag）：每行只带自己形态的会话计数
       // （claude 桌面行含 桌面+IDE；CLI 行只含 CLI；无拆行的软件——ZCode 纯桌面——整卡给全部形态计数）
       return (agentStatus.agents || []).map((a) => {
@@ -807,7 +826,7 @@ function snapshot() {
     lastEvent: state.lastEvent,
     inputChannel: (() => {
       const cli = cliChannelsCache();
-      if (cli.length) return { mode: 'cli', detail: 'DSH 经本地队列（挂插件可直投）；Claude Code / Codex / Kimi Code 会话经各自 CLI 投递；ZCode 经桌面 App 内置引擎投递' };
+      if (cli.length) return { mode: 'cli', detail: 'DSH 经本地队列（挂插件可直投）；Claude Code / Codex / Kimi Code / OpenCode / Qoder 会话经各自 CLI 投递（Qoder CLI 与桌面共用库、桌面会话经 CLI 续接）；Cursor CLI 会话经 cursor-agent；ZCode 经桌面 App 内置引擎投递；Cursor 桌面会话暂无外部通道（只读观察）' };
       return { mode: 'manual', detail: '未配置输入通道：输入会进本地队列，点击可复制手动投递命令' };
     })(),
     catalog: {
@@ -820,7 +839,7 @@ function snapshot() {
       })),
       history,
       elapsedMs: multi.elapsedMs, scannedAt: cat.scannedAt,
-      source: 'multi:disk-full+workspace-order+disk(claude-code,codex,kimi-code,zcode)',
+      source: 'multi:disk-full+workspace-order+disk(claude-code,codex,kimi-code,zcode,opencode,qoder,cursor)',
     },
     capabilities: (() => {
       const cli = cliChannelsCache();
@@ -928,7 +947,7 @@ function startFollower() {
 /** 跨源定位会话（支持前缀）：DSH / Claude Code / Codex / Kimi Code / ZCode 目录各查一遍，返回时附带所属项目。 */
 function resolveSessionAny(sessionId, refresh = false) {
   const multi = multiCatalog(refresh);
-  const hits = [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc].flatMap(cat =>
+  const hits = [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc, multi.oc, multi.qd, multi.cs].flatMap(cat =>
     (cat.projects || []).flatMap(p => (p.sessions || [])
       .filter(s => s.sessionId === sessionId || String(s.sessionId).startsWith(sessionId))
       .map(s => ({ ...s, project: { projectId: p.projectId, cwd: p.cwd, name: p.name, title: p.title } }))));
@@ -1024,6 +1043,16 @@ async function deliverInputInner(text, targetId, targetSource, targetKey = null,
   }
   // ⓪ CLI 后端（M-D/M-E/M-H 控制层）：tmux 优先 → 无头续会话兜底；回合写入会话文件后观察跟随器自动看到
   if (targetSource && CLI_TARGETS[targetSource]) {
+    // Cursor 桌面会话（composer，App 内聊天）无外部通道：cursor-agent --resume 只认 CLI 自己的
+    // chats/<hash>/<sid>——对 composer id 必然失败，不宣称投递，入队如实说明。
+    if (targetSource === 'cursor') {
+      const found0 = resolveSessionAny(String(targetId));
+      if (found0 && found0.variant === 'desktop') {
+        item.status = 'queued';
+        item.detail = 'Cursor 桌面会话暂无外部控制通道（cursor-agent 只能续接 CLI 会话），消息已保存在本地队列；请在 Cursor App 内发送';
+        if (record) upsertInput(item); broadcast(); return item;
+      }
+    }
     const sess = (() => {
       const live = state.sessions.get(targetId);
       // catalog 元数据补齐工作目录；ZCode 模型由目标会话保存的选择或显式管道候选确定。
@@ -1226,7 +1255,7 @@ const server = http.createServer(async (req, res) => {
     }
     const multi = multiCatalog(refresh);
     const projects = [];
-    for (const cat of [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc]) {
+    for (const cat of [multi.dsh, multi.cc, multi.cx, multi.km, multi.zc, multi.oc, multi.qd, multi.cs]) {
       for (const p of cat.projects || []) {
         const mains = (p.sessions || []).filter(s => s.kind !== 'subagent');
         projects.push(Object.assign({}, p, {
@@ -1242,7 +1271,7 @@ const server = http.createServer(async (req, res) => {
     const visible = projects.filter(p => p.sessionCount > 0);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(Object.assign({}, multi.dsh, {
-      source: 'multi:workspace-registry+disk(claude-code,codex,kimi-code,zcode)',
+      source: 'multi:workspace-registry+disk(claude-code,codex,kimi-code,zcode,opencode,qoder,cursor)',
       projects: visible,
       mainSessions: visible.reduce((a, p) => a + p.sessionCount, 0),
       subagentSessions: visible.reduce((a, p) => a + p.subagentCount, 0),
@@ -1252,6 +1281,9 @@ const server = http.createServer(async (req, res) => {
         codex: { projects: (multi.cx.projects || []).length, sessions: (multi.cx.sessions || []).filter(s => s.kind !== 'subagent').length },
         'kimi-code': { projects: (multi.km.projects || []).length, sessions: (multi.km.sessions || []).length },
         zcode: { projects: (multi.zc.projects || []).length, sessions: (multi.zc.sessions || []).filter(s => s.kind !== 'subagent').length },
+        opencode: { projects: (multi.oc.projects || []).length, sessions: (multi.oc.sessions || []).filter(s => s.kind !== 'subagent').length },
+        qoder: { projects: (multi.qd.projects || []).length, sessions: (multi.qd.sessions || []).length },
+        cursor: { projects: (multi.cs.projects || []).length, sessions: (multi.cs.sessions || []).filter(s => s.kind !== 'subagent').length },
       },
     })));
     return;
@@ -1267,6 +1299,16 @@ const server = http.createServer(async (req, res) => {
       // 送进 DSH 插件、必然 open-rejected，界面表现为点击无反应）。插件只承接 DSH 会话与
       // 目录里查不到的 ID（DSH 进程内可能有磁盘目录尚未登记的活会话）。
       const found = sessionId ? resolveSessionAny(sessionId) : null;
+      // Cursor 桌面会话无外部通道（CLI_TARGETS 的 cursor 只承接 CLI 会话；Qoder CLI/桌面共用库，qoder 走 CLI 续接）
+      if (found && found.source === 'cursor' && found.variant === 'desktop') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: false, via: 'none', opened: false,
+          session: { sessionId: found.sessionId, title: found.title, source: 'cursor', cwd: found.cwd, variant: 'desktop' },
+          reason: 'Cursor 桌面会话暂无外部通道：请在 Cursor App 内继续该会话',
+        }));
+        return;
+      }
       if (found && CLI_TARGETS[found.source]) {
         const r = await openCliSession(found.source, found);
         res.writeHead(r.ok ? 200 : 502, { 'content-type': 'application/json' });
@@ -1362,7 +1404,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/usage') {
-    // 全量用量明细（overview + 每源 byModel/bySession）；?refresh=1 五源强制重扫（P0-2：含 zcode）
+    // 全量用量明细（overview + 每源 byModel/bySession）；?refresh=1 七源强制重扫（P0-2：含 zcode/opencode）
     if (url.searchParams.get('refresh') === '1') refreshUsage(true);
     else if (!usageCache.busy && (!usageCache.data || Date.now() - usageCache.at > 60_000)) refreshUsage();   // PERF-3：同日历端点的懒触发
     const u = usageCache.data;
@@ -1376,6 +1418,9 @@ const server = http.createServer(async (req, res) => {
         codex: serializeUsageScan(u.cx),
         'kimi-code': serializeUsageScan(u.km),
         zcode: serializeUsageScan(u.zc),
+        opencode: serializeUsageScan(u.oc),
+        qoder: serializeUsageScan(u.qd),
+        cursor: serializeUsageScan(u.cs),
       },
     } : { pending: true }));
     return;
@@ -1418,7 +1463,7 @@ const server = http.createServer(async (req, res) => {
         const badSource = !CLI_TARGETS[source];
         const cwdCheck = !badSource && selected.ok ? validateCreateCwd(source, cwd) : null;
         const fail = badSource
-          ? { error: 'invalid-create', detail: '新建必须指定有效来源（claude-code / codex / kimi-code / zcode）' }
+          ? { error: 'invalid-create', detail: '新建必须指定有效来源（claude-code / codex / kimi-code / zcode / opencode / cursor）' }
           : !selected.ok ? selected : cwdCheck.ok ? null : cwdCheck;
         if (fail) {
           res.writeHead(400, { 'content-type': 'application/json' });
@@ -1505,7 +1550,10 @@ server.listen(PORT, '127.0.0.1', () => {
   const cxFollow = followCodexLogs({ onEvent: applyEvent });
   const kmFollow = followKimiLogs({ onEvent: applyEvent });
   const zcFollow = followZcodeLogs({ onEvent: applyEvent });
-  console.log('  观察通道： DSH=日志tail/插件 · Claude Code=转录tail · Codex=rollout tail · Kimi Code=wire.jsonl tail · ZCode=sqlite轮询（M-L）');
+  const ocFollow = followOpencodeLogs({ onEvent: applyEvent });
+  const qdFollow = followQoderLogs({ onEvent: applyEvent });
+  const csFollow = followCursorLogs({ onEvent: applyEvent });
+  console.log('  观察通道： DSH=日志tail/插件 · Claude Code=转录tail · Codex=rollout tail · Kimi Code=wire.jsonl tail · ZCode=sqlite轮询（M-L）· OpenCode=sqlite轮询（M-I）· Qoder=sqlite轮询（AGT-3）· Cursor=sqlite轮询+目录监听（AGT-4）');
   console.log('  控制通道： ' + (cliChannelsCache().map((c) => c.name + '(' + c.bin + ')').join(' · ') || '无（CLI 不在 PATH）') + '；新建必须发送首条消息；ZCode 精确管道投递');
   // 管道回滚补偿：上次服务在管道回合中被重启 → 标记文件里还留着未完成的回滚
   try { const n = recoverZcodePendingRollbacks(); if (n) console.log('  ZCode 管道回滚补偿：已恢复 ' + n + ' 个会话的模型选择'); } catch { /* ignore */ }

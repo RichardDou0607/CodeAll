@@ -25,7 +25,7 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性�
 
 | 能力 | 说明 |
 |---|---|
-| **五源会话同窗** | DSH（workspace 注册表）/ Claude Code（转录 JSONL）/ Codex（rollout）/ Kimi Code（state.json + wire 事件流）/ ZCode（sqlite WAL 只读并发）——统一目录、状态、标题、模型、思考档 |
+| **八源会话同窗** | DSH（workspace 注册表）/ Claude Code（转录 JSONL）/ Codex（rollout）/ Kimi Code（state.json + wire 事件流）/ ZCode（sqlite WAL 只读并发）/ OpenCode（opencode.db 只读，CLI 与桌面共用）/ Qoder（main.sqlite 结构化列，不读消息原文）/ Cursor（桌面 composer + CLI chats 双源）——统一目录、状态、标题、模型、思考档 |
 | **软件四态面板** | 每个软件一行：未下载 → 未打开 → 已打开·未连接 → 打开·已连接；CLI 与桌面端**拆行**（进程按路径特征分家），带版本、进程数、会话计数、活跃度 |
 | **会话三档视图** | 活跃 / 完成 / 隐藏（1 小时无活动自动归档，手动隐藏可叠加且有「手动」徽标与一键恢复）；子代理会话自动排除、计数不掺水 |
 | **会话形态标注** | CLI / 桌面端 / IDE 三形态端到端标注（会话级 + 软件行级），形态筛选联动项目侧栏 |
@@ -35,7 +35,7 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性�
 
 | 能力 | 说明 |
 |---|---|
-| **CLI 定向投递** | Claude Code / Codex / Kimi Code：向明确 session ID 续接；2.5s 启动快速失败检测。进程启动不等于回合成功，终态与回复仍需核对；ZCode 独立管道保留为实验能力 |
+| **CLI 定向投递** | Claude Code / Codex / Kimi Code / OpenCode（opencode run --session）/ Qoder（qoderclicn -p -r，CLI 与桌面会话可互接）/ Cursor CLI（cursor-agent -p --resume）：向明确 session ID 续接；2.5s 启动快速失败检测。进程启动不等于回合成功，终态与回复仍需核对；ZCode 独立管道保留为实验能力；Cursor 桌面会话无外部通道——只入队如实说明，不宣称已投递 |
 | **新建 / 打开会话** | 已有 CLI 与 DSH 插件路径保留；不是 v0.1.0 的核心发布门槛，也不等于桌面 App 原生创建 |
 | **输入队列** | 本地队列（`~/.agent-pet/input-queue.jsonl`，0600、自动轮转）只留未完成项，可复制/重发/删除/清空 |
 | **DSH 投递（需授权）** | 挂载 dsh-pet 插件（只增不删配置），服务直连插件向指定会话投递；插件离线时只入队列，绝不绕凭证或执行无目标命令 |
@@ -44,7 +44,7 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性�
 
 | 能力 | 说明 |
 |---|---|
-| **五源 Token 计数** | Agent × 模型 × 自然日 × 形态 精确累计（60s 慢缓存 + 文件级增量，1.1GB 转录不进热路径）；子代理消耗归入父会话 |
+| **六源 Token 计数** | Agent × 模型 × 自然日 × 形态 精确累计（60s 慢缓存 + 文件级增量，1.1GB 转录不进热路径）；子代理消耗归入父会话；OpenCode 双账本对账（message.tokens ≡ session_v2 累计）；Qoder/Cursor 客户端不落盘 token——如实降级不虚估 |
 | **缓存命中率** | 每源/每模型命中率（input 语义按厂商分家：Anthropic 不含 cache / OpenAI 含），与官方 UI 对过账（ZCode「今日消耗」基准） |
 | **时间窗 + 日历** | 当日/7 日/30 日切换；用量日历热力与逐日明细；会话行内 tok in/out |
 
@@ -65,7 +65,7 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性�
 
 ```bash
 apps/shell/run.sh --install           # 首次：构建并装进 /Applications；以后 Spotlight「CodeAll」即可
-node demo/framed.mjs --port 7799    # 本地服务：五源观察 + CLI 控制通道 + SSE（外壳未起时可手动）
+node demo/framed.mjs --port 7799    # 本地服务：八源观察 + CLI 控制通道 + SSE（外壳未起时可手动）
 open http://127.0.0.1:7799/           # 迷你条；/window.html = App 界面（浏览器可同源访问）
 
 # 回归与验收（当前基线全绿）
