@@ -261,14 +261,15 @@ export function scanCursorCatalog(opts = {}) {
  *   assistant 泡（type=2，带 completedAtMs）= 1 次请求；toolResults 数组长度 = 工具调用数。
  *   只读 type/completedAtMs/toolResults.length 计数字段——text/thinking 等原文字段不取不存
  *   （读取本地库做统计与 Kimi wire.jsonl 同口径，红线是「不外传原文」）。
- *   只枚举非归档非子代理 composer（与目录口径一致）；CLI store.db 是请求转录原文，不读。
+ *   子代理 composer 的泡也计入（Kimi「子代理消耗归入」口径；composer 无父 id，独立会话行）；
+ *   只排除归档与起草占位；CLI store.db 是请求转录原文，不读。
  */
 export function collectCursorRequestCounts(dbPath = CURSOR_GLOBAL_DB) {
   const out = [];
   const db = openCursorDb(dbPath);
   if (!db) return { ok: false, records: out };
   try {
-    const composers = db.prepare('SELECT composerId FROM composerHeaders WHERE isArchived = 0 AND isSubagent = 0 AND composerId != ?').all('empty-state-draft');
+    const composers = db.prepare('SELECT composerId FROM composerHeaders WHERE isArchived = 0 AND composerId != ?').all('empty-state-draft');
     const stmt = db.prepare("SELECT CAST(value AS TEXT) AS v FROM cursorDiskKV WHERE key LIKE 'bubbleId:' || ? || ':%'");
     for (const c of composers) {
       let bubbles;

@@ -517,9 +517,11 @@ let cx;
         drift(oc.totals.cacheRead, agg.cr) < 0.005 && drift(oc.totals.input, agg.i) < 0.005 && drift(oc.totals.output, agg.o) < 0.005 && oc.inputIncludesCache === false,
         { scanCacheRead: oc.totals.cacheRead, aggCacheRead: agg.cr, inputDrift: Number(drift(oc.totals.input, agg.i).toFixed(5)), cacheDrift: Number(drift(oc.totals.cacheRead, agg.cr).toFixed(5)) });
     }
-    check('MU12', 'Qoder 用量：请求级真实计数（segments turn 事件；token 真值在云端不虚估——token 字段实测恒 0）',
-      qd?.degraded !== true && (qd?.totals?.requests ?? 0) >= 1 && (qd?.totals?.input ?? 0) === 0 && qd?.tokensUnavailable === true && [...qd.byModel.keys()].some((k) => /^(q|d|m)f?model/.test(k)),
-      { requests: qd?.totals?.requests, models: [...qd.byModel.keys()], toolCalls: [...qd.callsByDay.values()].reduce((a, c) => a + c.toolCalls, 0) });
+    // 单位回归（2026-10-22 用户报障「明显不正确」）：计数基元必须是 model.response.completed
+    // （一回合含多次 agentic 模型请求 + fork 后台代理不写 turn 边界——按回合计数曾把量级压低 14×）
+    check('MU12', 'Qoder 用量：请求级真实计数（基元=model.response.completed，单位=模型请求；token 真值在云端不虚估）',
+      qd?.degraded !== true && (qd?.totals?.requests ?? 0) >= 159 && (qd?.totals?.input ?? 0) === 0 && qd?.tokensUnavailable === true && [...qd.byModel.entries()].every(([k]) => /model/.test(k)) && [...qd.byModel.values()].reduce((a, u) => a + u.requests, 0) === (qd?.totals?.requests ?? -1),
+      { requests: qd?.totals?.requests, models: [...qd.byModel.entries()].map(([k, u]) => k + ':' + u.requests), toolCalls: [...qd.callsByDay.values()].reduce((a, c) => a + c.toolCalls, 0) });
     check('MU13', 'Cursor 用量：请求级真实计数（assistant 泡；token 真值在云端不虚估）',
       cs?.degraded !== true && (cs?.totals?.requests ?? 0) >= 1 && (cs?.totals?.input ?? 0) === 0 && cs?.tokensUnavailable === true,
       { requests: cs?.totals?.requests, toolCalls: [...cs.callsByDay.values()].reduce((a, c) => a + c.toolCalls, 0) });

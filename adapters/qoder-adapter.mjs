@@ -125,24 +125,28 @@ export function listSegmentFiles(rootDir = QODER_SEGMENTS) {
   return out;
 }
 
-/** 单个 segment 文件 → 用量记录（请求级，token 真值在云端不虚估；usage-collect 调用）：
- *  turn.started/finished 配对 → 1 次请求（带 turn.started.model）；tool.execution.finished → 1 次工具调用。
- *  子代理回合（is_subagent）跳过（与跟随器口径一致）。只输出计数级字段，不解析 text_preview。
+/**
+ * 单个 segment 文件 → 用量记录（请求级，token 真值在云端不虚估；usage-collect 调用）。
+ * **计数基元 = model.response.completed（一次事件 = 一次模型请求）**，不是回合：
+ *   实测（2026-10-22 用户报障后复核）159 回合 vs 1190 次模型响应——Qoder 一回合含
+ *   多次 agentic 模型请求；且 fork 后台代理（Explore/plan，~900 次）不写 turn.started/
+ *   finished，按「turn 配对」计数既压低量级（14×）又会把 fork 请求错记/漏记。
+ *   事件自带 model（dfmodel/qfmodel…服务端路由名，如实展示）——无需配对。
+ *   子代理/fork 消耗一并计入（Kimi「子代理归入父会话」口径；segment 在父会话目录下自动归父）。
+ *   tool.execution.finished → 1 次工具调用。只输出计数级字段，不解析 text_preview。
  */
 export function parseQoderSegmentUsage(file) {
   const out = [];
   try {
     const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
     const sessionId = path.basename(path.dirname(path.dirname(file)));
-    let pendingModel = null, pendingSubagent = false;
     for (const l of lines) {
       let j; try { j = JSON.parse(l); } catch { continue; }
       const ts = Date.parse(j.ts || '');
-      if (j.type === 'turn.started') { pendingModel = typeof j.data?.model === 'string' ? j.data.model : null; pendingSubagent = !!j.data?.is_subagent; continue; }
-      if (j.type === 'tool.execution.finished') { out.push({ ts, sessionId, model: null, requests: 0, toolCalls: 1 }); continue; }
-      if (j.type === 'turn.finished') {
-        if (pendingSubagent) { pendingSubagent = false; continue; }
-        out.push({ ts: Number.isFinite(ts) ? ts : Date.now(), sessionId, model: pendingModel, requests: 1, toolCalls: 0 });
+      if (j.type === 'model.response.completed') {
+        out.push({ ts: Number.isFinite(ts) ? ts : Date.now(), sessionId, model: typeof j.data?.model === 'string' ? j.data.model : null, requests: 1, toolCalls: 0 });
+      } else if (j.type === 'tool.execution.finished') {
+        out.push({ ts: Number.isFinite(ts) ? ts : Date.now(), sessionId, model: null, requests: 0, toolCalls: 1 });
       }
     }
   } catch { /* 读失败：整文件跳过（下轮 mtime 变化会重读） */ }

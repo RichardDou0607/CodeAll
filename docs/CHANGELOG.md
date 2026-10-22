@@ -1,6 +1,15 @@
 # 变更日志（文档与契约）
 
-## 2026-10-22（六）
+## 2026-10-22（七）
+### Qoder 用量计数单位修正【未发版】：回合 → 模型请求（用户报障「明显用量不正确」）
+
+- **问题（用户报障）**：上一轮 Qoder 计入 119 次「请求」明显偏低。复盘定位**计数单位错误**：以 turn.started/finished 配对计请求，但实测 159 个回合内含 **1190 次 `model.response.completed`**（Qoder 一回合跑多次 agentic 模型请求，主回合分布：68% 为 1-3 次、6 个回合 9-15 次）——与其它源（Claude usage.requests=API 调用、ZCode=message 行）的「模型请求级」单位不可比，量级压低约 14×。
+- **第二处错（配对泄漏）**：fork 后台代理（Explore/plan，约 900 次请求）**不写 turn.started/finished**——按回合配对时这些请求被 pendingModel 状态机错记/漏记（报出的 119 既非回合数也非请求数，是配对 bug 的产物）。
+- **修复**：计数基元改为 `model.response.completed`（一次事件=一次模型请求，事件自带 model 字段无需配对）；子代理/fork 消耗一并计入（Kimi「子代理归入父会话」口径——segment 在父会话目录下自动归父）。修复后**与原始事件审计逐模型全等**：dfmodel 783 / dmodel 182 / mmodel 112 / qfmodel 87 / qmodel_38max 26 = 1190。
+- **Cursor 同步修正**：子代理 composer 的消息泡此前被排除——现在并入（Kimi 口径），本机 35 → 85 次请求。
+- **回归**：MU12 加强为单位断言（requests ≥ 用户提交回合数 159 且 ΣbyModel ≡ totals.requests）全绿；demo 21 项 exit 0。
+
+
 ### Qoder/Cursor 计入用量【未发版】：请求级真实计数（用户反馈「没有被计入 tokens 用量」——三重证据确认 token 真值不在本地，不虚估；请求/模型/工具调用如实计入）
 
 - **token 真值三重证据（本地不存在）**：Qoder——segments 的 token 字段实测恒 0（1190 个 model.response.completed + 6 个 fork.agent.completed 全零，provider 全为 qoder 托管模型）、main.sqlite context_usage.tokenCountsAvailable=false、turn-payload-buffer 为瞬态空表；Cursor——99 个消息泡 tokenCount 全 {inputTokens:0,outputTokens:0}（modelInfo 仅 2/99 且为 'default'）、CLI store.db 响应 blob 无 usage 字段、ai-tracking 只有代码行数。计费均在厂商云端 → **token 不虚估**（估算百分比会造垃圾数据，违反「如实」红线）。
