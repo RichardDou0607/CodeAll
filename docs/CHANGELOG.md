@@ -1,6 +1,14 @@
 # 变更日志（文档与契约）
 
 ## 2026-10-27（十）
+### 订阅独立页上线【v0.1.4 增补，未发版】：新增「订阅」导航页——卡片式完整计划信息 + 5h 滚动窗口 + 限额与刷新口径（用户定向「额外页面展示 coding plan；完整用量与限额；5h/周/月额度；刷新时间」）
+
+- **新增导航页（window.html）**：导航「会话/用量/订阅/软件」四页（新增 i-credit-card 图标）；订阅页卡片式布局——厂商图标 + 档位/账号打码 + 状态徽标 + **五个窗口格（5 小时/今日/7 日/30 日/全部）** + 限额区（DeepSeek 余额即剩余额度·对账日；其余厂商如实标「限额数值在厂商云端」）+ 窗口语义行（sem：GLM 5h 滚动/Claude 5h+周/Copilot 月度等公开产品口径，未核实者如实标）+ 刷新元数据（数据生成时间/最后请求时间/身份缓存日期）+ 证据明细折叠；未安装厂商折叠单卡；页首 legend 行说明窗口口径与刷新机制。
+- **5h 滚动窗口（plan-usage.mjs）**：ZCode model_usage 逐请求账本新增 h5 窗口列（started_at >= now-5h，requests/in/out/cache 全套）——GLM 的 5h 用量**精确**（实测 27 请求/18.5M tokens）；其余源本地只有自然日语桶，h5 如实标 —（placeholder 带 reason，悬停可见）。GLM 窗口不再依赖 usage 扫描完成（账本直读，--fast 亦可算）。
+- **legend 元数据**：/api/plan-usage 透出 legend（h5/today/d7/d30/all/refresh 口径说明）；UI 页首与 tooltip 消费。
+- **回归**：test-plan-usage 4/4（新增 MU-PU8 订阅页渲染：卡片/5h 窗/限额/刷新时间/未安装折叠；MU-PU1/4/5 补 h5 与 sem/legend 断言）；test-window/window-actions/usage-calendar/mini/open-routing 全部 0 失败；重建安装后烟测 v3（含订阅页专项 + GLM/ZCode 今日一致性 diff=2）。
+- **限额边界（重申）**：statusbar 插件目录复核无配额数值缓存（仅运行时元数据）→ 限额值继续如实标云端；不做持凭证调云 API。
+
 ### 面板交互优化 + multi-source-check 修复【v0.1.4 增补，未发版】：Coding Plan 区可视化降噪、MU5/MU6 断言跟上八源+估算口径、MU5 懒触发补齐
 
 - ** Coding Plan 区 UI 优化（window.html）**：厂商行加图标（复用八源 logo 资产，PLAN_LOGO 映射：GLM→zcode、DeepSeek→deepseek、Claude/Codex/Kimi/Qoder/Cursor 各归位，无资产者 codeall-mark 兜底）；新增汇总 chips 行（家厂商/订阅在用/API/余额计费/已登录/未安装）；**7 行「未安装」折叠为单行**（厂商名内联 + 「安装并登录后自动出现」）；数值 cell 加悬停 tooltip（精确 tokens/请求数、账本单位、估算语义）；计划身份/余额配 tooltip。MU-PU7 断言同步（图标/chips/折叠行/无泄漏不变）。

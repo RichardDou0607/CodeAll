@@ -102,7 +102,7 @@ export function zcodeProviderSplit(dbPath = ZCODE_DB, nowMs = Date.now()) {
   const db = openZcodeDb(dbPath);
   if (!db) return { ...empty, error: 'db-unavailable' };
   try {
-    const b = { today: new Date(nowMs).setHours(0, 0, 0, 0), d7: nowMs - 7 * DAY_MS, d30: nowMs - 30 * DAY_MS };
+    const b = { h5: nowMs - 5 * 3_600_000, today: new Date(nowMs).setHours(0, 0, 0, 0), d7: nowMs - 7 * DAY_MS, d30: nowMs - 30 * DAY_MS };
     const win = (cut) => `SUM(CASE WHEN started_at >= ${cut} THEN 1 ELSE 0 END)`;
     const winTok = (cut, col) => `SUM(CASE WHEN started_at >= ${cut} THEN ${col} ELSE 0 END)`;
     const rows = db.prepare(`
@@ -111,6 +111,9 @@ export function zcodeProviderSplit(dbPath = ZCODE_DB, nowMs = Date.now()) {
              SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed,
              SUM(input_tokens) AS input, SUM(output_tokens) AS output,
              SUM(cache_read_input_tokens) AS cacheRead, SUM(cache_creation_input_tokens) AS cacheWrite,
+             ${win(b.h5)} AS requestsH5,
+             ${winTok(b.h5, 'input_tokens')} AS inputH5, ${winTok(b.h5, 'output_tokens')} AS outputH5,
+             ${winTok(b.h5, 'cache_read_input_tokens')} AS cacheReadH5, ${winTok(b.h5, 'cache_creation_input_tokens')} AS cacheWriteH5,
              ${win(b.today)} AS requestsToday,
              ${winTok(b.today, 'input_tokens')} AS inputToday, ${winTok(b.today, 'output_tokens')} AS outputToday,
              ${winTok(b.today, 'cache_read_input_tokens')} AS cacheReadToday, ${winTok(b.today, 'cache_creation_input_tokens')} AS cacheWriteToday,
@@ -129,6 +132,7 @@ export function zcodeProviderSplit(dbPath = ZCODE_DB, nowMs = Date.now()) {
         provider: r.provider, isCodingPlan: String(r.provider || '').startsWith('account:'),
         requests: num(r.requests), completed: num(r.completed),
         input: num(r.input), output: num(r.output), cacheRead: num(r.cacheRead), cacheWrite: num(r.cacheWrite),
+        requestsH5: num(r.requestsH5), inputH5: num(r.inputH5), outputH5: num(r.outputH5), cacheReadH5: num(r.cacheReadH5), cacheWriteH5: num(r.cacheWriteH5),
         requestsToday: num(r.requestsToday), inputToday: num(r.inputToday), outputToday: num(r.outputToday), cacheReadToday: num(r.cacheReadToday), cacheWriteToday: num(r.cacheWriteToday),
         requestsD7: num(r.requestsD7), inputD7: num(r.inputD7), outputD7: num(r.outputD7), cacheReadD7: num(r.cacheReadD7), cacheWriteD7: num(r.cacheWriteD7),
         requestsD30: num(r.requestsD30), inputD30: num(r.inputD30), outputD30: num(r.outputD30), cacheReadD30: num(r.cacheReadD30), cacheWriteD30: num(r.cacheWriteD30),
@@ -322,14 +326,14 @@ function opencodeProviders(o) {
 // ---------------------------------------------------------------------------
 
 export const PLAN_REGISTRY = Object.freeze([
-  { id: 'glm-coding-plan', vendor: '智谱 Z.ai', product: 'GLM Coding Plan', agents: ['zcode', 'opencode'], category: 'subscription', probe: glmIdentity },
-  { id: 'deepseek', vendor: 'DeepSeek', product: 'DeepSeek 开放平台', agents: ['dsh'], category: 'api-balance', probe: deepseekIdentity },
-  { id: 'claude', vendor: 'Anthropic', product: 'Claude 订阅 / API', agents: ['claude-code'], category: 'subscription', probe: claudeIdentity },
-  { id: 'chatgpt-codex', vendor: 'OpenAI', product: 'ChatGPT（Codex）/ API', agents: ['codex'], category: 'subscription', probe: codexIdentity },
-  { id: 'kimi-for-coding', vendor: '月之暗面 Moonshot', product: 'Kimi For Coding', agents: ['kimi-code'], category: 'subscription', probe: kimiIdentity },
-  { id: 'qoder', vendor: '阿里巴巴 Qoder', product: 'Qoder 会员', agents: ['qoder'], category: 'subscription', probe: qoderIdentity },
-  { id: 'cursor', vendor: 'Cursor', product: 'Cursor 订阅', agents: ['cursor'], category: 'subscription', probe: cursorIdentity },
-  { id: 'copilot', vendor: 'GitHub', product: 'GitHub Copilot', agents: [], category: 'subscription', probe: copilotIdentity },
+  { id: 'glm-coding-plan', vendor: '智谱 Z.ai', product: 'GLM Coding Plan', agents: ['zcode', 'opencode'], category: 'subscription', probe: glmIdentity , sem: '5h 滚动窗口（公开产品口径；本机有逐请求账本可精确归属）' },
+  { id: 'deepseek', vendor: 'DeepSeek', product: 'DeepSeek 开放平台', agents: ['dsh'], category: 'api-balance', probe: deepseekIdentity , sem: '无窗口概念（余额制，余额即剩余额度）' },
+  { id: 'claude', vendor: 'Anthropic', product: 'Claude 订阅 / API', agents: ['claude-code'], category: 'subscription', probe: claudeIdentity , sem: '5h 会话窗 + 周限额（公开产品口径）' },
+  { id: 'chatgpt-codex', vendor: 'OpenAI', product: 'ChatGPT（Codex）/ API', agents: ['codex'], category: 'subscription', probe: codexIdentity , sem: '5h + 周限额（公开产品口径）' },
+  { id: 'kimi-for-coding', vendor: '月之暗面 Moonshot', product: 'Kimi For Coding', agents: ['kimi-code'], category: 'subscription', probe: kimiIdentity , sem: '窗口语义未核实（本地无缓存）' },
+  { id: 'qoder', vendor: '阿里巴巴 Qoder', product: 'Qoder 会员', agents: ['qoder'], category: 'subscription', probe: qoderIdentity , sem: '窗口语义未核实（本地无缓存）' },
+  { id: 'cursor', vendor: 'Cursor', product: 'Cursor 订阅', agents: ['cursor'], category: 'subscription', probe: cursorIdentity , sem: '窗口语义未核实（本地无缓存）' },
+  { id: 'copilot', vendor: 'GitHub', product: 'GitHub Copilot', agents: [], category: 'subscription', probe: copilotIdentity , sem: '每月额度（公开产品口径）' },
   { id: 'gemini', vendor: 'Google', product: 'Gemini Code Assist / Antigravity', agents: [], category: 'subscription',
     installPaths: ['.gemini', '.config/gemini', 'Library/Application Support/Antigravity', '/Applications/Antigravity.app'] },
   { id: 'qwen-code', vendor: '阿里通义', product: 'Qwen Code / 百炼 Coding', agents: [], category: 'subscription', installPaths: ['.qwen'] },
@@ -373,6 +377,7 @@ function planUsageWindows(overview, agents, modelFilter) {
     out[w] = { available: has, requests: acc.requests, tokens: acc.tokens, input: acc.input, output: acc.output, cacheRead: acc.cacheRead, cacheWrite: acc.cacheWrite, approximate, unavailable };
   }
   if (agents.length && kind === 'exact' && out.all?.unavailable) kind = 'requests';
+  out.h5 = { available: false, requests: 0, tokens: 0, input: 0, output: 0, approximate: false, unavailable: false, reason: '本地无逐请求时间戳账本（自然日语桶），5h 滚动窗不可精确归属' };
   return { kind, kindLabel: USAGE_KIND_LABEL[kind] ?? kind, windows: out };
 }
 
@@ -415,8 +420,8 @@ export async function scanPlanUsage(opts = {}) {
   for (const p of PLAN_REGISTRY) {
     const id = identities[p.id] ?? { status: 'unknown' };
     let usage = { kind: 'none', kindLabel: USAGE_KIND_LABEL.none, windows: null };
-    if (p.id === 'glm-coding-plan' && overview) {
-      // GLM：ZCode 按 provider 精确（account:* 即 coding plan 计费）+ OpenCode 按 glm* 模型名（近似）
+    if (p.id === 'glm-coding-plan') {
+      // GLM 窗口来自 model_usage 逐请求账本（不依赖 usage 扫描完成；OpenCode 部分在 overview 就绪后并入）：ZCode 按 provider 精确（account:* 即 coding plan 计费）+ OpenCode 按 glm* 模型名（近似）
       const zc = zcodeSplit.available ? zcodeSplit.providers.filter((r) => r.isCodingPlan) : [];
       const ocWin = planUsageWindows(overview, ['opencode'], /^glm/i);
       const zcWin = {
@@ -424,6 +429,7 @@ export async function scanPlanUsage(opts = {}) {
         today: (r) => ({ requests: r.requestsToday, tokens: r.inputToday + r.outputToday + r.cacheReadToday + r.cacheWriteToday }),
         d7: (r) => ({ requests: r.requestsD7, tokens: r.inputD7 + r.outputD7 + r.cacheReadD7 + r.cacheWriteD7 }),
         d30: (r) => ({ requests: r.requestsD30, tokens: r.inputD30 + r.outputD30 + r.cacheReadD30 + r.cacheWriteD30 }),
+        h5: (r) => ({ requests: r.requestsH5, tokens: r.inputH5 + r.outputH5 + r.cacheReadH5 + r.cacheWriteH5 }),
       };
       const mk = (winName, w) => {
         const requests = zc.reduce((s, r) => s + num(zcWin[winName](r).requests), 0) + (w.requests || 0);
@@ -432,8 +438,9 @@ export async function scanPlanUsage(opts = {}) {
       };
       usage = {
         kind: 'exact', kindLabel: USAGE_KIND_LABEL.exact + '（ZCode 按 provider）' + (ocWin.windows.all.available ? ' + OpenCode glm* 模型（近似）' : ''),
-        windows: { all: mk('all', ocWin.windows.all), today: mk('today', ocWin.windows.today), d7: mk('d7', ocWin.windows.d7), d30: mk('d30', ocWin.windows.d30) },
+        windows: { h5: mk('h5', ocWin.windows.h5), today: mk('today', ocWin.windows.today), d7: mk('d7', ocWin.windows.d7), d30: mk('d30', ocWin.windows.d30), all: mk('all', ocWin.windows.all) },
         zcodeProviders: zc.map((r) => ({ provider: r.provider, requests: r.requests, completed: r.completed, input: r.input, output: r.output, cacheRead: r.cacheRead, lastAt: r.lastAt,
+          requestsH5: r.requestsH5, inputH5: r.inputH5, outputH5: r.outputH5,
           requestsToday: r.requestsToday, inputToday: r.inputToday, outputToday: r.outputToday,
           requestsD7: r.requestsD7, inputD7: r.inputD7, outputD7: r.outputD7 })),
       };
@@ -443,7 +450,7 @@ export async function scanPlanUsage(opts = {}) {
     const plan = {
       id: p.id, vendor: p.vendor, product: p.product, category: p.category,
       status: id.status ?? 'unknown', planName: id.planName ?? null, account: id.account ?? null,
-      agents: p.agents, identityAt: id.at ?? null,
+      agents: p.agents, identityAt: id.at ?? null, sem: p.sem ?? null,
       evidence: id.evidence ?? [], notes: id.notes ?? [],
       usage, quota: id.quota ?? null,
     };
@@ -472,6 +479,11 @@ export async function scanPlanUsage(opts = {}) {
   return {
     generatedAt: Date.now(), tookMs: Number((Number(process.hrtime.bigint() - t0) / 1e6).toFixed(2)),
     summary,
+    legend: {
+      h5: '5h 滚动窗口：仅 ZCode 有逐请求账本（model_usage.started_at）可精确归属；其余源为自然日语桶、h5 不可算（如实标 —）',
+      today: '本地自然日（0 点起）', d7: '近 7 天（滚动）', d30: '近 30 天（滚动）', all: '全部历史',
+      refresh: '随用量扫描懒刷新（60s 缓存）：打开本页或点刷新即触发；限额数值在厂商云端、本机无缓存（安全红线：不持凭证调云 API）',
+    },
     redline: '全部证据来自本机只读文件/数据库（不持凭证调厂商云 API——安全红线）；云端配额数值本地不落盘的厂商如实标注',
     plans,
   };

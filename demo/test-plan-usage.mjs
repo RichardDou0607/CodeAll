@@ -143,6 +143,7 @@ test('MU-PU4 ZCode model_usage 按 provider 拆分与时间窗分桶', () => {
   assert.ok(plan, 'account:* 应识别为 coding plan');
   assert.equal(plan.requests, 4);
   assert.equal(plan.requestsToday, 1);
+  assert.equal(plan.requestsH5, 1, '1h 前的请求应落进 5h 滚动窗');
   assert.equal(plan.requestsD7, 2);
   assert.equal(plan.requestsD30, 3);
   assert.equal(plan.inputToday, 1000);
@@ -178,6 +179,12 @@ test('MU-PU1/2/3/5/6 scanPlanUsage：身份 × 配额 × 用量窗口 × 隐私�
   assert.equal(glm.usage.windows.all.tokens, (15000 + 1500 + 260 + 0) + (300 + 40));
   assert.equal(glm.usage.windows.today.requests, 1 + 0);      // opencode ranges.today 无 opencode 源
   assert.equal(glm.usage.windows.today.tokens, 1150);
+  assert.equal(glm.usage.windows.h5.requests, 1, 'GLM 5h 滚动窗（ZCode 精确）');
+  assert.equal(glm.usage.windows.h5.tokens, 1150);
+  assert.equal(glm.sem, '5h 滚动窗口（公开产品口径；本机有逐请求账本可精确归属）');
+  const claudePlan = byId['claude'];
+  assert.equal(claudePlan.usage.windows.h5.available, false, '非 ZCode 源无逐请求账本 → h5 如实不可用');
+  assert.ok(r.legend && r.legend.h5 && r.legend.refresh, 'legend 窗口/刷新口径说明应随响应透出');
   assert.ok(glm.usage.zcodeProviders.length === 1);
 
   // —— DeepSeek：余额即配额，1e-8 元换算 ——
@@ -242,14 +249,15 @@ test('MU-PU7 UI：用量页 Coding Plan 区渲染（行、打码、余额、红�
     generatedAt: NOW, refreshing: false,
     summary: { total: 15, active: 3, apiBilling: 1, signedIn: 2, notSignedIn: 0, notInstalled: 9 },
     redline: '全部证据来自本机只读文件/数据库（不持凭证调厂商云 API——安全红线）',
+    legend: { h5: '5h 滚动窗口', today: '本地自然日', refresh: '随用量扫描懒刷新（60s 缓存）' },
     plans: [
-      { id: 'glm-coding-plan', vendor: '智谱 Z.ai', product: 'GLM Coding Plan', category: 'subscription', status: 'active', planName: 'bigmodel-coding-plan', account: null, agents: ['zcode'], evidence: [{ file: '~/.zcode/v2/coding-plan-cache.json', field: 'entryStatus.items', value: 'available: bigmodel-coding-plan' }], notes: [], identityAt: NOW,
-        usage: { kind: 'exact', kindLabel: '精确 token（ZCode 按 provider）', windows: { all: { available: true, requests: 30087, tokens: 10876567823, approximate: false, unavailable: false }, today: { available: true, requests: 49, tokens: 11867629, approximate: false, unavailable: false }, d7: { available: true, requests: 3744, tokens: 1367550362, approximate: false, unavailable: false }, d30: { available: true, requests: 30087, tokens: 10876567823, approximate: false, unavailable: false } }, zcodeProviders: [{ provider: 'account:bigmodel-individual-coding-plan', requests: 28227, completed: 28000, input: 5043895878, output: 15227382, cacheRead: 0, inputToday: 205723 }] }, quota: null },
+      { id: 'glm-coding-plan', vendor: '智谱 Z.ai', product: 'GLM Coding Plan', category: 'subscription', status: 'active', planName: 'bigmodel-coding-plan', account: null, agents: ['zcode'], sem: '5h 滚动窗口（公开产品口径；本机有逐请求账本可精确归属）', evidence: [{ file: '~/.zcode/v2/coding-plan-cache.json', field: 'entryStatus.items', value: 'available: bigmodel-coding-plan' }], notes: [], identityAt: NOW,
+        usage: { kind: 'exact', kindLabel: '精确 token（ZCode 按 provider）', windows: { h5: { available: true, requests: 49, tokens: 11867629, approximate: false, unavailable: false }, all: { available: true, requests: 30087, tokens: 10876567823, approximate: false, unavailable: false }, today: { available: true, requests: 49, tokens: 11867629, approximate: false, unavailable: false }, d7: { available: true, requests: 3744, tokens: 1367550362, approximate: false, unavailable: false }, d30: { available: true, requests: 30087, tokens: 10876567823, approximate: false, unavailable: false } }, zcodeProviders: [{ provider: 'account:bigmodel-individual-coding-plan', requests: 28227, completed: 28000, input: 5043895878, output: 15227382, cacheRead: 0, inputToday: 205723, lastAt: NOW }] }, quota: null },
       { id: 'deepseek', vendor: 'DeepSeek', product: 'DeepSeek 开放平台', category: 'api-balance', status: 'api-billing', planName: '开放平台按量计费', account: '1***e', agents: ['dsh'], evidence: [], notes: ['按量计费（非订阅制）：余额即配额'], identityAt: null,
-        usage: { kind: 'exact', kindLabel: '精确 token', windows: { all: { available: true, requests: 5, tokens: 490, approximate: false, unavailable: false }, today: { available: true, requests: 1, tokens: 110, approximate: false, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } },
+        usage: { kind: 'exact', kindLabel: '精确 token', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地账本按自然日记账' }, all: { available: true, requests: 5, tokens: 490, approximate: false, unavailable: false }, today: { available: true, requests: 1, tokens: 110, approximate: false, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } },
         quota: { kind: 'balance', currency: 'CNY', balance: 100.5, todayCost: 1.23, d7Cost: 17.99, d30Cost: 19.99, allCost: 19.99, daily: [{ day: '2026-10-27', cost: 1.23 }], events: [{ ts: NOW, day: '2026-10-27', model: 'deepseek-flash', cost: 1.23, tokens: 31663410 }] } },
       { id: 'cursor', vendor: 'Cursor', product: 'Cursor 订阅', category: 'subscription', status: 'active', planName: 'Free', account: maskEmail(FULL_EMAIL), agents: ['cursor'], evidence: [{ file: 'state.vscdb', field: 'cursorAuth/stripeMembershipType', value: 'free' }], notes: [], identityAt: null,
-        usage: { kind: 'estimate', kindLabel: '含包络估算', windows: { all: { available: true, requests: 35, tokens: 811750, approximate: true, unavailable: false }, today: { available: true, requests: 0, tokens: 0, approximate: true, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } }, quota: null },
+        usage: { kind: 'estimate', kindLabel: '含包络估算', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地无逐请求时间戳账本（自然日语桶），5h 滚动窗不可精确归属' }, all: { available: true, requests: 35, tokens: 811750, approximate: true, unavailable: false }, today: { available: true, requests: 0, tokens: 0, approximate: true, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } }, quota: null },
       { id: 'gemini', vendor: 'Google', product: 'Gemini Code Assist / Antigravity', category: 'subscription', status: 'not-installed', planName: null, account: null, agents: [], evidence: [], notes: ['本机未发现安装痕迹'], identityAt: null, usage: { kind: 'none', kindLabel: '无观察源', windows: null }, quota: null },
     ],
   };
@@ -287,4 +295,53 @@ test('MU-PU7 UI：用量页 Coding Plan 区渲染（行、打码、余额、红�
   assert.ok(text.includes(maskEmail(FULL_EMAIL)), '打码邮箱应出现在 UI');
   assert.ok(!text.includes(SECRET_TOKEN));
   assert.ok(!text.includes(FULL_EMAIL));
+});
+
+test('MU-PU8 UI：订阅独立页渲染（卡片/5h 窗/限额/刷新时间/未安装折叠）', async () => {
+  const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/let es=null;[\s\S]*$/, '');
+  const harness = createUiSandbox(html), { sandbox, getEl, requests } = harness;
+  const planPayload = {
+    generatedAt: NOW, refreshing: false,
+    summary: { total: 15, active: 3, apiBilling: 1, signedIn: 2, notSignedIn: 0, notInstalled: 9 },
+    redline: '全部证据来自本机只读文件/数据库（不持凭证调厂商云 API——安全红线）',
+    legend: { h5: '5h 滚动窗口', today: '本地自然日', refresh: '随用量扫描懒刷新（60s 缓存）' },
+    plans: [
+      { id: 'glm-coding-plan', vendor: '智谱 Z.ai', product: 'GLM Coding Plan', category: 'subscription', status: 'active', planName: 'bigmodel-coding-plan', account: null, agents: ['zcode'], sem: '5h 滚动窗口（公开产品口径；本机有逐请求账本可精确归属）', evidence: [], notes: [], identityAt: NOW - DAY,
+        usage: { kind: 'exact', kindLabel: '精确 token（ZCode 按 provider）', windows: { h5: { available: true, requests: 49, tokens: 11867629, approximate: false, unavailable: false }, today: { available: true, requests: 49, tokens: 11867629, approximate: false, unavailable: false }, d7: { available: true, requests: 3744, tokens: 1367550362, approximate: false, unavailable: false }, d30: { available: true, requests: 30087, tokens: 10876567823, approximate: false, unavailable: false }, all: { available: true, requests: 30087, tokens: 10876567823, approximate: false, unavailable: false } }, zcodeProviders: [{ provider: 'account:bigmodel-individual-coding-plan', requests: 28227, completed: 28000, input: 5043895878, output: 15227382, cacheRead: 0, inputToday: 205723, lastAt: NOW - 60000 }] }, quota: null },
+      { id: 'deepseek', vendor: 'DeepSeek', product: 'DeepSeek 开放平台', category: 'api-balance', status: 'api-billing', planName: '开放平台按量计费', account: '1***e', agents: ['dsh'], sem: '无窗口概念（余额制，余额即剩余额度）', evidence: [], notes: [], identityAt: null,
+        usage: { kind: 'exact', kindLabel: '精确 token', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地账本按自然日记账' }, all: { available: true, requests: 5, tokens: 490, approximate: false, unavailable: false }, today: { available: true, requests: 1, tokens: 110, approximate: false, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } },
+        quota: { kind: 'balance', currency: 'CNY', balance: 100.5, todayCost: 1.23, d7Cost: 19.99, d30Cost: 19.99, allCost: 19.99, daily: [{ day: '2026-10-27', cost: 1.23 }], events: [] } },
+      { id: 'gemini', vendor: 'Google', product: 'Gemini Code Assist / Antigravity', category: 'subscription', status: 'not-installed', planName: null, account: null, agents: [], evidence: [], notes: ['本机未发现安装痕迹'], identityAt: null, usage: { kind: 'none', kindLabel: '无观察源', windows: null }, quota: null },
+    ],
+  };
+  sandbox.fetch = async (p) => {
+    requests.push({ path: p });
+    if (p === '/api/plan-usage') return { ok: true, json: async () => planPayload };
+    return { ok: true, json: async () => ({}) };
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(script, sandbox);
+  const snap = windowFixture();
+  snap.ts = NOW;
+  snap.usage = { pending: false, generatedAt: NOW, totals: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, requests: 1 }, bySource: {}, ranges: {}, refreshing: false };
+  sandbox.render(snap);
+  assert.ok(getEl('view-plans'), '导航应有「订阅」按钮');
+  assert.ok(getEl('plans-body'), '应有订阅页容器');
+  await getEl('view-plans').dispatch('click');
+  await tick(); await tick(); await tick();
+  const text = getEl('plans-body').innerHTML;
+  assert.match(text, /plan-card/);
+  assert.match(text, /智谱 Z\.ai/);
+  assert.match(text, /bigmodel-coding-plan/);
+  assert.match(text, /5 小时/);
+  assert.match(text, /余额 ¥100\.5/);
+  assert.match(text, /最后请求 /);
+  assert.match(text, /数据生成 /);
+  assert.match(text, /未安装（1 家）/);
+  assert.match(text, /安装并登录后自动出现/);
+  const legend = getEl('plans-legend').textContent;
+  assert.match(legend, /5h 滚动窗/);
+  assert.match(legend, /不持凭证调厂商 API/);
+  assert.ok(!text.includes(SECRET_TOKEN));
 });

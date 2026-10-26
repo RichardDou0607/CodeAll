@@ -47,7 +47,7 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性�
 | **六源 Token 计数** | Agent × 模型 × 自然日 × 形态 精确累计（60s 慢缓存 + 文件级增量，1.1GB 转录不进热路径）；子代理消耗归入父会话；OpenCode 双账本对账（message.tokens ≡ session_v2 累计）；Qoder/Cursor 客户端不落盘 token——如实降级不虚估 |
 | **缓存命中率** | 每源/每模型命中率（input 语义按厂商分家：Anthropic 不含 cache / OpenAI 含），与官方 UI 对过账（ZCode「今日消耗」基准） |
 | **时间窗 + 日历** | 当日/7 日/30 日切换；用量日历热力与逐日明细；会话行内 tok in/out |
-| **Coding Plan 订阅面板（v0.1.4）** | 15 家主流厂商「订阅身份 × 本地用量 × 配额/余额」一屏看全：GLM Coding Plan（entitlement + model_usage 按 provider 精确拆分）、DeepSeek（余额即配额，逐日/逐事件成本）、Cursor/Copilot（本地档位字段）、Claude/Codex/Kimi/Qoder（登录态/API 计费形态如实标注）、未安装厂商盘点；凭证值不读、账号打码、云端配额不虚报 |
+| **Coding Plan 订阅面板 + 独立订阅页（v0.1.4）** | 15 家主流厂商「订阅身份 × 本地用量 × 配额/余额」：GLM Coding Plan（entitlement + model_usage 按 provider 精确拆分，**5h 滚动窗精确归属**）、DeepSeek（余额即配额，逐日/逐事件成本）、Cursor/Copilot（本地档位字段）、Claude/Codex/Kimi/Qoder（登录态/API 计费形态如实标注）、未安装厂商盘点；独立「订阅」页卡片式展示五时间窗（5h/今日/7日/30日/全部）+ 限额 + 刷新口径；凭证值不读、账号打码、云端配额不虚报 |
 
 ### 桌面外壳（Tauri v2）
 
@@ -171,7 +171,7 @@ Session observation and usage tracking remain available; the focus is directed c
 | **Five-source token counting** | Precise accumulation by Agent × model × calendar day × form (60 s slow cache + file-level increments; 1.1 GB transcripts stay off the hot path); sub-agent consumption is attributed to the parent session |
 | **Cache hit rates** | Per source / per model hit rate (input semantics split by vendor: Anthropic excludes cache / OpenAI includes), reconciled against official UIs (ZCode "today's consumption" baseline) |
 | **Time windows + calendar** | Today / 7 d / 30 d switching; usage calendar heatmap with daily detail; per-session tok in/out rows |
-| **Coding Plan panel (v0.1.4)** | 15 mainstream vendors in one view: plan identity × local usage windows × quota/balance — GLM Coding Plan (entitlement cache + per-provider exact split), DeepSeek (balance-as-quota with per-day/per-event cost), Cursor/Copilot (local SKU fields), Claude/Codex/Kimi/Qoder (sign-in / API-billing state as-is), plus not-installed vendors; credential values never read, accounts masked, cloud-only quotas honestly marked |
+| **Coding Plan panel + dedicated subscriptions page (v0.1.4)** | 15 mainstream vendors: plan identity × local usage × quota/balance — GLM Coding Plan (entitlement cache + per-provider exact split, **exact 5h rolling window**), DeepSeek (balance-as-quota with per-day/per-event cost), Cursor/Copilot (local SKU fields), Claude/Codex/Kimi/Qoder (sign-in / API-billing state as-is), plus not-installed vendors; a dedicated Subscriptions page shows five time windows (5h/today/7d/30d/all) + limits + refresh semantics per plan card; credential values never read, accounts masked, cloud-only quotas honestly marked |
 
 #### Desktop Shell (Tauri v2)
 
