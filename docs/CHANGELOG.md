@@ -1,6 +1,13 @@
 # 变更日志（文档与契约）
 
 ## 2026-10-27（十）
+### 面板交互优化 + multi-source-check 修复【v0.1.4 增补，未发版】：Coding Plan 区可视化降噪、MU5/MU6 断言跟上八源+估算口径、MU5 懒触发补齐
+
+- ** Coding Plan 区 UI 优化（window.html）**：厂商行加图标（复用八源 logo 资产，PLAN_LOGO 映射：GLM→zcode、DeepSeek→deepseek、Claude/Codex/Kimi/Qoder/Cursor 各归位，无资产者 codeall-mark 兜底）；新增汇总 chips 行（家厂商/订阅在用/API/余额计费/已登录/未安装）；**7 行「未安装」折叠为单行**（厂商名内联 + 「安装并登录后自动出现」）；数值 cell 加悬停 tooltip（精确 tokens/请求数、账本单位、估算语义）；计划身份/余额配 tooltip。MU-PU7 断言同步（图标/chips/折叠行/无泄漏不变）。
+- **MU5/MU6 断言修复（scripts/multi-source-check.mjs）**：`bySource===6`→`=== 8`（2026-10-22 估算模式后 qoder/cursor 以估算源在列，断言停留在七源口径已过时）；MU6 `qoder/cursor degraded===true`→`estimatedTokens===true && degraded===false`。
+- **MU5 懒触发补齐（根因修复）**：MU5 只轮 `/api/state` 空等——该端点不触发用量扫描（P3③：无客户端懒触发、开机 5min 兜底），实测 120s+ 仍 pending；先打一次 `/api/usage`（与真实客户端打开用量页同路径）后冷扫 ~10s 出数。轮询预算 40s→120s（冷启动+并发负载余量）。前一轮 40 分钟运行与本次空等两个现象同根因。
+- **回归**：multi-source-check 从 4 项失败降到 2 项（余 ML5 扫描性能 673-846ms>300ms 旧基线、MC5 DSH 注册表口径——均为已定性既有环境项）；test-plan-usage 3/3、test-usage-calendar 6/6、test-window/mini 正常；重建安装后烟测 22/22（含 4 项新 UI 专项 + GLM/ZCode 今日窗一致性 glm=181/zc=178）。
+
 ### Coding Plan 使用情况面板上线【v0.1.4】：15 家主流厂商「订阅身份 × 本地用量 × 配额/余额」一屏看全（用户定向「接入全部主流厂商的 coding plan 使用情况，展示完整的信息」）
 
 - **澄清与口径**：需求为 coding plan 的**使用情况**（非新增会话观察源）。三家证据等级实测（[A]，只读侦察 2026-10-26）：GLM（entitlement 缓存 + `model_usage` 逐请求账本按 provider 拆分）与 DeepSeek（余额账本，余额即配额）双全；Cursor（`stripeMembershipType=free`）/ Copilot（`copilotSku=free_limited_copilot`）档位明确；Claude（未登录，env 有 ANTHROPIC_AUTH_TOKEN 键名 → API 计费）/ Codex（auth_mode=apikey）/ Kimi（登录态、档位不落盘）/ Qoder（登录态、订阅档未缓存）部分证据；**各家云端配额数值均不落盘——不持凭证调云 API（红线重申），如实标注**。

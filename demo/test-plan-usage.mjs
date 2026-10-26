@@ -269,13 +269,20 @@ test('MU-PU7 UI：用量页 Coding Plan 区渲染（行、打码、余额、红�
   await tick(); await tick(); await tick();
   const text = getEl('usage-body').innerHTML;
   assert.match(text, /Coding Plan 使用情况/);
-  assert.match(text, /智谱 Z\.ai/);
+  assert.match(text, /家厂商/);                                    // 汇总 chips 行
+  assert.match(text, /<strong>3<\/strong>订阅在用/);
+  assert.match(text, /assets\/agents\/zcode\.png/);                // 厂商图标（GLM→zcode 资产）
+  assert.match(text, /assets\/agents\/deepseek\.png/);
+  assert.match(text, /assets\/agents\/cursor\.svg/);
+  assert.match(text, /pu-vendor/);
   assert.match(text, /GLM Coding Plan/);
   assert.match(text, /account:bigmodel-individual-coding-plan/);
   assert.match(text, /余额 ¥100\.5/);
   assert.match(text, /¥17\.99|¥19\.99/);
   assert.match(text, /Free/);
-  assert.match(text, /未安装——本机未发现该厂商的安装痕迹/);
+  assert.match(text, /未安装（1 家）/);                             // 未安装折叠为单行
+  assert.match(text, /Gemini Code Assist \/ Antigravity/);
+  assert.match(text, /安装并登录后自动出现在此表/);
   assert.match(text, /不持凭证调厂商云 API/);
   assert.ok(text.includes(maskEmail(FULL_EMAIL)), '打码邮箱应出现在 UI');
   assert.ok(!text.includes(SECRET_TOKEN));

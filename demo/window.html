@@ -157,6 +157,11 @@ h1,.sp-title,.u-title{font-size:20px;font-weight:600;margin:0;line-height:1.35}
 .utable th{color:var(--dim);font-weight:400;font-size:10px;background:var(--surface)}
 .utable td:first-child,.utable th:first-child{text-align:left}
 .pu-badge{font-size:10px;font-weight:500}
+.pu-logo{width:16px;height:16px;border-radius:4px}
+.pu-vendor{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.pu-vendor .pu-vname{font-weight:500}
+.pu-vendor .pu-ev{flex-basis:100%}
+.pu-absent td{color:var(--dim);font-size:10px;padding:8px 9px}
 .pu-acc{display:block;font-size:9px;color:var(--dim)}
 .pu-mini{border-collapse:collapse;font-size:10px;margin:6px 0}
 .pu-mini th,.pu-mini td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -813,13 +818,19 @@ function usageSourceChart(view){
 }
 // ---- Coding Plan 使用情况（/api/plan-usage，2026-10-26）：订阅身份 × 本地用量窗口 × 配额/余额 ----
 const PLAN_STATUS={active:['订阅在用','var(--run)'],'api-billing':['API/余额计费','var(--acc)'],'signed-in':['已登录 · 档位未知','var(--wait)'],'not-signed-in':['已安装 · 未登录','var(--dim)'],unknown:['未知','var(--dim)'],'not-installed':['未安装','var(--dim)']};
+const PLAN_LOGO={'glm-coding-plan':'zcode',deepseek:'dsh',claude:'claude-code','chatgpt-codex':'codex','kimi-for-coding':'kimi-code',qoder:'qoder',cursor:'cursor'};
+function planLogo(p){
+  const src=PLAN_LOGO[p.id];
+  if(src)return agentLogo(src,'agent-logo pu-logo');
+  return '<img class="agent-logo pu-logo" src="/assets/codeall-mark.svg" alt="" loading="lazy">';
+}
 function planWindowCell(p,win,cost){
-  if(cost!=null)return Number.isFinite(cost)?'¥'+cost:'—';
+  if(cost!=null)return Number.isFinite(cost)?'<span title="本地账本精确成本（1 单位 = 1e-8 元）">¥'+cost+'</span>':'—';
   const w=p.usage&&p.usage.windows&&p.usage.windows[win];
-  if(!p.usage||p.usage.kind==='none'||!w||!w.available)return '<span style="color:var(--dim)">—</span>';
-  if(w.unavailable)return '<span style="color:var(--dim)">—（云端计费）</span>';
-  const tok=(p.usage.kind==='estimate'||w.approximate?'<span style="color:var(--dim)">≈</span>':'')+fmtTok(w.tokens);
-  return tok+'<span style="color:var(--dim)"> · '+fmtTok(w.requests)+'次</span>';
+  if(!p.usage||p.usage.kind==='none'||!w||!w.available)return '<span style="color:var(--dim)" title="无观察源或该窗口无用量">—</span>';
+  if(w.unavailable)return '<span style="color:var(--dim)" title="计费在厂商云端，本地不落盘——不虚估">—（云端计费）</span>';
+  const tok=(p.usage.kind==='estimate'||w.approximate?'<span style="color:var(--dim)" title="包络估算值（真值在厂商云端）">≈</span>':'')+fmtTok(w.tokens);
+  return '<span title="tokens '+Number(w.tokens).toLocaleString('zh-CN')+' · 请求 '+Number(w.requests).toLocaleString('zh-CN')+'">'+tok+'</span><span style="color:var(--dim)"> · '+fmtTok(w.requests)+'次</span>';
 }
 function planDetailHtml(p){
   const parts=[];
@@ -834,24 +845,37 @@ function planDetailHtml(p){
   return parts.join('');
 }
 function planUsageHtml(pu,now){
-  const head='<section class="chart-section" aria-label="Coding Plan 使用情况"><h2 class="chart-title">Coding Plan 使用情况</h2><div class="chart-caption">订阅身份来自各家本机只读元数据（账号已打码、凭证值不读）；用量=本地观察时间窗（口径见下方各表）；云端配额数值本地不落盘的厂商如实标注——安全红线：不持凭证调厂商 API。</div>';
+  const head='<section class="chart-section" aria-label="Coding Plan 使用情况"><h2 class="chart-title">Coding Plan 使用情况</h2><div class="chart-caption">订阅身份来自各家本机只读元数据（账号已打码、凭证值不读）；用量=本地观察时间窗（口径见下方各表）；云端配额数值本地不落盘的厂商如实标注——安全红线：不持凭证调厂商 API。悬停数值看精确值，行内「证据与明细」看逐条出处。</div>';
   if(!pu||pu.pending)return head+'<div class="empty" style="text-align:left">正在读取订阅计划…</div></section>';
   if(pu.error)return head+'<div class="empty" style="text-align:left">读取失败：'+esc(pu.error)+'</div></section>';
-  const rows=(pu.plans||[]).map(p=>planUsageRow(p)).join('');
-  return head+'<div class="utable-wrap"><table class="utable"><tr><th>厂商 · 产品</th><th>计划身份</th><th>状态</th><th>今日</th><th>7 日</th><th>30 日</th><th>全部</th><th>配额 / 余额</th></tr>'
-    +(rows||'<tr><td colspan="8" style="text-align:left;color:var(--dim)">暂无计划数据</td></tr>')+'</table></div>'
+  const plans=pu.plans||[];
+  const shown=plans.filter(p=>p.status!=='not-installed');
+  const absent=plans.filter(p=>p.status==='not-installed');
+  const s=pu.summary||{};
+  const chips='<div class="u-tot pu-summary" aria-label="计划汇总">'
+    +'<span class="chip"><strong>'+Number(s.total||plans.length)+'</strong>家厂商</span>'
+    +'<span class="chip"><strong>'+Number(s.active||0)+'</strong>订阅在用</span>'
+    +'<span class="chip"><strong>'+Number(s.apiBilling||0)+'</strong>API/余额计费</span>'
+    +'<span class="chip"><strong>'+Number(s.signedIn||0)+'</strong>已登录</span>'
+    +'<span class="chip"><strong>'+Number(s.notInstalled||absent.length)+'</strong>未安装</span>'
+    +(pu.refreshing?'<span class="chip">刷新中…</span>':'')+'</div>';
+  const rows=shown.map(p=>planUsageRow(p)).join('');
+  const absentRow=absent.length
+    ?'<tr class="pu-absent"><td>未安装（'+absent.length+' 家）</td><td colspan="7">'+absent.map(p=>esc(p.vendor)+' · '+esc(p.product)).join('&ensp;·&ensp;')+'<span style="color:var(--dim)">—— 安装并登录后自动出现在此表</span></td></tr>'
+    :'';
+  return head+chips+'<div class="utable-wrap"><table class="utable"><tr><th>厂商 · 产品</th><th>计划身份</th><th>状态</th><th>今日</th><th>7 日</th><th>30 日</th><th>全部</th><th>配额 / 余额</th></tr>'
+    +(rows||'<tr><td colspan="8" style="text-align:left;color:var(--dim)">暂无计划数据</td></tr>')+absentRow+'</table></div>'
     +'<div class="u-note">'+esc(pu.redline||'')+' · 生成于 '+(pu.generatedAt?new Date(pu.generatedAt).toLocaleString('zh-CN'):'—')+(pu.refreshing?' · 刷新中':'')+'</div></section>';
 }
 function planUsageRow(p){
   const st=PLAN_STATUS[p.status]||[p.status,'var(--dim)'];
-  if(p.status==='not-installed')return '<tr style="color:var(--dim)"><td>'+esc(p.vendor)+' · '+esc(p.product)+'</td><td colspan="7">未安装——本机未发现该厂商的安装痕迹</td></tr>';
   const isCost=p.category==='api-balance'&&p.quota&&p.quota.kind==='balance';
   const cell=(win,cost)=>planWindowCell(p,win,cost);
   const identity=p.planName?esc(p.planName)+(p.account?'<span class="pu-acc">'+esc(p.account)+'</span>':''):'<span style="color:var(--dim)">—</span>';
-  let quotaCell='<span style="color:var(--dim)">云端配额本地不落盘</span>';
-  if(isCost)quotaCell='<b>余额 ¥'+p.quota.balance+'</b><span class="pu-acc">'+esc(p.quota.currency||'CNY')+' · 余额即配额</span>';
+  let quotaCell='<span style="color:var(--dim)" title="配额数值在厂商云端，本地无缓存">云端配额本地不落盘</span>';
+  if(isCost)quotaCell='<b title="余额即配额（本地账本精确）">余额 ¥'+p.quota.balance+'</b><span class="pu-acc">'+esc(p.quota.currency||'CNY')+'</span>';
   const detail=planDetailHtml(p);
-  return '<tr><td>'+esc(p.vendor)+'<span style="color:var(--dim)"> · '+esc(p.product)+'</span>'+(detail?'<details class="sc-ev"><summary>证据与明细</summary>'+detail+'</details>':'')+'</td>'
+  return '<tr><td><div class="pu-vendor">'+planLogo(p)+'<span class="pu-vname">'+esc(p.vendor)+'</span><span style="color:var(--dim)">· '+esc(p.product)+'</span>'+(detail?'<details class="sc-ev pu-ev"><summary>证据与明细</summary>'+detail+'</details>':'')+'</div></td>'
     +'<td>'+identity+'</td>'
     +'<td><span class="pu-badge" style="color:'+st[1]+'">'+esc(st[0])+'</span></td>'
     +'<td>'+cell('today',isCost?p.quota.todayCost:null)+'</td>'

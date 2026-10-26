@@ -716,15 +716,18 @@ let cx;
       // ---- MU5/MU6：Token 用量端到端（framed 快照 usage 块 + /api/usage 明细端点）----
       {
         let snapU = null, snapFresh = null;
-        for (let i = 0; i < 20 && !snapU; i++) {           // 首轮全量 ~2s（1.1GB 转录），轮询至多 40s
+        // 像真实客户端一样先打 /api/usage 懒触发（PERF-3：/api/state 不触发扫描；无客户端时开机 5min 兜底才扫
+        // ——2026-10-27 实测 MU5 只轮 /api/state 会空等 120s+，懒触发后冷扫 ~10s 出数）
+        try { await fetch('http://127.0.0.1:' + PORT + '/api/usage'); } catch { /* 触发失败照旧轮询 */ }
+        for (let i = 0; i < 60 && !snapU; i++) {           // 首轮全量 ~2s（1.1GB 转录）；冷启动+并发负载下首扫可超 40s → 预算 120s
           try {
             const r = await fetch('http://127.0.0.1:' + PORT + '/api/state');
             const j = await r.json();
             if (j.usage && !j.usage.pending) { snapU = j.usage; snapFresh = j; } else await new Promise((r2) => setTimeout(r2, 2000));
           } catch { await new Promise((r2) => setTimeout(r2, 1000)); }
         }
-        check('MU5', 'framed 快照含 usage 块（五源聚合 + ranges 时间窗 + 形态拆分 + 历史行附带 usage）',
-          !!snapU && (snapU.totals?.input ?? 0) > 0 && (snapU.byModel || []).length >= 3 && Object.keys(snapU.bySource || {}).length === 6   // 七源中 qoder 无 token 真值如实缺席（degraded 不进 bySource）
+        check('MU5', 'framed 快照含 usage 块（八源聚合 + ranges 时间窗 + 形态拆分 + 历史行附带 usage）',
+          !!snapU && (snapU.totals?.input ?? 0) > 0 && (snapU.byModel || []).length >= 3 && Object.keys(snapU.bySource || {}).length === 8   // 八源全在列（2026-10-22 估算模式：qoder/cursor 以估算源进 bySource，不再 degraded 缺席）
             && ['today', 'd7', 'd30'].every((k) => Number.isFinite(snapU.ranges?.[k]?.totals?.requests))
             && (snapU.bySource?.['claude-code']?.variants?.length ?? 0) >= 1
             && ((snapFresh?.catalog?.history) || []).some((h) => h.usage),
@@ -732,9 +735,9 @@ let cx;
         if (snapU) {
           const r2 = await fetch('http://127.0.0.1:' + PORT + '/api/usage');
           const ju = await r2.json().catch(() => ({}));
-          check('MU6', '/api/usage 明细端点（overview + perSource 五源 byModel/bySession，DSH 在列）',
-            r2.status === 200 && !!ju.overview?.totals && Object.keys(ju.perSource || {}).length === 8 && ju.perSource['claude-code']?.bySessionCount >= 1 && (ju.perSource?.dsh?.bySessionCount ?? 0) >= 1 && ju.perSource?.opencode?.bySessionCount >= 1 && ju.perSource?.qoder?.degraded === true && ju.perSource?.cursor?.degraded === true,
-            { status: r2.status, sources: Object.keys(ju.perSource || {}), ccSessions: ju.perSource?.['claude-code']?.bySessionCount, dshSessions: ju.perSource?.dsh?.bySessionCount });
+          check('MU6', '/api/usage 明细端点（overview + perSource 八源 byModel/bySession，DSH 在列；qoder/cursor 为估算源非 degraded）',
+            r2.status === 200 && !!ju.overview?.totals && Object.keys(ju.perSource || {}).length === 8 && ju.perSource['claude-code']?.bySessionCount >= 1 && (ju.perSource?.dsh?.bySessionCount ?? 0) >= 1 && ju.perSource?.opencode?.bySessionCount >= 1 && ju.perSource?.qoder?.estimatedTokens === true && ju.perSource?.cursor?.estimatedTokens === true && ju.perSource?.qoder?.degraded === false && ju.perSource?.cursor?.degraded === false,
+            { status: r2.status, sources: Object.keys(ju.perSource || {}), ccSessions: ju.perSource?.['claude-code']?.bySessionCount, dshSessions: ju.perSource?.dsh?.bySessionCount, qoder: { estimatedTokens: ju.perSource?.qoder?.estimatedTokens, degraded: ju.perSource?.qoder?.degraded }, cursor: { estimatedTokens: ju.perSource?.cursor?.estimatedTokens, degraded: ju.perSource?.cursor?.degraded } });
         }
       }
     }
