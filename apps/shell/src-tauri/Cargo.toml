@@ -1,6 +1,6 @@
 [package]
 name = "agent-pet-shell"
-version = "0.1.0"
+version = "0.1.4"
 description = "Agent 悬浮窗桌面外壳（Tauri v2）"
 authors = ["agent-pet"]
 edition = "2021"

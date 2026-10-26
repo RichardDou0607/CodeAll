@@ -156,6 +156,11 @@ h1,.sp-title,.u-title{font-size:20px;font-weight:600;margin:0;line-height:1.35}
 .utable th,.utable td{text-align:right;padding:10px 9px;border-bottom:1px solid var(--line);white-space:nowrap;font-variant-numeric:tabular-nums}
 .utable th{color:var(--dim);font-weight:400;font-size:10px;background:var(--surface)}
 .utable td:first-child,.utable th:first-child{text-align:left}
+.pu-badge{font-size:10px;font-weight:500}
+.pu-acc{display:block;font-size:9px;color:var(--dim)}
+.pu-mini{border-collapse:collapse;font-size:10px;margin:6px 0}
+.pu-mini th,.pu-mini td{padding:4px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.pu-mini th{color:var(--dim);font-weight:400}
 .u-src-h{font-size:12px;font-weight:600;margin:24px 0 10px}
 .u-note{font-size:10px;color:var(--dim);margin-top:16px;line-height:1.8}
 .u-ranges{display:flex;gap:3px}
@@ -743,6 +748,30 @@ async function loadUsageCalendar(force=false){
     if(window.__SNAP__&&window.__VIEW__==='usage')render(window.__SNAP__);
   }
 }
+// Coding Plan 使用情况（/api/plan-usage）：与日历同模式——打开用量页懒加载，usage.generatedAt 变化即重拉
+async function loadPlanUsage(force=false){
+  const previous=window.__PLAN_USAGE_STATE__||{};
+  const version=Number(window.__SNAP__?.usage?.generatedAt)||0;
+  if(previous.loading)return;
+  if(!force){
+    if(previous.version===version&&Date.now()<previous.retryAt)return;
+    if(window.__PLAN_USAGE__&&!window.__PLAN_USAGE__.pending&&previous.version===version&&!previous.error)return;
+  }
+  const state={loading:true,error:'',version,retryAt:0};
+  window.__PLAN_USAGE_STATE__=state;
+  try{
+    const j=await api('/api/plan-usage',undefined,'GET');
+    if(j?.ok===false)throw new Error(j.error||'读取失败');
+    if(!j?.pending&&!Array.isArray(j.plans))throw new Error('Coding Plan 数据格式不正确');
+    window.__PLAN_USAGE__=j;
+  }catch(e){
+    state.error=String(e?.message||e).slice(0,160);
+  }finally{
+    state.loading=false;
+    state.retryAt=Date.now()+15000;
+    if(window.__SNAP__&&window.__VIEW__==='usage')render(window.__SNAP__);
+  }
+}
 // 用量表里的模型名同样按「实际请求名」显示（与新建下拉、会话详情同口径）；
 // 合并表跨来源时若映射结果不一致，就保留记录里的原名，避免拼出一个不存在的模型。
 function modelLabel(row,source){
@@ -782,6 +811,55 @@ function usageSourceChart(view){
     +'<section class="chart-panel"><h3>Token · 全量（含缓存读）</h3>'+chartRows(entries,x=>x.source,x=>sourceMeta(x.source).name,tokenCount,fmtTok)+'</section>'
     +'</div>';
 }
+// ---- Coding Plan 使用情况（/api/plan-usage，2026-10-26）：订阅身份 × 本地用量窗口 × 配额/余额 ----
+const PLAN_STATUS={active:['订阅在用','var(--run)'],'api-billing':['API/余额计费','var(--acc)'],'signed-in':['已登录 · 档位未知','var(--wait)'],'not-signed-in':['已安装 · 未登录','var(--dim)'],unknown:['未知','var(--dim)'],'not-installed':['未安装','var(--dim)']};
+function planWindowCell(p,win,cost){
+  if(cost!=null)return Number.isFinite(cost)?'¥'+cost:'—';
+  const w=p.usage&&p.usage.windows&&p.usage.windows[win];
+  if(!p.usage||p.usage.kind==='none'||!w||!w.available)return '<span style="color:var(--dim)">—</span>';
+  if(w.unavailable)return '<span style="color:var(--dim)">—（云端计费）</span>';
+  const tok=(p.usage.kind==='estimate'||w.approximate?'<span style="color:var(--dim)">≈</span>':'')+fmtTok(w.tokens);
+  return tok+'<span style="color:var(--dim)"> · '+fmtTok(w.requests)+'次</span>';
+}
+function planDetailHtml(p){
+  const parts=[];
+  for(const n of p.notes||[])parts.push('<div>· '+esc(n)+'</div>');
+  if(p.usage&&Array.isArray(p.usage.zcodeProviders)&&p.usage.zcodeProviders.length){
+    parts.push('<table class="pu-mini"><tr><th>ZCode provider</th><th>请求</th><th>完成</th><th>in</th><th>out</th><th>今日 in</th></tr>'
+      +p.usage.zcodeProviders.map(z=>'<tr><td style="text-align:left">'+esc(z.provider)+'</td><td>'+fmtTok(z.requests)+'</td><td>'+fmtTok(z.completed)+'</td><td>'+fmtTok(z.input)+'</td><td>'+fmtTok(z.output)+'</td><td>'+fmtTok(z.inputToday)+'</td></tr>').join('')+'</table>');
+  }
+  if(p.quota&&Array.isArray(p.quota.daily)&&p.quota.daily.length)parts.push('<div class="pu-acc">近 '+p.quota.daily.length+' 日成本：'+p.quota.daily.map(d=>esc(String(d.day).slice(5))+' ¥'+d.cost).join(' · ')+'</div>');
+  if(p.quota&&Array.isArray(p.quota.events)&&p.quota.events.length)parts.push('<div class="pu-acc">最近事件：'+p.quota.events.map(e=>esc(e.model||'?')+' ¥'+e.cost).join(' · ')+'</div>');
+  for(const e of p.evidence||[])parts.push('<div style="color:var(--dim)">证 '+(e.file?esc(e.file)+' · ':'')+esc(e.field)+' = '+esc(e.value)+'</div>');
+  return parts.join('');
+}
+function planUsageHtml(pu,now){
+  const head='<section class="chart-section" aria-label="Coding Plan 使用情况"><h2 class="chart-title">Coding Plan 使用情况</h2><div class="chart-caption">订阅身份来自各家本机只读元数据（账号已打码、凭证值不读）；用量=本地观察时间窗（口径见下方各表）；云端配额数值本地不落盘的厂商如实标注——安全红线：不持凭证调厂商 API。</div>';
+  if(!pu||pu.pending)return head+'<div class="empty" style="text-align:left">正在读取订阅计划…</div></section>';
+  if(pu.error)return head+'<div class="empty" style="text-align:left">读取失败：'+esc(pu.error)+'</div></section>';
+  const rows=(pu.plans||[]).map(p=>planUsageRow(p)).join('');
+  return head+'<div class="utable-wrap"><table class="utable"><tr><th>厂商 · 产品</th><th>计划身份</th><th>状态</th><th>今日</th><th>7 日</th><th>30 日</th><th>全部</th><th>配额 / 余额</th></tr>'
+    +(rows||'<tr><td colspan="8" style="text-align:left;color:var(--dim)">暂无计划数据</td></tr>')+'</table></div>'
+    +'<div class="u-note">'+esc(pu.redline||'')+' · 生成于 '+(pu.generatedAt?new Date(pu.generatedAt).toLocaleString('zh-CN'):'—')+(pu.refreshing?' · 刷新中':'')+'</div></section>';
+}
+function planUsageRow(p){
+  const st=PLAN_STATUS[p.status]||[p.status,'var(--dim)'];
+  if(p.status==='not-installed')return '<tr style="color:var(--dim)"><td>'+esc(p.vendor)+' · '+esc(p.product)+'</td><td colspan="7">未安装——本机未发现该厂商的安装痕迹</td></tr>';
+  const isCost=p.category==='api-balance'&&p.quota&&p.quota.kind==='balance';
+  const cell=(win,cost)=>planWindowCell(p,win,cost);
+  const identity=p.planName?esc(p.planName)+(p.account?'<span class="pu-acc">'+esc(p.account)+'</span>':''):'<span style="color:var(--dim)">—</span>';
+  let quotaCell='<span style="color:var(--dim)">云端配额本地不落盘</span>';
+  if(isCost)quotaCell='<b>余额 ¥'+p.quota.balance+'</b><span class="pu-acc">'+esc(p.quota.currency||'CNY')+' · 余额即配额</span>';
+  const detail=planDetailHtml(p);
+  return '<tr><td>'+esc(p.vendor)+'<span style="color:var(--dim)"> · '+esc(p.product)+'</span>'+(detail?'<details class="sc-ev"><summary>证据与明细</summary>'+detail+'</details>':'')+'</td>'
+    +'<td>'+identity+'</td>'
+    +'<td><span class="pu-badge" style="color:'+st[1]+'">'+esc(st[0])+'</span></td>'
+    +'<td>'+cell('today',isCost?p.quota.todayCost:null)+'</td>'
+    +'<td>'+cell('d7',isCost?p.quota.d7Cost:null)+'</td>'
+    +'<td>'+cell('d30',isCost?p.quota.d30Cost:null)+'</td>'
+    +'<td>'+cell('all',isCost?p.quota.allCost:null)+'</td>'
+    +'<td>'+quotaCell+'</td></tr>';
+}
 function usageHtml(us,now){
   const calendar=usageCalendarHtml(window.__USAGE_CALENDAR__,now);
   if(!us||us.pending)return calendar+'<div class="empty" style="text-align:left;margin-left:6px">首次全量扫描中…（本机 1.1GB 转录约需数秒，完成后自动出现）</div>';
@@ -792,6 +870,7 @@ function usageHtml(us,now){
   if(!view)return h+'<div class="empty">当前时间窗数据暂不可用，等待下一次扫描。</div>';
   const t=view.totals||{};
   h+='<div class="u-tot"><span class="chip" title="in = 全量 prompt（含缓存读）">in（含缓存读） '+fmtTok(t.promptTokens??t.input)+'</span><span class="chip">Token 全量 '+fmtTok(t.totalTokens??((Number(t.input)||0)+(Number(t.output)||0)))+'</span><span class="chip">out '+fmtTok(t.output)+'</span><span class="chip">cache读 '+fmtTok(t.cacheRead)+'</span><span class="chip">cache写 '+fmtTok(t.cacheWrite)+'</span><span class="chip">命中率 '+pct(t.hitRate)+'</span><span class="chip">请求 '+fmtTok(t.requests)+'</span>'+(us.refreshing?'<span class="chip">扫描中…</span>':'')+'<span class="chip">当前窗口：'+(rl||'全部时间')+'</span>'+'</div>';
+  h+=planUsageHtml(window.__PLAN_USAGE__,now);
   // 各 Agent 消耗量：claude/codex/kimi 按 CLI/桌面/IDE 形态拆行（与会话目录/软件状态页同口径）；dsh/zcode 单行
   const SRC_ORDER=['dsh','claude-code','codex','kimi-code','zcode','opencode','qoder','cursor'];
   const SRC_SPLIT={ 'claude-code':1, codex:1, 'kimi-code':1 };
@@ -943,6 +1022,7 @@ function render(snap){
   const usageBody=$('usage-body');
   if(view==='usage'){
     loadUsageCalendar();
+    loadPlanUsage();
     const uh=usageHtml(snap.usage,now);
     const focusKey=window.__USAGE_CALENDAR_FOCUS__||document.activeElement?.getAttribute?.('data-calendar-focus');
     window.__USAGE_CALENDAR_FOCUS__='';
@@ -1484,6 +1564,7 @@ $('usage-refresh').onclick=async()=>{
     const j=await api('/api/usage?refresh=1',undefined,'GET');
     if(j?.ok===false)throw new Error(j.error||'重新扫描失败');
     await loadUsageCalendar(true);
+    await loadPlanUsage(true);
   }catch(e){console.error('CodeAll usage refresh:',e)}
   finally{window.__USAGE_REFRESHING__=false;if(window.__SNAP__)render(window.__SNAP__)}
 };

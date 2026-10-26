@@ -1,14 +1,14 @@
 # CodeAll（Agent 工作框 / 总控）
 
-> 一个常驻桌面的**工作框 / Agent 总控**。当前开发目标是与 Claude Code、Codex、Kimi Code 的 CLI 会话及已授权的 DeepSeek Harness 会话对话；已有的多源观察、用量和 ZCode 实验能力保留。**当前排期（2026-10-17 定向、10-19 增补）：v0.1.1 性能优化补丁线（仅 macOS，[docs/25](./docs/25-v0.1.1-scope.md)）＋ 其上追加的 v0.1.2 用量链路与刷新补丁（[docs/27](./docs/27-v0.1.2-scope.md)）＋ v0.1.3 手动停止状态补丁（[docs/28](./docs/28-v0.1.3-scope.md)）；v0.2.0 跨平台 Windows/Linux（[docs/24](./docs/24-v0.2.0-scope.md)）；v0.3.0 桌面端信息传输通道攻坚（v0.2.0 后启动，[docs/26](./docs/26-v0.3.0-scope.md)），均未发布不构成承诺**；计费、远端 AgentOS 与手机端仍是暂停排期的方向，不属于当前交付承诺。
+> 一个常驻桌面的**工作框 / Agent 总控**。当前开发目标是与 Claude Code、Codex、Kimi Code 的 CLI 会话及已授权的 DeepSeek Harness 会话对话；已有的多源观察、用量和 ZCode 实验能力保留。**当前排期（2026-10-17 定向、10-19 增补）：v0.1.1 性能优化补丁线（仅 macOS，[docs/25](./docs/25-v0.1.1-scope.md)）＋ 其上追加的 v0.1.2 用量链路与刷新补丁（[docs/27](./docs/27-v0.1.2-scope.md)）＋ v0.1.3 手动停止状态补丁（[docs/28](./docs/28-v0.1.3-scope.md)）＋ v0.1.4 Coding Plan 订阅面板（[docs/29](./docs/29-v0.1.4-scope.md)）；v0.2.0 跨平台 Windows/Linux（[docs/24](./docs/24-v0.2.0-scope.md)）；v0.3.0 桌面端信息传输通道攻坚（v0.2.0 后启动，[docs/26](./docs/26-v0.3.0-scope.md)），均未发布不构成承诺**；计费、远端 AgentOS 与手机端仍是暂停排期的方向，不属于当前交付承诺。
 >
-> 当前对外可下载：**v0.1.3（2026-10-19，独立安装包）**。CLI 与 DS Harness 对话闭环的 v0.1.0 收口验收（V01–V06）已在源码层完成（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)），正式版本待跨平台（v0.2.0）与整体形态完成后发布。已有观察/用量等功能仍在，但不构成新增开发承诺。
+> 当前对外可下载：**v0.1.4（2026-10-27，独立安装包）**。CLI 与 DS Harness 对话闭环的 v0.1.0 收口验收（V01–V06）已在源码层完成（证据：[qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)），正式版本待跨平台（v0.2.0）与整体形态完成后发布。已有观察/用量等功能仍在，但不构成新增开发承诺。
 
 > English readers: see the full **English version → [English](#english)** at the bottom of this page.
 
 ## 〇、下载安装（macOS · Apple Silicon）
 
-从 [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) 下载 **v0.1.3** 的 `CodeAll_0.1.3_aarch64.dmg`，拖入 /Applications 即用：**安装包自带本地服务与 Node 运行时，不依赖源码仓库，也无需先装 Node 或其它任何依赖**（各家 Agent 软件本体当然需要各自安装并登录）。
+从 [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) 下载 **v0.1.4** 的 `CodeAll_0.1.4_aarch64.dmg`，拖入 /Applications 即用：**安装包自带本地服务与 Node 运行时，不依赖源码仓库，也无需先装 Node 或其它任何依赖**（各家 Agent 软件本体当然需要各自安装并登录）。
 
 ```bash
 # 首次打开：应用为 ad-hoc 签名、未经过 Apple 公证，macOS 门禁会拦截一次——任选其一：
@@ -47,6 +47,7 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性�
 | **六源 Token 计数** | Agent × 模型 × 自然日 × 形态 精确累计（60s 慢缓存 + 文件级增量，1.1GB 转录不进热路径）；子代理消耗归入父会话；OpenCode 双账本对账（message.tokens ≡ session_v2 累计）；Qoder/Cursor 客户端不落盘 token——如实降级不虚估 |
 | **缓存命中率** | 每源/每模型命中率（input 语义按厂商分家：Anthropic 不含 cache / OpenAI 含），与官方 UI 对过账（ZCode「今日消耗」基准） |
 | **时间窗 + 日历** | 当日/7 日/30 日切换；用量日历热力与逐日明细；会话行内 tok in/out |
+| **Coding Plan 订阅面板（v0.1.4）** | 15 家主流厂商「订阅身份 × 本地用量 × 配额/余额」一屏看全：GLM Coding Plan（entitlement + model_usage 按 provider 精确拆分）、DeepSeek（余额即配额，逐日/逐事件成本）、Cursor/Copilot（本地档位字段）、Claude/Codex/Kimi/Qoder（登录态/API 计费形态如实标注）、未安装厂商盘点；凭证值不读、账号打码、云端配额不虚报 |
 
 ### 桌面外壳（Tauri v2）
 
@@ -76,6 +77,7 @@ node demo/test-open-routing.mjs       # 打开路由回归（CLI 走 Terminal、
 node demo/test-follow-budget.mjs      # 跟随器预算回归（mtime 优先 + LRU 淘汰，claude/codex/kimi）
 node demo/test-service-hardening.mjs  # 服务健壮性（日志目录不可写不崩 + 无 DSH 日志仍有 2s 心跳）
 node demo/test-usage-calendar.mjs     # 用量日历自检
+node demo/test-plan-usage.mjs         # Coding Plan 订阅面板回归（身份/隐私/账本/窗口/UI）
 node scripts/multi-source-check.mjs         # 扩展多源检查（含 ZCode 性能阈值；非当前发布门槛）
 node scripts/catalog-check.mjs        # 会话目录验收（16 项）
 node adapters/local-agents.mjs        # 软件四态探测（CLI 表格 / --json）
@@ -105,7 +107,8 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 | [docs/25-v0.1.1-scope.md](./docs/25-v0.1.1-scope.md) | **真相源（v0.1.1）**：性能优化 + CLI 后台化收口范围与验收（仅 macOS，先行） |
 | [docs/26-v0.3.0-scope.md](./docs/26-v0.3.0-scope.md) | **真相源（v0.3.0）**：桌面端信息传输通道攻坚（全量 spike 后择优落地，v0.2.0 后启动） |
 | [docs/27-v0.1.2-scope.md](./docs/27-v0.1.2-scope.md) | 真相源（v0.1.2）：分钟兜底刷新 + 用量扫描四级增量（PERF-7）范围与验收 |
-| [docs/28-v0.1.3-scope.md](./docs/28-v0.1.3-scope.md) | **当前真相源（v0.1.3）**：手动停止 ≠ 出错（契约 v1.4 aborted 会话态）范围与验收 |
+| [docs/28-v0.1.3-scope.md](./docs/28-v0.1.3-scope.md) | 真相源（v0.1.3）：手动停止 ≠ 出错（契约 v1.4 aborted 会话态）范围与验收 |
+| [docs/29-v0.1.4-scope.md](./docs/29-v0.1.4-scope.md) | **当前真相源（v0.1.4）**：Coding Plan 订阅使用情况面板（15 家厂商：身份 × 本地用量 × 配额/余额）范围与验收 |
 | [docs/40-adapters.md](./docs/40-adapters.md) | 后端适配矩阵（含 Cursor/Copilot/ACP 行）、观测能力与降级 |
 | [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | 产品规格、工作框三形态、人机交互总体方案 |
 | [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri 外壳实现（双窗口、Space 行为、内存口径） |
@@ -123,13 +126,13 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 
 ## English
 
-> CodeAll is a resident desktop **work-frame / agent cockpit**. The current development goal is conversation with Claude Code, Codex and Kimi Code CLI sessions, plus authorized DeepSeek Harness sessions; existing multi-source observation, usage tracking and ZCode experimental capabilities are retained. **Current schedule (set 2026-10-17, v0.1.2 added 10-19): v0.1.1 performance patch line (macOS only, [docs/25](./docs/25-v0.1.1-scope.md)) plus the follow-on v0.1.2 usage-pipeline & refresh patch ([docs/27](./docs/27-v0.1.2-scope.md)) and the v0.1.3 manual-stop state patch ([docs/28](./docs/28-v0.1.3-scope.md)); v0.2.0 cross-platform Windows/Linux ([docs/24](./docs/24-v0.2.0-scope.md)); v0.3.0 desktop-app transmission-channel push (starts after v0.2.0, [docs/26](./docs/26-v0.3.0-scope.md)) — none released yet, no commitment**; billing, remote AgentOS and mobile remain paused and are not part of the current delivery promise.
+> CodeAll is a resident desktop **work-frame / agent cockpit**. The current development goal is conversation with Claude Code, Codex and Kimi Code CLI sessions, plus authorized DeepSeek Harness sessions; existing multi-source observation, usage tracking and ZCode experimental capabilities are retained. **Current schedule (set 2026-10-17, v0.1.2 added 10-19): v0.1.1 performance patch line (macOS only, [docs/25](./docs/25-v0.1.1-scope.md)) plus the follow-on v0.1.2 usage-pipeline & refresh patch ([docs/27](./docs/27-v0.1.2-scope.md)), the v0.1.3 manual-stop state patch ([docs/28](./docs/28-v0.1.3-scope.md)) plus the v0.1.4 Coding Plan panel ([docs/29](./docs/29-v0.1.4-scope.md)); v0.2.0 cross-platform Windows/Linux ([docs/24](./docs/24-v0.2.0-scope.md)); v0.3.0 desktop-app transmission-channel push (starts after v0.2.0, [docs/26](./docs/26-v0.3.0-scope.md)) — none released yet, no commitment**; billing, remote AgentOS and mobile remain paused and are not part of the current delivery promise.
 >
-> Current public download: **v0.1.3 (2026-10-19, standalone installer)**. The v0.1.0 acceptance for the CLI & DS Harness conversation loop (V01–V06) is complete at source level (evidence: [qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)); a formal release comes after cross-platform (v0.2.0) and the overall product shape are done. Existing observation/usage features remain available but are not a new development commitment.
+> Current public download: **v0.1.4 (2026-10-27, standalone installer)**. The v0.1.0 acceptance for the CLI & DS Harness conversation loop (V01–V06) is complete at source level (evidence: [qa/v0.1.0-acceptance-2026-10-10.md](./qa/v0.1.0-acceptance-2026-10-10.md)); a formal release comes after cross-platform (v0.2.0) and the overall product shape are done. Existing observation/usage features remain available but are not a new development commitment.
 
 ### 0 · Download & Install (macOS · Apple Silicon)
 
-Download the **v0.1.3** `CodeAll_0.1.3_aarch64.dmg` from [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) and drag it into /Applications: **the installer ships its own local service and Node runtime** — no repo checkout or Node installation required (each agent product itself still needs to be installed and signed in by you).
+Download the **v0.1.4** `CodeAll_0.1.4_aarch64.dmg` from [GitHub Releases](https://github.com/RichardDou0607/CodeAll/releases) and drag it into /Applications: **the installer ships its own local service and Node runtime** — no repo checkout or Node installation required (each agent product itself still needs to be installed and signed in by you).
 
 ```bash
 # First launch: the app is ad-hoc signed and not notarized, macOS Gatekeeper blocks it once — pick one:
@@ -168,6 +171,7 @@ Session observation and usage tracking remain available; the focus is directed c
 | **Five-source token counting** | Precise accumulation by Agent × model × calendar day × form (60 s slow cache + file-level increments; 1.1 GB transcripts stay off the hot path); sub-agent consumption is attributed to the parent session |
 | **Cache hit rates** | Per source / per model hit rate (input semantics split by vendor: Anthropic excludes cache / OpenAI includes), reconciled against official UIs (ZCode "today's consumption" baseline) |
 | **Time windows + calendar** | Today / 7 d / 30 d switching; usage calendar heatmap with daily detail; per-session tok in/out rows |
+| **Coding Plan panel (v0.1.4)** | 15 mainstream vendors in one view: plan identity × local usage windows × quota/balance — GLM Coding Plan (entitlement cache + per-provider exact split), DeepSeek (balance-as-quota with per-day/per-event cost), Cursor/Copilot (local SKU fields), Claude/Codex/Kimi/Qoder (sign-in / API-billing state as-is), plus not-installed vendors; credential values never read, accounts masked, cloud-only quotas honestly marked |
 
 #### Desktop Shell (Tauri v2)
 
@@ -197,6 +201,7 @@ node demo/test-open-routing.mjs       # Open-routing regression (CLI → Termina
 node demo/test-follow-budget.mjs      # Follower budget regression (mtime-first + LRU eviction; claude/codex/kimi)
 node demo/test-service-hardening.mjs  # Service hardening (unwritable log dir doesn't crash; 2 s heartbeat without DSH logs)
 node demo/test-usage-calendar.mjs     # Usage calendar self-check
+node demo/test-plan-usage.mjs         # Coding Plan panel regression (identity/privacy/ledger/windows/UI)
 node scripts/multi-source-check.mjs         # Extended multi-source check (incl. ZCode perf threshold; not a current release gate)
 node scripts/catalog-check.mjs        # Session catalog acceptance (16 items)
 node adapters/local-agents.mjs        # Four-state software probe (CLI table / --json)
@@ -226,6 +231,8 @@ node scripts/replay-check.mjs --selftest   # State-machine replay + negative cas
 | [docs/25-v0.1.1-scope.md](./docs/25-v0.1.1-scope.md) | **Truth source (v0.1.1)**: performance optimization + CLI backgrounding closure (macOS only, goes first) |
 | [docs/26-v0.3.0-scope.md](./docs/26-v0.3.0-scope.md) | **Truth source (v0.3.0)**: desktop-app transmission-channel push (full spikes, then land 1–2 by evidence; after v0.2.0) |
 | [docs/27-v0.1.2-scope.md](./docs/27-v0.1.2-scope.md) | **Current truth source (v0.1.2)**: minute fallback refresh + four-level incremental usage scanning (PERF-7) |
+| [docs/28-v0.1.3-scope.md](./docs/28-v0.1.3-scope.md) | Truth source (v0.1.3): manual stop ≠ error (contract v1.4 aborted session state) scope and acceptance |
+| [docs/29-v0.1.4-scope.md](./docs/29-v0.1.4-scope.md) | **Current truth source (v0.1.4)**: Coding Plan panel (15 vendors: identity × local usage × quota/balance) scope and acceptance |
 | [docs/40-adapters.md](./docs/40-adapters.md) | Backend adapter matrix (incl. Cursor/Copilot/ACP rows), observation capabilities and degradation |
 | [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | Product spec, work-frame three forms, human-machine interaction plan |
 | [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri shell implementation (dual windows, Spaces behavior, memory accounting) |

@@ -30,6 +30,7 @@ function setup(data = payload()) {
   let response = data;
   sandbox.fetch = async (path, options) => {
     requests.push({ path, ...options });
+    if (path === '/api/plan-usage') return { ok: true, json: async () => ({ generatedAt: now, plans: [], summary: {} }) };   // Coding Plan 区：本文件只测日历
     if (response instanceof Error) throw response;
     return { ok: true, json: async () => response };
   };
@@ -45,6 +46,7 @@ function setup(data = payload()) {
     ...harness, snap, click,
     text: () => getEl('usage-body').innerHTML,
     setResponse: value => { response = value; },
+    calRequests: () => requests.filter(r => String(r.path).startsWith('/api/usage/calendar')),
     async open() { sandbox.render(snap); await getEl('view-usage').dispatch('click'); await tick(); },
   };
 }
@@ -54,9 +56,10 @@ test('Lazy load once; month totals, tools-only days, exact day details and exist
   sandbox.render(snap);
   assert.equal(requests.length, 0);
   await h.open();
-  assert.equal(requests.length, 1);
-  assert.equal(requests[0].path, '/api/usage/calendar');
-  assert.equal(requests[0].method, 'GET');
+  assert.equal(h.calRequests().length, 1);              // 日历请求恰好 1 次（Coding Plan 区另有 1 次独立懒加载）
+  assert.equal(requests.length, 2);
+  assert.equal(h.calRequests()[0].path, '/api/usage/calendar');
+  assert.equal(h.calRequests()[0].method, 'GET');
   assert.match(h.text(), /data-month-total="tokens" title="≈4,000">≈4k/);
   assert.match(h.text(), /data-month-total="toolCalls" title="18">18/);
   assert.match(h.text(), /data-month-total="mcpCalls" title="7">7/);
@@ -71,7 +74,7 @@ test('Lazy load once; month totals, tools-only days, exact day details and exist
   Object.defineProperty(getEl('usage-body'), 'innerHTML', { configurable: true, get: () => value, set: v => { value = v; writes++; } });
   sandbox.render({ ...snap, ts: now + 2000 });
   await tick();
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, 2);                     // 版本未变：日历与 Coding Plan 均不重拉
   assert.equal(writes, 0);
   await h.click('data-calendar-metric', 'toolCalls');
   await h.click('data-calendar-day', '20261007');
@@ -101,7 +104,7 @@ test('Source filter does not affect sessions; selection and focus survive new sn
   h.setResponse(updated);
   sandbox.render({ ...snap, usage: { ...snap.usage, generatedAt: updated.generatedAt } });
   await tick();
-  assert.equal(requests.length, 2);
+  assert.equal(h.calRequests().length, 2);
   assert.equal(sandbox.window.__USAGE_CALENDAR_DAY__, 20261001);
   assert.equal(sandbox.window.__USAGE_CALENDAR_SOURCE__, 'claude-code');
   assert.ok(focused > 0);
@@ -160,21 +163,21 @@ test('Loading, pending scan, network error, bounded retry and retained stale dat
   assert.match(h.text(), /扫描完成后/);
   sandbox.render(snap);
   await tick();
-  assert.equal(requests.length, 1);
+  assert.equal(h.calRequests().length, 1);
   h.setResponse(payload());
   sandbox.window.__USAGE_CALENDAR_STATE__.retryAt = 0;
   sandbox.render(snap);
   await tick();
-  assert.equal(requests.length, 2);
+  assert.equal(h.calRequests().length, 2);
   assert.match(h.text(), /data-calendar-day=/);
   h.setResponse(new Error('<offline>'));
   await sandbox.loadUsageCalendar(true);
   assert.match(h.text(), /保留上次数据：&lt;offline&gt;/);
   assert.match(h.text(), /data-calendar-day=/);
-  const before = requests.length;
+  const before = h.calRequests().length;
   sandbox.render(snap); sandbox.render(snap);
   await tick();
-  assert.equal(requests.length, before);
+  assert.equal(h.calRequests().length, before);
   h.setResponse(payload());
   await h.click('data-calendar-retry');
   assert.doesNotMatch(h.text(), /保留上次数据/);
@@ -189,8 +192,8 @@ test('Invalid responses do not become zero-usage calendars, in-flight reads are 
   await h.open();
   assert.match(h.text(), /日历数据格式不正确/);
   const { sandbox, getEl } = setup();
-  let resolve;
-  sandbox.fetch = () => new Promise(r => { resolve = r; });
+  const pendings = [];
+  sandbox.fetch = () => new Promise(r => { pendings.push(r); });
   const snap = windowFixture(); snap.ts = now; snap.usage.generatedAt = now;
   sandbox.render(snap);
   await getEl('view-usage').dispatch('click');
@@ -198,7 +201,7 @@ test('Invalid responses do not become zero-usage calendars, in-flight reads are 
   const state = sandbox.window.__USAGE_CALENDAR_STATE__;
   sandbox.render(snap);
   assert.equal(sandbox.window.__USAGE_CALENDAR_STATE__, state);
-  resolve({ ok: true, json: async () => payload() });
+  for (const r of pendings) r({ ok: true, json: async () => payload() });   // 日历与 Coding Plan 两个在途请求各自放行
   await tick();
   assert.match(getEl('usage-body').innerHTML, /data-calendar-day=/);
 });

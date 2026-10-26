@@ -30,6 +30,7 @@ import { scanOpencodeCatalog, followOpencodeLogs, SOURCE as OC_SOURCE } from '..
 import { scanQoderCatalog, followQoderLogs, SOURCE as QD_SOURCE } from '../adapters/qoder-adapter.mjs';
 import { scanCursorCatalog, followCursorLogs, SOURCE as CS_SOURCE } from '../adapters/cursor-adapter.mjs';
 import { scanAllUsage, serializeUsageScan, usageCalendar, FORCE_SCAN_OPTS, exportCheckpoint, loadCheckpoint } from '../adapters/usage-collect.mjs';
+import { scanPlanUsage } from '../adapters/plan-usage.mjs';
 import { CLI_TARGETS, availableCliChannels, deliverControl, deliverCreateViaCli, deliverCreateViaZcodePipe, headlessInFlight, openCliSession, resolveCliBin, recoverZcodePendingRollbacks } from '../adapters/cli-control.mjs';
 import { loadModelRegistry, validateModelSelection } from '../adapters/model-registry.mjs';
 import net from 'node:net';
@@ -361,7 +362,23 @@ async function refreshUsage(force = false) {
   } catch (e) {
     usageCache.data = usageCache.data ?? { overview: null, cc: null, cx: null, km: null, zc: null, oc: null, qd: null, cs: null, error: String(e?.message || e).slice(0, 120) };
   } finally { usageCache.busy = false; }
+  await refreshPlanUsage(force);                        // Coding Plan 用量窗口跟随本轮 usage（身份层模块内自带 60s 缓存）
   broadcast();                                          // 扫描完成立刻推新快照（不等 2s 心跳）
+}
+
+// ---------- Coding Plan 订阅使用情况（2026-10-26，用户定向「接入全部主流厂商的 coding plan 使用情况」） ----------
+// 身份/配额层 = 各家本地只读证据（模块内 60s 缓存）；用量层 = 透传 usageCache.overview 的时间窗聚合。
+// 快照不带该块（无会话身份、随用量完成节奏走），UI 打开用量页时经 /api/plan-usage 懒加载——与日历同模式。
+let planUsageCache = { at: 0, busy: false, data: null };
+async function refreshPlanUsage(force = false) {
+  if (planUsageCache.busy) return;
+  planUsageCache.busy = true;
+  try {
+    planUsageCache.data = await scanPlanUsage({ usage: usageCache.data, refresh: force });
+    planUsageCache.at = Date.now();
+  } catch (e) {
+    planUsageCache.data = planUsageCache.data ?? { summary: { total: 0 }, redline: '', plans: [], error: String(e?.message || e).slice(0, 120) };
+  } finally { planUsageCache.busy = false; }
 }
 
 // ---------- 进行中口径（修复「N 进行」误报，2026-10-06）----------
@@ -1423,6 +1440,18 @@ const server = http.createServer(async (req, res) => {
         cursor: serializeUsageScan(u.cs),
       },
     } : { pending: true }));
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/api/plan-usage') {
+    // Coding Plan 订阅使用情况：15 家主流厂商（身份 × 本地用量窗口 × 配额/余额）；身份层懒触发（60s 缓存）
+    if (!planUsageCache.busy && (!planUsageCache.data || Date.now() - planUsageCache.at > 60_000)) {
+      if (!usageCache.busy && (!usageCache.data || Date.now() - usageCache.at > 60_000)) refreshUsage();   // 用量层懒触发（同 /api/usage）
+      await refreshPlanUsage();
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(planUsageCache.data
+      ? { generatedAt: planUsageCache.at, refreshing: planUsageCache.busy, ...planUsageCache.data }
+      : { pending: true }));
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/state') {

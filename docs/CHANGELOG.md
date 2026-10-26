@@ -1,5 +1,15 @@
 # 变更日志（文档与契约）
 
+## 2026-10-27（十）
+### Coding Plan 使用情况面板上线【v0.1.4】：15 家主流厂商「订阅身份 × 本地用量 × 配额/余额」一屏看全（用户定向「接入全部主流厂商的 coding plan 使用情况，展示完整的信息」）
+
+- **澄清与口径**：需求为 coding plan 的**使用情况**（非新增会话观察源）。三家证据等级实测（[A]，只读侦察 2026-10-26）：GLM（entitlement 缓存 + `model_usage` 逐请求账本按 provider 拆分）与 DeepSeek（余额账本，余额即配额）双全；Cursor（`stripeMembershipType=free`）/ Copilot（`copilotSku=free_limited_copilot`）档位明确；Claude（未登录，env 有 ANTHROPIC_AUTH_TOKEN 键名 → API 计费）/ Codex（auth_mode=apikey）/ Kimi（登录态、档位不落盘）/ Qoder（登录态、订阅档未缓存）部分证据；**各家云端配额数值均不落盘——不持凭证调云 API（红线重申），如实标注**。
+- **实现**：`adapters/plan-usage.mjs`（15 家注册表：8 probe 提取器 + 7 安装检测；身份层 60s 缓存；ZCode `model_usage` 一条 GROUP BY 出 provider×时间窗聚合，`account:*` = 登录态 coding plan，自备 key 如实归属提示；DeepSeek 账本单位实测纠正为 **1 单位 = 1e-8 元**）；framed `planUsageCache` + `GET /api/plan-usage`（懒触发，`refreshUsage` 完成跟随刷新，快照不带该块）；用量页「Coding Plan 使用情况」表格（状态徽标/账号打码/四时间窗/余额，每行 details 证据与明细）+ 懒加载与 usage.generatedAt 联动（与日历同模式）。
+- **隐私**：凭证文件只读**键名/白名单 claim**（Codex JWT 只解 chatgpt_plan_type；token 值不进内存输出）；邮箱/账号/登录名一律打码；MU-PU2 断言输出 JSON 不含 fixture 凭证值与完整账号。
+- **回归**：`demo/test-plan-usage.mjs`（MU-PU1～PU7：身份/隐私/账本换算/窗口分桶/三口径透传/未安装/UI 渲染）3/3 ✔；`test-usage-calendar` 请求数断言按日历路径过滤 + mock 单独应答 plan 端点后 6/6 ✔；test-window 等其余 UI 回归 0 失败；端到端 framed:7831 `/api/plan-usage` 实测 15 家、GLM 今日窗 84 请求/26.7M tokens、DeepSeek 余额 643.62 元。真相源 [docs/29](./29-v0.1.4-scope.md)。
+- **既有失败（非本轮）**：`catalog-check` A13（深扫 <300ms）stash 对照同样失败（1,322ms）——DSH 日志增长所致环境性偏差，v0.2.1 复核。
+
+
 ## 2026-10-22（九）
 ### 估算模式上线【未发版】：Qoder/Cursor token 以包络估算呈现（用户定向「使用估算模式」；≈ 前缀、绝不并入精确合计）
 
