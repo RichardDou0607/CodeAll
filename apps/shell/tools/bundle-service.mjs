@@ -60,15 +60,17 @@ for (const f of ['pet-input-send.mjs', 'mount-dsh-plugin.sh']) {
 }
 const plugin = copyTree(path.join(ROOT, 'plugins', 'dsh-pet'), 'plugins/dsh-pet');
 
-// 2) Node 运行时（env 指定 → 常见路径 → PATH；直接复制二进制，原签名随文件保留）
+// 2) Node 运行时（当前 node 本身 → env 指定 → 常见路径 → PATH；直接复制二进制，原签名随文件保留）
+const isWin = process.platform === 'win32';
 const nodeCandidates = [
+  process.execPath,
   process.env.AGENT_PET_NODE,
   '/usr/local/bin/node', '/opt/homebrew/bin/node', '/usr/bin/node',
-  ...(process.env.PATH || '').split(':').map((d) => path.join(d, 'node')),
+  ...(process.env.PATH || '').split(path.delimiter).map((d) => path.join(d, isWin ? 'node.exe' : 'node')),
 ].filter(Boolean);
 const nodeSrc = nodeCandidates.find((p) => { try { return fs.statSync(p).isFile(); } catch { return false; } });
 if (!nodeSrc) { console.error('[bundle-service] 未找到 node 二进制，无法独立分发'); process.exit(1); }
-copyFile(nodeSrc, 'bin/node');
+copyFile(nodeSrc, isWin ? path.join('bin', 'node.exe') : path.join('bin', 'node'));
 
 // 只发 Apple Silicon：universal 二进制裁到 arm64 单架构（体积约减半；lipo -thin 保留片内签名，
 // 签名校验失败则回退 fat 原件——宁可包大也不能给出跑不起来的 node）

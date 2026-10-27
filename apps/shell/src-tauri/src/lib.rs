@@ -141,13 +141,21 @@ fn parse_port() -> u16 {
     DEFAULT_PORT
 }
 
-/// .app 打包内自带的服务目录（Contents/Resources/app，布局 = 仓库根子集）。
-/// 存在 = 独立分发的安装包，无需源码仓库与系统 Node。
+/// 打包内自带的服务目录（布局 = 仓库根子集）。存在 = 独立分发的安装包，无需源码仓库与系统 Node。
+/// macOS .app：Contents/Resources/app；Windows NSIS：资源落在安装目录（exe 同级 /app，兼容 /resources/app）。
 fn bundled_app_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let contents = exe.parent()?.parent()?; // Contents/MacOS/x → Contents
-    let root = contents.join("Resources").join("app");
-    root.join("demo").join("framed.mjs").exists().then_some(root)
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(exe_dir) = exe.parent() {
+        if let Some(contents) = exe_dir.parent() {
+            candidates.push(contents.join("Resources").join("app"));
+        }
+        candidates.push(exe_dir.join("app"));
+        candidates.push(exe_dir.join("resources").join("app"));
+    }
+    candidates
+        .into_iter()
+        .find(|r| r.join("demo").join("framed.mjs").exists())
 }
 
 /// 仓库根目录：1) 环境变量 2) 编译期路径（开发）3) 打包内 Resources/app（独立分发）4) 从可执行文件向上找
@@ -183,7 +191,7 @@ fn resolve_repo_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// node 可执行文件：环境变量 → 打包内 Resources/app/bin/node → 常见绝对路径 → PATH
+/// node 可执行文件：环境变量 → 打包内 Resources/app/bin/node(.exe) → 常见绝对路径 → PATH
 fn resolve_node() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("AGENT_PET_NODE") {
         let pb = PathBuf::from(p);
@@ -193,21 +201,35 @@ fn resolve_node() -> Option<PathBuf> {
     }
     if let Some(bundled) = bundled_app_root() {
         let p = bundled.join("bin").join("node");
+        let p_exe = bundled.join("bin").join("node.exe");
+        if p_exe.exists() {
+            return Some(p_exe);
+        }
         if p.exists() {
             return Some(p);
         }
     }
+    #[cfg(target_os = "macos")]
     for c in ["/usr/local/bin/node", "/opt/homebrew/bin/node", "/usr/bin/node"] {
         if Path::new(c).exists() {
             return Some(PathBuf::from(c));
         }
     }
+    #[cfg(target_os = "windows")]
+    {
+        let pb = PathBuf::from("C:\\Program Files\\nodejs\\node.exe");
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
     if let Ok(path) = std::env::var("PATH") {
-        for dir in path.split(':') {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let name = if cfg!(windows) { "node.exe" } else { "node" };
+        for dir in path.split(sep) {
             if dir.is_empty() {
                 continue;
             }
-            let p = Path::new(dir).join("node");
+            let p = Path::new(dir).join(name);
             if p.exists() {
                 return Some(p);
             }
@@ -477,6 +499,10 @@ fn set_movable_by_background(_win: &WebviewWindow, _on: bool) -> Result<bool, St
 }
 #[cfg(not(target_os = "macos"))]
 fn movable_by_background(_win: &WebviewWindow) -> Option<bool> {
+    None
+}
+#[cfg(not(target_os = "macos"))]
+fn mouse_down_can_move_window(_win: &WebviewWindow) -> Option<bool> {
     None
 }
 
@@ -1022,10 +1048,28 @@ fn shell_inject_remote_css(window: WebviewWindow) -> Result<(), String> {
     window.eval(REMOTE_INJECT).map_err(|e| e.to_string())
 }
 
+/// 在系统文件管理器里显示文件（mac Finder「Reveal」/ Windows 资源管理器 / Linux 打开目录）
+fn reveal_in_file_manager(p: &Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg("-R").arg(p).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("explorer").arg(format!("/select,{}", p.display())).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(dir) = p.parent() {
+            let _ = Command::new("xdg-open").arg(dir).spawn();
+        }
+    }
+}
+
 #[tauri::command]
 fn shell_open_log(app: AppHandle) -> Result<String, String> {
     let p = server_log_path(&app);
-    let _ = Command::new("open").arg("-R").arg(&p).spawn();
+    reveal_in_file_manager(&p);
     Ok(p.display().to_string())
 }
 
@@ -1082,7 +1126,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "tray_log" => {
                 let p = server_log_path(app);
-                let _ = Command::new("open").arg("-R").arg(&p).spawn();
+                reveal_in_file_manager(&p);
                 log("TRAY_OPEN_LOG");
             }
             "tray_quit" => {

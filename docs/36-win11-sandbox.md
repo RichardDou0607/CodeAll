@@ -92,3 +92,36 @@ PLAT-1 平台抽象层 `adapters/platform.mjs` 落地并同步到本机实测，
 - 命名管道 ACL 的跨用户语义仍未实测（沙箱单用户环境无对照），PLAT-2 验收时补。
 - 真实模型投递轮次（V01/V02/V04 同口径）按验证纪律**留待用户授权**，本轮只做机制级验证（`--version` 零额度消耗）。
 - Tauri Win 外壳（lib.rs 窗口行为 + NSIS 安装包）不在本轮：需 Windows 侧 Rust 工具链，装包前另行确认。
+
+## 8. PLAT-2 闭环实测（2026-10-27 第三轮，用户授权真实轮次）
+
+### 8.1 真实投递闭环（专用测试目录 `C:\Users\admin\pet-e2e-test`，最小额度）
+
+| 项 | 结果 |
+|---|---|
+| V01 新建会话 | ✅ claude 新建成功（`-p --output-format json`，~48s/轮，$0.107/轮） |
+| V02 定向投递 + 上下文连续 | ✅ `deliverViaCli` 无头续会话（解包 spawn 包内原生 exe），转录内出现暗号「蓝鲸」 |
+| V04 同 cwd 双会话隔离 | ✅ 会话 A 再投仍答「蓝鲸」，会话 B 保持自己的「已记住」 |
+| V05 失败可辨 | ✅ 假会话 ID → `ok:false / cli-exit`（claude 自报 "--resume requires a valid session ID"），无假成功 |
+| codex（第二家） | ⚠️ 环境阻塞：投递消息确实写入 rollout（user_message 落盘 = 管道通），但模型回合不完成——该机 codex 用 API key 且**直连 OpenAI 不可达**（网络层挂起，与 stdin 无关：空文件重定向同样挂） |
+| kimi（第二家） | ⚠️ 该机 Kimi 账号 **429 suspended**（org 被停），CLI 如实报错；恢复账号或换 opencode 可补测 |
+
+### 8.2 命名管道 ACL（红线实测）
+
+用句柄 `GetSecurityInfo` 读 DACL SDDL：
+
+```
+D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;BA)(A;;FR;;;WD)(A;;FR;;;AN)
+```
+
+- SYSTEM / Administrators：完全控制（FA）；**Everyone(WD) / Anonymous(AN)：只读（FR）**。
+- 即默认 ACL 下其它用户能连管道但写不进——HTTP-over-pipe 需要双向读写，跨用户客户端 `GENERIC_READ|WRITE` 打开被拒。**红线成立**（libuv/Node 命名管道默认描述符语义确认）。跨用户「只读连接」的实际危害面与「创建第二账号实测」留待有需要时补。
+
+### 8.3 Tauri Windows 外壳与 NSIS 安装包
+
+- **构建**：沙箱装 VS Build Tools 2022（MSVC 14.44 + Win11 SDK 26100，winget）；`npx tauri build --bundles nsis` 通过（增量 4m39s）。产物 **`CodeAll_0.1.4_x64-setup.exe`（24.2 MiB）**。
+- **捆绑**：bundle-service 产 89.2MB 暂存（16 适配器 + demo 资产 + dsh-pet 插件 + **Windows node.exe**）——node 复制改 `process.execPath` 优先 + Windows PATH 口径。
+- **lib.rs 适配**：打包布局按平台解析（mac Contents/Resources/app；Windows 安装目录 `\app`，兼容 `\resources\app`）、node 解析（`bin\node.exe` + Program Files + PATH `;`）、日志打开 `explorer /select`、补 `mouse_down_can_move_window` 非 mac 兜底（首次 Windows 编译暴露）。mac `cargo check` 零回归。
+- **安装实测**：`/S` 静默安装 exit=0 → `AppData\Local\CodeAll\{agent-pet-shell.exe, app\, uninstall.exe}`，布局全对。
+- **W02 服务侧红线（全部通过）**：包内 `app\bin\node.exe` 起 `app\demo\framed.mjs` → 127.0.0.1:7799 LISTENING；`/api/state` 200；**错 Host → 403**；**写接口无 token → 401**（读接口免 token 为既有设计，写鉴权是红线本体）。
+- **GUI 窗口（待人工）**：ssh 非交互会话里 WebView2 建窗失败（`0x80070578 无效的窗口句柄`——Windows GUI 必须在交互桌面会话；计划任务拉起方案被安全策略拦截，属合理防护）。**壳的双击启动与 W05 窗口行为（透明/置顶/拖拽/托盘）需在那台机器桌面会话人工验证**。

@@ -1,5 +1,14 @@
 # 变更日志（文档与契约）
 
+## 2026-10-27（十六）
+### PLAT-2 闭环与 NSIS 安装包实测：真实投递四项全过 + 管道 ACL 红线成立 + Win 包服务侧红线通过（用户授权真实轮次，Win11 沙箱）
+
+- **真实投递闭环（claude，专用测试目录，最小额度 ~$0.107/轮）**：V01 新建 ✅ / V02 定向投递+第二轮暗号连续 ✅（`deliverViaCli` → npm shim 解包 → 包内原生 `claude.exe` spawn）/ V04 同 cwd 双会话隔离 ✅（A 答自己的暗号、B 不串）/ V05 假会话 ID 如实 `ok:false` 无假成功 ✅。第二家 CLI 环境受限：codex 投递消息确实写入 rollout 但模型回合挂起（该机 API key 直连 OpenAI 不可达，网络层，与 stdin 无关）；kimi 该机账号 429 suspended。**E2E 驱动入库**（`scripts/win11-sandbox/{e2e-driver,kimi-e2e,codex-e2e,acl-probe}.{mjs,ps1}`，后续轮次可复跑）。
+- **命名管道 ACL 红线成立（docs/24 风险单销项）**：句柄级 `GetSecurityInfo` 读 DACL——`D:(A;;FA;;;SY)(A;;FA;;;BA)×2(A;;FR;;;WD)(A;;FR;;;AN)`：SYSTEM/管理员读写，**Everyone/Anonymous 只读**；HTTP-over-pipe 双向读写语义下跨用户客户端打开被拒。探针经 CreateFileW 拿句柄（`GetNamedSecurityInfo` 不认管道命名空间）。
+- **Tauri Windows 外壳落地**：lib.rs 平台化（打包布局 mac Contents vs Win 安装目录 `\app`、node 解析 `bin\node.exe`+Program Files+PATH、日志 `explorer /select`、`mouse_down_can_move_window` 非 mac 兜底——首次 Windows 编译暴露）；bundle-service node 复制 `process.execPath` 优先 + Windows PATH 口径；补 `icons/icon.ico`（NSIS 必需，`tauri icon` 生成，不收 android/ios 副产物）。mac `cargo check` 零回归。
+- **NSIS 安装包出包并实测**：沙箱装 VS Build Tools（MSVC 14.44 + SDK 26100）；`npx tauri build --bundles nsis` → **CodeAll_0.1.4_x64-setup.exe（24.2 MiB，含 Windows node.exe + 16 适配器 + dsh-pet 插件，暂存 89.2MB）**；`/S` 静默安装 exit=0，安装布局全对。**W02 服务侧红线全过**：包内 node 自起 framed → 7799 LISTENING、`/api/state` 200、**错 Host 403**、**写接口无 token 401**（读免 token 为既有设计）。
+- **GUI 窗口留人工**：ssh 非交互会话 WebView2 建窗失败（0x80070578 无效窗口句柄——Windows GUI 必须交互桌面会话；schtasks 拉起被安全策略合理拦截）。壳双击启动与 W05 窗口行为（透明/置顶/拖拽/托盘）待那台机器桌面人工验证（docs/36 §8.3）。
+
 ## 2026-10-27（十五）
 ### 平台抽象层落地 + Windows 服务侧全链实测（v0.2.0 PLAT-1 + PLAT-2 机制项，Win11 沙箱实机验证）
 
