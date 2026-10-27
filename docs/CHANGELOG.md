@@ -1,6 +1,23 @@
 # 变更日志（文档与契约）
 
+## 2026-10-27（十一）
+### OpenCode Zen / Go 两网关接入订阅面板【v0.1.4 增补，未发版】：Zen（按量网关）+ Go（$10/月订阅）如实分列（用户定向「还差一个 opencode zen 的服务，如果有 opencode go 则添加」）
+
+- **厂商注册表 15→17（plan-usage.mjs）**：新增 `opencode-zen`（OpenCode Zen 按量网关，providerID=`opencode`）与 `opencode-go`（OpenCode Go 订阅，providerID=`opencode-go`，官方模型串 `opencode-go/kimi-k3` 实证）。身份探针：auth.json provider 键名（值不读）判登录态；无登录态时回看 opencode.db 是否有经该网关的历史会话（session_v2.model / session_message.model.providerID）——有历史无登录如实标「已安装·未登录」+ 证据行，绝不把历史用量冒充当前订阅。Go 限额口径（官方公开：5h=月限 20%、周=50%、月=100%）只在云端 Console，本地不落盘。
+- **用量归属升级为 provider 精确（modelFilter）**：planUsageWindows 支持按模型键前缀过滤——usage-collect 的模型键本就是 `providerID/modelID` 形状，`/^opencode\//` 与 `/^opencode-go\//` 即网关级精确归属（非模型名近似）。实机：Zen 全部 4.6M tokens / 72 请求（7 日窗）、Go 0/0（本机无经 Go 网关会话，如实为 0）。
+- **UI（window.html）**：PLAN_LOGO 两行映射到既有 opencode logo 资产。
+- **测试提取器加固（test-ui-dom.mjs + 8 套件）**：`extractMainScript(html)` 取最长纯 `<script>` 块替代「第一个匹配」——页首带属性 script（data-boot-probe）注释文字里出现字面 `<script>` 会让首个命中截出垃圾块（实测 sandbox.render 缺失、MU-PU7/8 等连坐）。test-plan-usage/test-window/test-window-actions/test-tick/test-usage-calendar/test-mini/test-aborted-state/test-html 全量换用；8/8 PASS。
+- **测试**：test-plan-usage 新增 Zen/Go 断言块（登录态 api-billing、provider 精确归属 230 tok 不混入 glm*/other-model、Go 未登录 0/0）+ summary.total 15→17；fixture auth.json 加 `opencode` 键、overview 加 `opencode/kimi-k3` 模型条目。
+- **边界**：Zen/Go 余额与限额数值在云端（Console），本机无缓存——不持凭证调云 API 红线不变；framed.mjs 注释同步 17 家。
+
 ## 2026-10-27（十）
+### 开场动画收口【v0.1.4 增补，未发版】：去掉转圈启动页，全链路只保留战术终端开场（用户定向「不要前面那段转圈的动画，只保留今天新增的那个部分」）
+
+- **外壳启动页重做（app.html / index.html）**：删除转圈 spinner 版式，改为与 window.html #boot 同款「战术终端开场」——扫描线背景 + CODEALL TACTICAL TERMINAL 标题 + **真实启动阶段状态行**（App 窗口：SHELL LINK / LOCAL SERVICE / APP INTERFACE 三行，按 IPC 就绪→服务探活/拉起→HTTP 探活实时翻成 LINKING…→LOCKED / SCANNING…→LAUNCHED·MOUNTED / PROBING…→ONLINE；迷你条窗口为紧凑两行 LOCAL SERVICE / MINI INTERFACE）+ 光束 + 光标闪烁；失败态红字（NO IPC / FAILED / NO RESPONSE）+ 错误框与 日志/重试/退出 按钮保留；reduced-motion 全套停用。
+- **window.html 不再重复播放**：外壳导航 URL 带 `?from=shell`，主脚本首行（body 末尾同步脚本，首帧绘制前）给 `<html>` 标 `data-boot=skip`；CSS `html[data-boot=skip]` 隐藏 #boot 并取消 header/nav/main/footer 的分层入场动画——从外壳进入的整条链路只有**一段**开场。浏览器直开/刷新（无 from=shell）仍播放页内 #boot，语义不变。
+- **实现注记**：跳过检测曾尝试放 head 内联 `<script>`——但 9 个 UI 测试用 `/<script>([\s\S]*?)<\/script>/` 取「第一个脚本块」做沙箱，带属性标签仍会被正则吃进捕获组导致 vm 语法错；回退到主脚本首行（body 末尾同步脚本在首帧前执行，闪烁风险为零），测试零改动。
+- **验证**：test-window 新增 3 断言（#boot 存在 / skip 规则 CSS / 主脚本标记逻辑）全过；test-window-actions / mini / plan-usage / usage-calendar / tick / aborted-state / html / env 全部 exit=0；实机重启连拍 8 帧 + 终帧视觉复核——启动窗口为战术终端开场（无转圈），主界面无 #boot 残留、无 spinner。
+
 ### 用量刷新节奏收口【v0.1.4 增补，未发版】：一分钟自动节拍 + 手动按钮，打开页面不再触发扫描（用户定向「用量刷新应该保持在一分钟+手动」）
 
 - **移除端点懒触发（framed.mjs 三处）**：`/api/usage`、`/api/usage/calendar`、`/api/plan-usage` 的「≥60s 陈旧即异步重扫」分支全部移除——打开用量页/订阅页、无参 API 调用一律**只读缓存立即返回**（哪怕数据是旧的，生成时间可见）。perf-verify P3③ 的「纯空闲零后台扫描」口径保持，且不再有页面打开引发的计划外扫描。

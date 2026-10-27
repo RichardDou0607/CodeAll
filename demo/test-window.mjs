@@ -6,11 +6,11 @@
  */
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { createUiSandbox } from './test-ui-dom.mjs';
+import { createUiSandbox, extractMainScript } from './test-ui-dom.mjs';
 import { windowFixture } from './test-ui-fixture.mjs';
 
 const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
-let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+let script = extractMainScript(html);
 script = script.replace(/let es=null;[\s\S]*$/, ''); // 去掉自动连接
 
 const harness = createUiSandbox(html);
@@ -302,6 +302,10 @@ const checks = [
   ['原生窗口控制（红黄绿）接管关闭/缩放/全屏：页面无自绘窗口按钮', true],
   ['token 注入后脚本仍可执行' + (injectedOk ? '' : '：' + injectedErr), injectedOk],
   ['esc 转义', sandbox.esc('a"b<c') === 'a&quot;b&lt;c'],
+  // 2026-10-27 开场动画收口：外壳启动页已播同款战术终端开场 → window.html 从外壳进入（?from=shell）时整套跳过
+  ['开场动画 #boot 存在（浏览器直开/刷新仍播放）', /id="boot"/.test(html) && /\.bt-beam\{/.test(html)],
+  ['外壳进入跳过规则：html[data-boot=skip] 隐藏 #boot 并取消 UI 分层入场动画', /html\[data-boot=skip\] #boot\{display:none!important\}/.test(html) && /html\[data-boot=skip\] header[\s\S]{0,200}animation:none!important/.test(html)],
+  ['主脚本按 ?from=shell 标记 data-boot=skip', /from=shell\(&\|\$\)\/\.test\(location\.search\)\)document\.documentElement\.setAttribute\('data-boot','skip'\)/.test(script)],
 ];
 let ok = true;
 for (const [name, pass] of checks) { console.log((pass ? '✅ ' : '❌ ') + name); if (!pass) ok = false; }

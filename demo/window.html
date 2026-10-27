@@ -303,7 +303,11 @@ dialog::backdrop{background:#0008}
 @media(max-width:539px){.uc-head{align-items:flex-start}.uc-title{min-width:100%;flex-basis:100%}.uc-controls{width:100%;justify-content:space-between}.uc-segment{max-width:100%;overflow:auto}.uc-segment button{padding:3px 5px}.uc-select{max-width:43%}.uc-grid{gap:2px}.uc-day,.uc-blank{min-height:52px}.uc-day{padding:5px}.uc-day-val{font-size:9px}.uc-day-mark{font-size:7px}.uc-detail{grid-template-columns:minmax(0,1fr);gap:10px}.uc-breakdown{margin-left:-2px;margin-right:-2px}}
 /* 开机动画：CRT 上电自检——扫描线点亮 → 自检日志 → 日志缩回光束 → 百叶揭幕 → UI 分层入场。
    纯 CSS 定时，无 JS 也会在 2.1s 自行收场（bt-gone）；#boot 恒 pointer-events:none，绝不挡交互；
-   reduced-motion 时 #boot 默认 display:none，整套动画不渲染。 */
+   reduced-motion 时 #boot 默认 display:none，整套动画不渲染。
+   2026-10-27：从桌面外壳进入（URL ?from=shell）时外壳启动页已播过同款开场——html[data-boot=skip] 整套跳过，
+   避免两段开场背靠背重复（用户定向「只保留今天新增的那个部分」）。 */
+html[data-boot=skip] #boot{display:none!important}
+html[data-boot=skip] header,html[data-boot=skip] #view-nav,html[data-boot=skip] #main,html[data-boot=skip] footer,html[data-boot=skip] .statusbar,html[data-boot=skip] header .brand-mark{animation:none!important}
 #boot{display:none;position:fixed;inset:0;z-index:99;pointer-events:none;overflow:hidden;animation:bt-gone 1ms linear 2.1s forwards}
 @media(prefers-reduced-motion:no-preference){
 button{transition:background-color .12s,color .12s}
@@ -557,6 +561,9 @@ header .brand-mark{animation:bt-mark .5s ease-out 1.64s both}
 </dialog>
 <script>
 window.__PET_TOKEN__=window.__PET_TOKEN__||'__PET_TOKEN_VALUE__';
+// 外壳导航而来（启动页已播同款战术终端开场）→ 跳过页内 #boot；浏览器直开/刷新仍播放。
+// 本脚本是 body 末尾的同步脚本：DOM 已解析、尚未首帧绘制，此处设属性即可在首帧前生效。
+try{if(/[?&]from=shell(&|$)/.test(location.search))document.documentElement.setAttribute('data-boot','skip')}catch(e){}
 const STATE_LABEL={idle:'空闲',thinking:'思考中',running:'运行中',working:'工作中',delegated:'等待子代理','transient-error':'出错（自动恢复）',error:'连接错误',waiting:'等待你',done:'已完成',ended:'已结束',aborted:'手动停止',unknown:'未知'};
 const COLOR={idle:'var(--idle)',thinking:'var(--think)',running:'var(--run)',working:'var(--run)',delegated:'var(--acc)','transient-error':'var(--wait)',error:'var(--err)',waiting:'var(--wait)',done:'var(--done)',ended:'var(--done)',aborted:'var(--done)',unknown:'var(--idle)'};
 const AGENT_STATUS_LABEL={connected:'已连接','open-unconnected':'已打开 · 未连接',closed:'未打开','not-installed':'未下载'};
@@ -893,7 +900,7 @@ function usageSourceChart(view){
 }
 // ---- Coding Plan 使用情况（/api/plan-usage，2026-10-26）：订阅身份 × 本地用量窗口 × 配额/余额 ----
 const PLAN_STATUS={active:['订阅在用','var(--run)'],'api-billing':['API/余额计费','var(--acc)'],'signed-in':['已登录 · 档位未知','var(--wait)'],'not-signed-in':['已安装 · 未登录','var(--dim)'],unknown:['未知','var(--dim)'],'not-installed':['未安装','var(--dim)']};
-const PLAN_LOGO={'glm-coding-plan':'zcode',deepseek:'dsh',claude:'claude-code','chatgpt-codex':'codex','kimi-for-coding':'kimi-code',qoder:'qoder',cursor:'cursor'};
+const PLAN_LOGO={'glm-coding-plan':'zcode',deepseek:'dsh',claude:'claude-code','chatgpt-codex':'codex','kimi-for-coding':'kimi-code',qoder:'qoder',cursor:'cursor','opencode-zen':'opencode','opencode-go':'opencode'};
 function planLogo(p){
   const src=PLAN_LOGO[p.id];
   if(src)return agentLogo(src,'agent-logo pu-logo');

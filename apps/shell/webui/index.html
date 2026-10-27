@@ -2,59 +2,55 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>CodeAll · 启动中</title>
+<title>CodeAll · 启动</title>
 <style>
-  :root{--line:#242c3a;--txt:#e6edf3;--dim:#8b98a9;--acc:#4aa8ff;--warn:#e3b341;--err:#f85149}
+  /* 战术终端开场（与 app.html 同款，2026-10-27 用户定向：去掉转圈启动页，只保留今天新增的开场动画）。
+     迷你条窗口小（380×96 起步）——用紧凑双行版：标题 + 单行阶段状态，不再放三行清单。 */
+  :root{--bg:#0b0e13;--line:#242c3a;--txt:#e6edf3;--dim:#8b98a9;--acc:#4aa8ff;--err:#f85149}
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:transparent;overflow:hidden;color:var(--txt);
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);overflow:hidden;
     font:13px/1.5 -apple-system,"PingFang SC",system-ui,sans-serif;
     -webkit-user-select:none;user-select:none}
-  .card{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden;
-    background:rgba(16,20,28,.97);border:1px solid var(--line);border-radius:14px;
-    box-shadow:0 26px 60px rgba(0,0,0,.55)}
-  .bar{height:30px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 10px;
-    background:rgba(255,255,255,.02);border-bottom:1px solid var(--line)}
-  .bar .grip{width:9px;height:9px;border-radius:50%;background:#2f3a4d}
-  .bar .ttl{flex:1;font-size:11px;color:var(--dim);letter-spacing:.04em}
-  .bar .ver{font-size:10px;color:#5c6a7e}
-  .body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:12px}
-  .spin{width:26px;height:26px;border-radius:50%;border:2px solid #263042;border-top-color:var(--acc);
-    animation:sp .9s linear infinite}
-  @keyframes sp{to{transform:rotate(360deg)}}
-  .spin.err{border-top-color:var(--err);animation:none}
-  .msg{font-size:13px;font-weight:600}
-  .sub{font-size:11px;color:var(--dim);text-align:center;max-width:300px}
-  .el{font-size:10px;color:#5c6a7e}
-  .log{width:100%;max-height:64px;overflow:auto;margin:2px 0 0;padding:6px 8px;border-radius:8px;
-    background:#0d1117;border:1px solid var(--line);color:#93a1b5;font:10px/1.5 ui-monospace,Menlo,monospace;
-    white-space:pre-wrap;word-break:break-all}
-  .foot{flex:0 0 auto;display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--line);background:rgba(255,255,255,.015)}
-  .foot .sp{flex:1}
-  button{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:7px;
-    font-size:11px;padding:5px 10px;cursor:pointer}
+  .scan{position:fixed;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(0deg,transparent 0 2px,color-mix(in srgb,var(--txt) 3%,transparent) 2px 3px)}
+  .bt-log{position:fixed;left:50%;top:50%;width:82%;max-width:272px;transform:translate(-50%,-58%);color:var(--dim)}
+  .bt-title{color:var(--txt);font-size:10px;font-weight:650;letter-spacing:.2em;margin-bottom:7px;white-space:nowrap}
+  .bt-title span{color:var(--dim);font-weight:400}
+  .bt-row{display:flex;align-items:baseline;gap:8px;font-size:9px;letter-spacing:.08em;white-space:nowrap;animation:bt-reveal .16s ease-out both}
+  .bt-row:nth-child(2){animation-delay:.14s}
+  .bt-row:nth-child(3){animation-delay:.26s}
+  .bt-row b{color:var(--txt);font-weight:500}
+  .bt-row i{flex:1;border-bottom:1px dotted var(--line);transform:translateY(-2px)}
+  .bt-row em{font-style:normal;color:var(--dim);font-size:8px;letter-spacing:.14em}
+  .bt-row em.ok{color:var(--acc)}
+  .bt-row em.bad{color:var(--err)}
+  .bt-status{margin-top:6px;font-size:8px;color:var(--dim);letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  @keyframes bt-reveal{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+  @media(prefers-reduced-motion:reduce){.bt-row{animation:none}}
+  .errbox{display:none;position:fixed;left:50%;top:70%;transform:translate(-50%,-50%);width:88%;
+    background:rgba(16,20,28,.97);border:1px solid var(--err);border-radius:9px;padding:9px 11px}
+  .errbox.on{display:block}
+  .errbox .msg{font-size:11px;font-weight:600;color:var(--err)}
+  .errbox .sub{font-size:9px;color:var(--dim);margin-top:4px;word-break:break-all;max-height:34px;overflow:auto}
+  .foot{position:fixed;left:0;right:0;bottom:7px;display:flex;gap:6px;justify-content:center}
+  button{background:#1d2531;color:var(--txt);border:1px solid var(--line);border-radius:6px;
+    font-size:10px;padding:4px 9px;cursor:pointer}
   button:disabled{opacity:.45;cursor:not-allowed}
-  button.p{background:#1f6feb;border-color:#1f6feb;color:#fff}
 </style>
 </head>
 <body>
-<div class="card">
-  <div class="bar" data-tauri-drag-region>
-    <span class="grip"></span><span class="ttl">CODEALL · 桌面外壳</span>
-    <span class="ver" id="ver"></span>
-  </div>
-  <div class="body">
-    <div class="spin" id="spin"></div>
-    <div class="msg" id="msg">启动中…</div>
-    <div class="sub" id="sub">正在检查本地状态服务</div>
-    <div class="el" id="el">0.0s</div>
-    <pre class="log" id="log"></pre>
-  </div>
-  <div class="foot">
-    <button id="openlog">日志</button>
-    <span class="sp"></span>
-    <button id="retry" disabled>重试</button>
-    <button id="quit">退出</button>
-  </div>
+<div class="scan" aria-hidden="true"></div>
+<div class="bt-log">
+  <div class="bt-title">CODEALL <span>TACTICAL TERMINAL</span></div>
+  <div class="bt-row"><b>LOCAL SERVICE</b><i></i><em id="st1">STANDBY</em></div>
+  <div class="bt-row"><b>MINI INTERFACE</b><i></i><em id="st2">STANDBY</em></div>
+  <div class="bt-status" id="status">初始化…</div>
+</div>
+<div class="errbox" id="err"><div class="msg" id="errmsg"></div><div class="sub" id="errsub"></div></div>
+<div class="foot">
+  <button id="openlog">日志</button>
+  <button id="retry" disabled>重试</button>
+  <button id="quit">退出</button>
 </div>
 <script>
 (function () {
@@ -67,85 +63,80 @@
   var busy = false;
 
   function secs() { return ((Date.now() - started) / 1000).toFixed(1) + 's'; }
-  function setMsg(m, s) {
-    $('msg').textContent = m;
-    if (s !== undefined) $('sub').textContent = s;
+  function stage(n, state, label) {
+    var el = $('st' + n);
+    el.className = state === 'ok' ? 'ok' : state === 'bad' ? 'bad' : '';
+    el.textContent = label;
   }
-  function addLog(l) {
-    var p = $('log');
-    p.textContent += (p.textContent ? '\n' : '') + l;
-    p.scrollTop = p.scrollHeight;
-  }
+  function setMsg(m) { var el = $('status'); el.__raw = m; el.textContent = m + ' · ' + secs(); }
   function fail(m, s) {
-    $('spin').className = 'spin err';
-    setMsg(m, s);
+    $('errmsg').textContent = m;
+    if (s !== undefined) $('errsub').textContent = s;
+    $('err').classList.add('on');
     $('retry').disabled = false;
     busy = false;
   }
-  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  setInterval(function () { var el = $('status'); if (el && el.__raw) el.textContent = el.__raw + ' · ' + secs(); }, 200);
 
-  setInterval(function () { $('el').textContent = secs(); }, 200);
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   async function main() {
     if (busy) return;
     busy = true;
-    $('spin').className = 'spin';
     $('retry').disabled = true;
-    if (!INVOKE) { fail('外壳 IPC 不可用', 'window.__TAURI__ 未注入，请用 apps/shell/run.sh 启动'); return; }
+    $('err').classList.remove('on');
+    stage(1, 'busy', 'LINKING…');
+    stage(2, 'standby', 'STANDBY');
+    if (!INVOKE) { stage(1, 'bad', 'NO IPC'); fail('外壳 IPC 不可用', 'window.__TAURI__ 未注入，请用 apps/shell/run.sh 启动'); return; }
 
     var st;
     try { st = await INVOKE('shell_status'); }
     catch (e) { fail('外壳状态读取失败', String(e)); return; }
 
     PORT = st.port;
-    $('ver').textContent = 'v' + st.version;
-    addLog('外壳 v' + st.version + ' · 目标 127.0.0.1:' + PORT);
-    addLog('仓库根 ' + st.repoRoot);
-    addLog('服务脚本 ' + (st.serverScriptExists ? '存在' : '缺失！') + ' → ' + st.serverScript);
+    setMsg('正在检查本地状态服务 127.0.0.1:' + PORT);
     try { await INVOKE('shell_report', { stage: 'splash_ready', detail: 'port=' + PORT }); } catch (e) {}
 
-    setMsg('启动中…', '正在检查本地状态服务 127.0.0.1:' + PORT);
+    stage(1, 'busy', 'SCANNING…');
     var r;
     try { r = await INVOKE('shell_ensure_server', { port: PORT }); }
     catch (e) { r = { up: false, error: String(e) }; }
 
     if (!r.up) {
-      addLog('服务未就绪：' + (r.error || '未知错误'));
+      stage(1, 'bad', 'FAILED');
       try { await INVOKE('shell_report', { stage: 'error', detail: 'ensure_server: ' + (r.error || '') }); } catch (e) {}
       fail('本地服务未能启动', (r.error || '') + '（日志：' + (r.log || st.serverLog) + '）');
       return;
     }
-    addLog(r.launched ? ('已拉起本地服务（' + (r.owner || 'shell') + '）') : '本地服务已在运行（外部进程）');
+    stage(1, 'ok', r.launched ? 'LAUNCHED' : 'MOUNTED');
 
-    setMsg('启动中…', '等待页面就绪');
+    setMsg('等待页面就绪');
     // 探活必须由外壳（Rust 侧）做：本页源为 tauri://localhost，
     // 对 http://127.0.0.1 的 fetch 属跨源请求，会被 CORS 直接拦掉。
+    stage(2, 'busy', 'PROBING…');
     var ok = false;
     var lastDetail = '';
     for (var i = 0; i < 60; i++) {
       var p = null;
       try { p = await INVOKE('shell_http_probe', { port: PORT, path: '/api/state' }); }
       catch (e) { p = { ok: false, detail: String(e) }; }
-      if (p && p.ok) {
-        addLog('服务就绪 · ' + p.detail);
-        ok = true; break;
-      }
+      if (p && p.ok) { ok = true; break; }
       lastDetail = (p && p.detail) || '未知错误';
-      if (i === 0 || i === 59) addLog('探活 ' + (i + 1) + '/60 失败：' + lastDetail);
       await sleep(150);
     }
     if (!ok) {
+      stage(2, 'bad', 'NO RESPONSE');
       try { await INVOKE('shell_report', { stage: 'error', detail: 'http_probe: ' + lastDetail }); } catch (e) {}
       fail('页面未就绪', '服务已监听，但 HTTP /api/state 无响应：' + lastDetail);
       return;
     }
-
-    setMsg('就绪，正在加载悬浮窗…', 'http://127.0.0.1:' + PORT + '/');
+    stage(2, 'ok', 'ONLINE');
+    setMsg('就绪，正在加载悬浮窗…');
     try { await INVOKE('shell_navigating', { url: 'http://127.0.0.1:' + PORT + '/' }); } catch (e) {}
     location.replace('http://127.0.0.1:' + PORT + '/');
   }
 
-  $('retry').addEventListener('click', function () { $('log').textContent = ''; busy = false; main(); });
+  $('retry').addEventListener('click', function () { busy = false; main(); });
   $('quit').addEventListener('click', function () { if (INVOKE) INVOKE('shell_quit'); });
   $('openlog').addEventListener('click', function () { if (INVOKE) INVOKE('shell_open_log'); });
 
