@@ -61,6 +61,20 @@ export function maskName(v) {
   return s.slice(0, 1) + '***' + s.slice(-1);
 }
 
+/** 用户标注档位（~/.agent-pet/plan-overrides.json，0600）：厂商云端不落盘的档位由用户手工标注，
+ *  界面明确显示「标注」徽标与来源；本地证据出现后以实测为准（不一致时标注优先并提示冲突）。 */
+export const PLAN_OVERRIDES_FILE = process.env.PET_PLAN_OVERRIDES || path.join(HOME, '.agent-pet/plan-overrides.json');
+function readPlanOverrides() {
+  const j = readJson(PLAN_OVERRIDES_FILE);
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(j)) {
+    if (typeof v === 'string') out[k] = { planName: v };
+    else if (v && typeof v === 'object' && typeof v.planName === 'string') out[k] = { planName: v.planName, asOf: v.asOf ?? null, note: v.note ?? null };
+  }
+  return out;
+}
+
 function openSqliteReadOnly(dbPath) {
   try { return new DatabaseSync(dbPath, { readOnly: true }); } catch { return null; }
 }
@@ -411,6 +425,8 @@ export async function scanPlanUsage(opts = {}) {
   }
   const identities = identityCache.data;
 
+  const overrides = readPlanOverrides();   // 每轮现读（用户可能随时编辑；文件极小）
+
   const overview = opts.usage?.overview ?? null;
   const zcodeSplit = identities['glm-coding-plan']?.status === 'not-installed'
     ? { available: false, providers: [] }
@@ -454,6 +470,18 @@ export async function scanPlanUsage(opts = {}) {
       evidence: id.evidence ?? [], notes: id.notes ?? [],
       usage, quota: id.quota ?? null,
     };
+    // 用户标注档位（2026-10-27：用户确认 Kimi=Pro、Qoder=Free——两家云端档位本机均无缓存）
+    const ov = overrides[p.id];
+    if (ov?.planName) {
+      const local = plan.planName;
+      if (local && local !== ov.planName) plan.notes.push('用户标注档位「' + ov.planName + '」与本地证据「' + local + '」不一致——以用户标注为准（本地缓存可能滞后）');
+      else if (!local) plan.notes.push('档位为用户标注（plan-overrides.json）；厂商云端不落盘，出现本地实测证据后自动以实测为准');
+      plan.planName = ov.planName;
+      plan.planNameSource = 'user-asserted';
+      plan.planNameAsOf = ov.asOf ?? null;
+      plan.evidence.push({ file: '~/.agent-pet/plan-overrides.json', field: p.id + '.planName', value: ov.planName + '（用户标注' + (ov.asOf ? '，' + ov.asOf : '') + '）' });
+      if (plan.status === 'signed-in' || plan.status === 'not-signed-in') plan.status = 'active';
+    } else if (plan.planName) plan.planNameSource = 'local-evidence';
     // ZCode 里非 coding-plan 的 provider（deepseek/moonshot-kimi 自备 key）如实提示到对应厂商行
     if (p.id === 'glm-coding-plan' && zcodeSplit.available) {
       const others = zcodeSplit.providers.filter((r) => !r.isCodingPlan);

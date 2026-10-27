@@ -905,7 +905,7 @@ function planUsageRow(p){
   const st=PLAN_STATUS[p.status]||[p.status,'var(--dim)'];
   const isCost=p.category==='api-balance'&&p.quota&&p.quota.kind==='balance';
   const cell=(win,cost)=>planWindowCell(p,win,cost);
-  const identity=p.planName?esc(p.planName)+(p.account?'<span class="pu-acc">'+esc(p.account)+'</span>':''):'<span style="color:var(--dim)">—</span>';
+  const identity=p.planName?esc(p.planName)+planTierBadge(p)+(p.account?'<span class="pu-acc">'+esc(p.account)+'</span>':''):'<span style="color:var(--dim)">—</span>';
   let quotaCell='<span style="color:var(--dim)" title="配额数值在厂商云端，本地无缓存">云端配额本地不落盘</span>';
   if(isCost)quotaCell='<b title="余额即配额（本地账本精确）">余额 ¥'+p.quota.balance+'</b><span class="pu-acc">'+esc(p.quota.currency||'CNY')+'</span>';
   const detail=planDetailHtml(p);
@@ -924,6 +924,11 @@ function plansLegendText(pu){
   const hasH5=!!((pu&&pu.plans)||[]).find(p=>p.usage&&p.usage.windows&&p.usage.windows.h5&&p.usage.windows.h5.available);
   return '窗口口径：5h 滚动窗'+(hasH5?'（ZCode 逐请求账本精确归属，高亮列）':'（本地无逐请求账本的源如实标 —）')+' · 今日=本地自然日 · 7日/30日=滚动窗口 · 数据随用量扫描懒刷新（60s 缓存），打开本页或点刷新即触发 · 限额数值在厂商云端、本机无缓存（安全红线：不持凭证调厂商 API）';
 }
+function planTierBadge(p){
+  return p.planNameSource==='user-asserted'
+    ?' <span class="pu-badge" style="color:var(--wait)" title="来自 ~/.agent-pet/plan-overrides.json 的用户标注（厂商云端不落盘，本机无缓存）；出现本地实测证据后自动以实测为准">标注</span>'
+    :'';
+}
 function planWindowValue(p,win,quotaKey){
   if(quotaKey){const v=p.quota&&p.quota[quotaKey];return Number.isFinite(v)?'<span title="本地账本精确成本（1 单位 = 1e-8 元）">¥'+v+'</span>':'<span style="color:var(--dim)">—</span>';}
   const w=p.usage&&p.usage.windows&&p.usage.windows[win];
@@ -935,7 +940,7 @@ function planWindowValue(p,win,quotaKey){
 function planCardHtml(p,pu){
   const st=PLAN_STATUS[p.status]||[p.status,'var(--dim)'];
   const isCost=p.category==='api-balance'&&p.quota&&p.quota.kind==='balance';
-  const identity=p.planName?'<span class="pc-plan">'+esc(p.planName)+'</span>':'<span class="pc-plan" style="color:var(--dim)">档位未知（云端）</span>';
+  const identity=p.planName?'<span class="pc-plan">'+esc(p.planName)+'</span>'+planTierBadge(p):'<span class="pc-plan" style="color:var(--dim)">档位未知（云端）</span>';
   const sem=p.sem?'<span class="pc-sem">'+icon('history')+'<span>'+esc(p.sem)+'</span></span>':'';
   const quota=isCost
     ?'<b class="pc-bal">余额 ¥'+p.quota.balance+'</b><span class="pc-acc"> '+esc(p.quota.currency||'CNY')+' · 余额即剩余额度（本地账本精确'+(p.quota.balanceAsOf?'，对账日 '+esc(p.quota.balanceAsOf):'')+'）</span>'

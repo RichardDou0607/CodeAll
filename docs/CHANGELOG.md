@@ -1,6 +1,13 @@
 # 变更日志（文档与契约）
 
 ## 2026-10-27（十）
+### 用户标注档位机制【v0.1.4 增补，未发版】：Kimi=Pro、Qoder=Free 如实上屏（用户纠偏「月之暗面目前订阅的是 pro，证明没有成功；Qoder 的订阅是 free」）
+
+- **深挖结论（两轮只读侦察）**：Kimi（credentials/config.toml/client-configs 缓存/query-store 16 分片/telemetry 属性键/运行日志/桌面 App leveldb）与 Qoder（main.sqlite 全部 110 表逐列扫档位值/qoder-data.v1.json/Preferences/leveldb）**均无订阅档位缓存**——档位真值只在厂商云端（Kimi CLI 的 membership/quota 属在线查询；Qoder 客户端在线拉取）。本地证据路线已穷尽。
+- **用户标注机制（不破红线）**：新增 `~/.agent-pet/plan-overrides.json`（0600，用户可编辑）——`{ "<planId>": {"planName":"Pro","asOf":"2026-10-27","note":"…"} }`（字符串简写亦可）；scanPlanUsage 每轮现读并应用：planName 以标注为准、`planNameSource='user-asserted'`、证据行留痕、signed-in/not-signed-in 状态升级为 active；与本地证据冲突时以标注为准并提示。UI「标注」徽标（黄）+ 悬停说明来源与自动升级规则；本地实测档位（Cursor=Free、GLM）不带徽标。
+- **实机验证**：qoder 档位=Free（user-asserted）、kimi 档位=Pro（user-asserted）、glm/cursor 保持 local-evidence。测试 4/4（MU-PU1 补标注断言 + MU-PU7/8 补 Kimi 卡片与「标注」徽标断言）。
+- **边界**：标注文件属用户数据（不入库）；未来厂商落盘档位时本地提取器自动接管（标注与实测不一致时界面提示冲突）。
+
 ### 订阅独立页上线【v0.1.4 增补，未发版】：新增「订阅」导航页——卡片式完整计划信息 + 5h 滚动窗口 + 限额与刷新口径（用户定向「额外页面展示 coding plan；完整用量与限额；5h/周/月额度；刷新时间」）
 
 - **新增导航页（window.html）**：导航「会话/用量/订阅/软件」四页（新增 i-credit-card 图标）；订阅页卡片式布局——厂商图标 + 档位/账号打码 + 状态徽标 + **五个窗口格（5 小时/今日/7 日/30 日/全部）** + 限额区（DeepSeek 余额即剩余额度·对账日；其余厂商如实标「限额数值在厂商云端」）+ 窗口语义行（sem：GLM 5h 滚动/Claude 5h+周/Copilot 月度等公开产品口径，未核实者如实标）+ 刷新元数据（数据生成时间/最后请求时间/身份缓存日期）+ 证据明细折叠；未安装厂商折叠单卡；页首 legend 行说明窗口口径与刷新机制。

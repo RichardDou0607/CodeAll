@@ -128,8 +128,11 @@ const overview = {
   },
 };
 
-// 设置 PLAN_USAGE_HOME 后再 import（模块在 import 时解析家目录）
+// fixture 用户标注档位（plan-overrides.json）
+w('.agent-pet/plan-overrides.json', { 'kimi-for-coding': { planName: 'Pro', asOf: '2026-10-26' } });
+// 设置 PLAN_USAGE_HOME / 覆盖文件路径后再 import（模块在 import 时解析）
 process.env.PLAN_USAGE_HOME = FIX;
+process.env.PET_PLAN_OVERRIDES = path.join(FIX, '.agent-pet/plan-overrides.json');
 const { scanPlanUsage, zcodeProviderSplit, maskEmail, maskName, resetPlanUsageCache } = await import('../adapters/plan-usage.mjs');
 resetPlanUsageCache();
 
@@ -166,6 +169,7 @@ test('MU-PU1/2/3/5/6 scanPlanUsage：身份 × 配额 × 用量窗口 × 隐私�
   assert.ok(!json.includes(FULL_ACCOUNT), '输出不得包含完整账号原文');
   assert.ok(json.includes(maskEmail(FULL_EMAIL)), '邮箱应打码展示');
   assert.ok(json.includes(maskName('TestUser')), '登录名应打码展示');
+  assert.ok(json.includes('"user-asserted"'), '档位来源标记应透出');
 
   // —— GLM：entitlement + provider 拆分 + 窗口（ZCode 精确 + OpenCode glm* 近似）——
   const glm = byId['glm-coding-plan'];
@@ -207,8 +211,11 @@ test('MU-PU1/2/3/5/6 scanPlanUsage：身份 × 配额 × 用量窗口 × 隐私�
   assert.equal(byId['chatgpt-codex'].status, 'api-billing');
   assert.equal(byId['chatgpt-codex'].planName, 'API Key 计费');
   assert.ok(!json.includes('OPENAI_API_KEY'), 'auth.json 键名里的密钥名不应透出');
-  assert.equal(byId['kimi-for-coding'].status, 'signed-in');
-  assert.ok(byId['kimi-for-coding'].notes.some((n) => n.includes('订阅档本地不落盘')));
+  assert.equal(byId['kimi-for-coding'].status, 'active', '用户标注档位后应升级为订阅在用');
+  assert.equal(byId['kimi-for-coding'].planName, 'Pro', 'Kimi 档位应来自用户标注');
+  assert.equal(byId['kimi-for-coding'].planNameSource, 'user-asserted');
+  assert.ok(byId['kimi-for-coding'].evidence.some((e) => String(e.file || '').includes('plan-overrides.json')), '用户标注应留下证据行');
+  assert.ok(byId['kimi-for-coding'].notes.some((n) => n.includes('档位为用户标注')));
 
   // —— Qoder / Cursor / Copilot ——
   assert.equal(byId['qoder'].status, 'signed-in');
@@ -258,6 +265,8 @@ test('MU-PU7 UI：用量页 Coding Plan 区渲染（行、打码、余额、红�
         quota: { kind: 'balance', currency: 'CNY', balance: 100.5, todayCost: 1.23, d7Cost: 17.99, d30Cost: 19.99, allCost: 19.99, daily: [{ day: '2026-10-27', cost: 1.23 }], events: [{ ts: NOW, day: '2026-10-27', model: 'deepseek-flash', cost: 1.23, tokens: 31663410 }] } },
       { id: 'cursor', vendor: 'Cursor', product: 'Cursor 订阅', category: 'subscription', status: 'active', planName: 'Free', account: maskEmail(FULL_EMAIL), agents: ['cursor'], evidence: [{ file: 'state.vscdb', field: 'cursorAuth/stripeMembershipType', value: 'free' }], notes: [], identityAt: null,
         usage: { kind: 'estimate', kindLabel: '含包络估算', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地无逐请求时间戳账本（自然日语桶），5h 滚动窗不可精确归属' }, all: { available: true, requests: 35, tokens: 811750, approximate: true, unavailable: false }, today: { available: true, requests: 0, tokens: 0, approximate: true, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } }, quota: null },
+      { id: 'kimi-for-coding', vendor: '月之暗面 Moonshot', product: 'Kimi For Coding', category: 'subscription', status: 'active', planName: 'Pro', planNameSource: 'user-asserted', account: null, agents: ['kimi-code'], sem: '窗口语义未核实（本地无缓存）', evidence: [{ file: '~/.agent-pet/plan-overrides.json', field: 'kimi-for-coding.planName', value: 'Pro（用户标注，2026-10-26）' }], notes: ['档位为用户标注（plan-overrides.json）'], identityAt: null,
+        usage: { kind: 'exact', kindLabel: '精确 token', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地无逐请求时间戳账本' }, all: { available: true, requests: 2, tokens: 360, approximate: false, unavailable: false }, today: { available: true, requests: 1, tokens: 60, approximate: false, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } }, quota: null },
       { id: 'gemini', vendor: 'Google', product: 'Gemini Code Assist / Antigravity', category: 'subscription', status: 'not-installed', planName: null, account: null, agents: [], evidence: [], notes: ['本机未发现安装痕迹'], identityAt: null, usage: { kind: 'none', kindLabel: '无观察源', windows: null }, quota: null },
     ],
   };
@@ -288,6 +297,8 @@ test('MU-PU7 UI：用量页 Coding Plan 区渲染（行、打码、余额、红�
   assert.match(text, /余额 ¥100\.5/);
   assert.match(text, /¥17\.99|¥19\.99/);
   assert.match(text, /Free/);
+  assert.match(text, /Pro/);
+  assert.match(text, />标注<\/span>/, '用户标注档位应显示「标注」徽标');
   assert.match(text, /未安装（1 家）/);                             // 未安装折叠为单行
   assert.match(text, /Gemini Code Assist \/ Antigravity/);
   assert.match(text, /安装并登录后自动出现在此表/);
@@ -312,6 +323,8 @@ test('MU-PU8 UI：订阅独立页渲染（卡片/5h 窗/限额/刷新时间/未�
       { id: 'deepseek', vendor: 'DeepSeek', product: 'DeepSeek 开放平台', category: 'api-balance', status: 'api-billing', planName: '开放平台按量计费', account: '1***e', agents: ['dsh'], sem: '无窗口概念（余额制，余额即剩余额度）', evidence: [], notes: [], identityAt: null,
         usage: { kind: 'exact', kindLabel: '精确 token', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地账本按自然日记账' }, all: { available: true, requests: 5, tokens: 490, approximate: false, unavailable: false }, today: { available: true, requests: 1, tokens: 110, approximate: false, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } },
         quota: { kind: 'balance', currency: 'CNY', balance: 100.5, todayCost: 1.23, d7Cost: 19.99, d30Cost: 19.99, allCost: 19.99, daily: [{ day: '2026-10-27', cost: 1.23 }], events: [] } },
+      { id: 'kimi-for-coding', vendor: '月之暗面 Moonshot', product: 'Kimi For Coding', category: 'subscription', status: 'active', planName: 'Pro', planNameSource: 'user-asserted', account: null, agents: ['kimi-code'], sem: '窗口语义未核实（本地无缓存）', evidence: [{ file: '~/.agent-pet/plan-overrides.json', field: 'kimi-for-coding.planName', value: 'Pro（用户标注，2026-10-26）' }], notes: [], identityAt: null,
+        usage: { kind: 'exact', kindLabel: '精确 token', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地无逐请求时间戳账本' }, all: { available: true, requests: 2, tokens: 360, approximate: false, unavailable: false }, today: { available: true, requests: 1, tokens: 60, approximate: false, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } }, quota: null },
       { id: 'gemini', vendor: 'Google', product: 'Gemini Code Assist / Antigravity', category: 'subscription', status: 'not-installed', planName: null, account: null, agents: [], evidence: [], notes: ['本机未发现安装痕迹'], identityAt: null, usage: { kind: 'none', kindLabel: '无观察源', windows: null }, quota: null },
     ],
   };
@@ -336,6 +349,8 @@ test('MU-PU8 UI：订阅独立页渲染（卡片/5h 窗/限额/刷新时间/未�
   assert.match(text, /bigmodel-coding-plan/);
   assert.match(text, /5 小时/);
   assert.match(text, /余额 ¥100\.5/);
+  assert.match(text, /Pro/);
+  assert.match(text, />标注<\/span>/);
   assert.match(text, /最后请求 /);
   assert.match(text, /数据生成 /);
   assert.match(text, /未安装（1 家）/);
