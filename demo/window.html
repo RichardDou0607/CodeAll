@@ -907,9 +907,12 @@ function usageSourceChart(view){
 }
 // ---- Coding Plan 使用情况（/api/plan-usage，2026-10-26）：订阅身份 × 本地用量窗口 × 配额/余额 ----
 const PLAN_STATUS={active:['订阅在用','var(--run)'],'api-billing':['API/余额计费','var(--acc)'],'signed-in':['已登录 · 档位未知','var(--wait)'],'not-signed-in':['已安装 · 未登录','var(--dim)'],unknown:['未知','var(--dim)'],'not-installed':['未安装','var(--dim)']};
-const PLAN_LOGO={ // 订阅页厂商图标：八源资产复用 + 官方图标（github=GitHub 官方 mark favicon.svg；alibaba=Alibaba 官方 512 manifest 图标）
+const PLAN_LOGO={ // 订阅页厂商图标（2026-10-27 三轮修正后全官方/正式资产）：
+  // cursor.svg=cursor.com 官方 favicon.svg；opencode.svg=opencode.ai 官方 favicon.svg；
+  // copilot.png=VS Code Copilot 官方扩展图标（256px，替代深色卡片上不可见的 GitHub 黑 mark）；
+  // alibaba.png=Alibaba 官方 512 manifest 图标；其余为八源既有资产。
   'glm-coding-plan':'zcode.png',deepseek:'deepseek.png',claude:'claude.png','chatgpt-codex':'codex.png',
-  'kimi-for-coding':'kimi.png',qoder:'alibaba.png',cursor:'cursor.svg',copilot:'github.svg',
+  'kimi-for-coding':'kimi.png',qoder:'alibaba.png',cursor:'cursor.svg',copilot:'copilot.png',
   'opencode-zen':'opencode.svg','opencode-go':'opencode.svg'};
 function planLogo(p){
   const f=PLAN_LOGO[p.id];

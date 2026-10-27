@@ -316,7 +316,7 @@ test('MU-PU7 UI：用量页 Coding Plan 区渲染（行、打码、余额、红�
   assert.match(text, /assets\/agents\/zcode\.png/);                // 厂商图标（GLM→zcode 资产）
   assert.match(text, /assets\/agents\/deepseek\.png/);
   assert.match(text, /assets\/agents\/cursor\.svg/);
-  assert.match(text, /assets\/agents\/github\.svg/, 'GitHub Copilot 用官方 GitHub mark');
+  assert.match(text, /assets\/agents\/copilot\.png/, 'GitHub Copilot 用官方 Copilot 扩展图标');
   assert.match(text, /assets\/agents\/alibaba\.png/, 'Qoder（阿里巴巴）用官方 Alibaba 图标');
   assert.match(text, /pu-vendor/);
   assert.match(text, /GLM Coding Plan/);
