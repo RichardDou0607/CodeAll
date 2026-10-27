@@ -1255,7 +1255,18 @@ const server = http.createServer(async (req, res) => {
         '.webp': 'image/webp',
         '.ico': 'image/x-icon',
       }[path.extname(file).toLowerCase()] || 'application/octet-stream';
-      res.writeHead(200, { 'content-type': type, 'cache-control': 'public, max-age=31536000, immutable' });
+      // 文件名不含内容哈希（cursor.svg 同名换官方图），不能用 immutable 长缓存：
+      // WKWebView 会把旧图钉死一年且永不回源。改为 ETag 协商，内容未变回 304。
+      const etag = `W/"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+      const headers = {
+        'content-type': type,
+        'cache-control': 'no-cache',
+        etag,
+        'last-modified': st.mtime.toUTCString(),
+      };
+      const inm = req.headers['if-none-match'];
+      if (inm && inm.split(',').some((t) => t.trim() === etag)) { res.writeHead(304, headers); res.end(); return; }
+      res.writeHead(200, headers);
       if (req.method === 'HEAD') res.end(); else fs.createReadStream(file).pipe(res);
     } catch {
       res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }); res.end('asset not found');

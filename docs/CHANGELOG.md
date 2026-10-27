@@ -1,5 +1,13 @@
 # 变更日志（文档与契约）
 
+## 2026-10-27（十二）
+### 同名换图被 WebView 钉死的根因修复：资源缓存策略纠正 + URL 版本化（用户报障「Cursor 和 opencode 均没有成功更新」）
+
+- **根因（不是图标内容问题）**：`/assets/*` 响应头曾是 `cache-control: public, max-age=31536000, immutable`——immutable 只对**文件名含内容哈希**的资源成立，而本项目图标是同名换内容（cursor.svg 占位图→官方 favicon）。WKWebView 把旧占位图按「一年内永不回源」钉死在磁盘缓存里：服务器早已返回新字节（curl 200 · 4190B/612B 实证），App 里的 WebView 却永远吐旧图。GitHub Copilot（copilot.png）与阿里巴巴（alibaba.png）能正常显示恰因它们是**新文件名**、首取即新——现象完全吻合。
+- **服务端（framed.mjs）**：/assets 处理改为协商缓存——`cache-control: no-cache` + ETag（`W/"size-mtime"`）+ Last-Modified；带匹配 If-None-Match 回 304 零字节，内容变了 ETag 变、必回 200 全量。loopback 上 304 近零成本，同名换图即时生效，永久杜绝复发。
+- **客户端（window.html）**：`ASSET_V='2'` + `assetUrl()` 助手——agentLogo / planLogo / onerror 兜底图 / brand 标记全部 `?v=` 版本化。这是一次性逃生舱：已在用户 WebView 缓存里的旧条目带着 immutable 政策永远不会回源，换 URL 才强制首取；此后新条目全部 no-cache 协商，无需再手动升版本。
+- **回归**：multi-source-check 新增 MU7（200+etag+no-cache → If-None-Match 回 304 → 无 immutable）；test-window 新增版本参数断言（brand/agentLogo/planLogo 均 `?v=`）；test-window 89/89、test-plan-usage 4/4；临时实例实测 200/304/陈旧 ETag 三态正确。
+
 ## 2026-10-27（十一）
 ### 在线档位/配额层上线【v0.1.4 增补】：官方端点真值取代人工标注（用户定向「想办法找到具体的 coding plan 来源，而不是通过人工标注；尝试通过 api-key 查找」——明确授权使用本地凭证做只读查询）
 

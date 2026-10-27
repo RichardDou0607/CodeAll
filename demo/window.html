@@ -461,7 +461,7 @@ header .brand-mark{animation:bt-mark .5s ease-out 1.64s both}
 </svg>
 <div id="app">
   <header>
-    <div class="brand"><img class="brand-mark" src="/assets/codeall-mark.svg" alt=""><div><div class="brand-name">CodeAll</div><div class="brand-label">TACTICAL TERMINAL</div></div></div>
+    <div class="brand"><img class="brand-mark" src="/assets/codeall-mark.svg?v=2" alt=""><div><div class="brand-name">CodeAll</div><div class="brand-label">TACTICAL TERMINAL</div></div></div>
     <span class="header-space"></span>
     <span class="local"><svg class="icon" aria-hidden="true"><use href="#i-radio"></use></svg> LOCAL</span>
     <span class="aggchip"><span class="dot" id="agg-dot"></span><span id="agg-text">连接中…</span></span>
@@ -587,13 +587,16 @@ const SOURCE_META={
   cursor:{name:'Cursor',logo:'/assets/agents/cursor.svg',color:'#d5d9e2'}
 };
 const SOURCE_ORDER=['dsh','claude-code','codex','kimi-code','zcode','opencode','qoder','cursor'];
+// 资源版本号：同名换图时递增，逃出 WebView 已缓存的旧条目（brand <img> 的 ?v= 需同步）。
+const ASSET_V='2';
+const assetUrl=u=>u+'?v='+ASSET_V;
 const $=id=>document.getElementById(id);
 function icon(name){return '<svg class="icon" aria-hidden="true"><use href="#i-'+name+'"></use></svg>'}
 function esc(s){return String(s).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]))}
 function sourceMeta(source){return SOURCE_META[source]||{name:String(source||'Agent'),logo:'/assets/codeall-mark.svg',color:'#147a68'}}
 function agentLogo(source,className='agent-logo'){
   const meta=sourceMeta(source);
-  return '<img class="'+className+'" src="'+meta.logo+'" alt="" loading="lazy" onerror="this.onerror=null;this.src=\'/assets/codeall-mark.svg\'">';
+  return '<img class="'+className+'" src="'+assetUrl(meta.logo)+'" alt="" loading="lazy" onerror="this.onerror=null;this.src=\''+assetUrl('/assets/codeall-mark.svg')+'\'">';
 }
 function readPreference(key,fallback){try{return localStorage.getItem(key)||fallback}catch(_){return fallback}}
 function writePreference(key,value){try{localStorage.setItem(key,value)}catch(_){}}
@@ -916,7 +919,7 @@ const PLAN_LOGO={ // 订阅页厂商图标（2026-10-27 三轮修正后全官方
   'opencode-zen':'opencode.svg','opencode-go':'opencode.svg'};
 function planLogo(p){
   const f=PLAN_LOGO[p.id];
-  return '<img class="agent-logo pu-logo" src="'+(f?'/assets/agents/'+f:'/assets/codeall-mark.svg')+'" alt="" loading="lazy" onerror="this.onerror=null;this.src=\'/assets/codeall-mark.svg\'">';
+  return '<img class="agent-logo pu-logo" src="'+assetUrl(f?'/assets/agents/'+f:'/assets/codeall-mark.svg')+'" alt="" loading="lazy" onerror="this.onerror=null;this.src=\''+assetUrl('/assets/codeall-mark.svg')+'\'">';
 }
 function planWindowCell(p,win,cost){
   if(cost!=null)return Number.isFinite(cost)?'<span title="本地账本精确成本（1 单位 = 1e-8 元）">¥'+cost+'</span>':'—';

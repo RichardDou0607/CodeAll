@@ -738,6 +738,18 @@ let cx;
             r2.status === 200 && !!ju.overview?.totals && Object.keys(ju.perSource || {}).length === 8 && ju.perSource['claude-code']?.bySessionCount >= 1 && (ju.perSource?.dsh?.bySessionCount ?? 0) >= 1 && ju.perSource?.opencode?.bySessionCount >= 1 && ju.perSource?.qoder?.estimatedTokens === true && ju.perSource?.cursor?.estimatedTokens === true && ju.perSource?.qoder?.degraded === false && ju.perSource?.cursor?.degraded === false,
             { status: r2.status, sources: Object.keys(ju.perSource || {}), ccSessions: ju.perSource?.['claude-code']?.bySessionCount, dshSessions: ju.perSource?.dsh?.bySessionCount, qoder: { estimatedTokens: ju.perSource?.qoder?.estimatedTokens, degraded: ju.perSource?.qoder?.degraded }, cursor: { estimatedTokens: ju.perSource?.cursor?.estimatedTokens, degraded: ju.perSource?.cursor?.degraded } });
         }
+        // ---- MU7：静态资源协商缓存（同名换图不得被 WebView 钉死：no-cache + ETag → 304）----
+        try {
+          const a1 = await fetch('http://127.0.0.1:' + PORT + '/assets/agents/cursor.svg');
+          const etag = a1.headers.get('etag');
+          const cc = a1.headers.get('cache-control') || '';
+          const a2 = await fetch('http://127.0.0.1:' + PORT + '/assets/agents/cursor.svg', { headers: { 'if-none-match': etag || '' } });
+          check('MU7', '/assets 协商缓存（no-cache + ETag；带 If-None-Match 回 304；不再 immutable 一年）',
+            a1.status === 200 && !!etag && cc.includes('no-cache') && !cc.includes('immutable') && a2.status === 304,
+            { status: a1.status, etag, cacheControl: cc, revalidate: a2.status });
+        } catch (e) {
+          check('MU7', '/assets 协商缓存（no-cache + ETag；带 If-None-Match 回 304；不再 immutable 一年）', false, { error: String(e?.message || e) });
+        }
       }
     }
     // ---- --live：控制→观察闭环（每后端挑一个**最小**旧会话，真实无头投递一条「只回复 ok」，等会话文件增长）----
