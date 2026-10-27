@@ -110,6 +110,7 @@ node scripts/replay-check.mjs --selftest   # 状态机回放 + 负例
 | [docs/27-v0.1.2-scope.md](./docs/27-v0.1.2-scope.md) | 真相源（v0.1.2）：分钟兜底刷新 + 用量扫描四级增量（PERF-7）范围与验收 |
 | [docs/28-v0.1.3-scope.md](./docs/28-v0.1.3-scope.md) | 真相源（v0.1.3）：手动停止 ≠ 出错（契约 v1.4 aborted 会话态）范围与验收 |
 | [docs/29-v0.1.4-scope.md](./docs/29-v0.1.4-scope.md) | **当前真相源（v0.1.4）**：Coding Plan 订阅使用情况面板（15 家厂商：身份 × 本地用量 × 配额/余额）范围与验收 |
+| [docs/36-win11-sandbox.md](./docs/36-win11-sandbox.md) | **Win11 远端验证机（沙箱）**：连接方式、环境脚本（check/sync/exec/service）与已验证能力、可用性矩阵初步数据（v0.2.0 PLAT-0 输入） |
 | [docs/40-adapters.md](./docs/40-adapters.md) | 后端适配矩阵（含 Cursor/Copilot/ACP 行）、观测能力与降级 |
 | [docs/50-product-spec.md](./docs/50-product-spec.md) / [51](./docs/51-work-frame-spec.md) / [55](./docs/55-interaction-design.md) | 产品规格、工作框三形态、人机交互总体方案 |
 | [docs/53-tauri-shell.md](./docs/53-tauri-shell.md) | Tauri 外壳实现（双窗口、Space 行为、内存口径） |

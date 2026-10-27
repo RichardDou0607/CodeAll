@@ -1,5 +1,12 @@
 # 变更日志（文档与契约）
 
+## 2026-10-27（十四）
+### Win11 远端验证机（沙箱）接入：环境脚本与验证记录（docs/36）
+
+- 新增 `scripts/win11-sandbox/`：`check.mjs`（体检 + 六源 Agent CLI 可用性矩阵）、`sync.sh`（tar over ssh 源码同步到 `C:\Users\admin\codeall`，`COPYFILE_DISABLE=1` 防 AppleDouble）、`exec.sh`（工作区远程执行，`--ps` 防乱码）、`service.sh`（`demo/framed.mjs` 的 start/status/stop/log，WMI `Win32_Process.Create` 分离进程、断连不死）。连接 `ssh win11` 免密直达（Tailscale 直连约 8ms）。
+- 实测（2026-10-27）：check 全绿（Win11 家庭中文版 x64 build 26300 · node v24.17.0 · bsdtar/curl 齐备）；`check-fixtures` 契约 v1.2 在 Windows 通过；`framed.mjs` 跑通（`/api/state` 200，127.0.0.1 绑定 + Host 校验红线同样生效）；DSH 观察开箱即用（观察到沙箱本机 DSH 会话）；`local-agents` 四态探测跑通。
+- 可用性矩阵初步（docs/36 §4）：ZCode（9 会话）与 OpenCode（87 会话）在沙箱被真实使用；claude/codex/kimi 已装；qoder/cursor 未装；CLI 安装探测为 macOS 路径口径、Windows 误判「未下载」= PLAT-2 工单。README 文档索引加行。
+
 ## 2026-10-27（十三）
 ### 目录与多源验收收口：归档计数、ZCode/DSH 扫描性能、Kimi 活数据对账
 
