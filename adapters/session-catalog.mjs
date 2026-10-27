@@ -24,7 +24,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { decodeZstdFrames, extractMeta, coarseState as coarseStateOf, findFrameOffsets, firstUserTitleFromEvents, AGENT_NAME, AGENT_VERSION } from './dsh-meta.mjs';
+import { decodeZstdFrames, forEachZstdFrameText, extractMeta, coarseState as coarseStateOf, findFrameOffsets, firstUserTitleFromEvents, AGENT_NAME, AGENT_VERSION } from './dsh-meta.mjs';
 
 export const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 export const SESSIONS_ROOT = process.env.DSH_SESSIONS || path.join(DSH_HOME, 'sessions');
@@ -195,6 +195,49 @@ export function pickLogFile(sessionDir) {
   return best;
 }
 
+const CATALOG_DEEP_TYPES = new Set([
+  'session', 'request/header', 'model/selection', 'subagent/descriptor', 'agent-preset/selected', 'session/title',
+  'turn/start', 'turn/end', 'session/end-seed', 'session/end', 'llm/retry',
+]);
+const CATALOG_TYPE_RE = /"type"\s*:\s*"([^"]+)"/;
+
+/** 目录深扫只保留影响最终字段的事件；最后一个 assistant 保留相对位置，用户消息只保留首个有效标题。 */
+function decodeCatalogDeep(buf, { maxRecords = 200000 } = {}) {
+  const records = [];
+  let assistantRaw = null, assistantIndex = 0, userFound = false;
+  const { frames, tornFrames, badFrames, emptyTail, bytesConsumed } = forEachZstdFrameText(buf, (text) => {
+    for (const line of text.split('\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      const match = t.match(CATALOG_TYPE_RE);
+      if (!match) continue;
+      const type = match[1];
+      if (type === 'assistant/message') {
+        if (records.length < maxRecords) { assistantRaw = t; assistantIndex = records.length; }
+        continue;
+      }
+      if (type === 'user/message') {
+        if (userFound || records.length >= maxRecords) continue;
+        try {
+          const event = JSON.parse(t);
+          if (firstUserTitleFromEvents([event])) { records.push(event); userFound = true; }
+        } catch { /* 半行 */ }
+        continue;
+      }
+      if (!CATALOG_DEEP_TYPES.has(type) || records.length >= maxRecords) continue;
+      try { records.push(JSON.parse(t)); } catch { /* 半行 */ }
+    }
+  });
+  if (assistantRaw) {
+    try {
+      const event = JSON.parse(assistantRaw);
+      records.splice(Math.min(assistantIndex, records.length), 0, event);
+      if (records.length > maxRecords) records.length = maxRecords;
+    } catch { /* 半行 */ }
+  }
+  return { records, frames, tornFrames, badFrames, emptyTail, bytesConsumed };
+}
+
 /**
  * DSH 会话形态：DSH 无独立 CLI 产品（desktop profile 被 Electron 应用独占，docs/52 §5.3），
  * 会话一律产自桌面端 → 恒为 'desktop'。
@@ -224,7 +267,7 @@ export function parseSession(sessionRoot, projectDirName, sessionDirName, opts =
     let events, framesScanned, readBytes, metaComplete;
     if (o.deep) {
       const buf = fs.readFileSync(log.file);
-      const dec = decodeZstdFrames(buf, { maxRecords: 200000 });
+      const dec = decodeCatalogDeep(buf, { maxRecords: 200000 });
       events = dec.records; framesScanned = dec.frames; readBytes = buf.length; metaComplete = true;
     } else {
       const head = readHeadFrames(log.file, { frames: o.headFrames, chunkBytes: o.chunkBytes, maxBytes: o.maxHeadBytes, size: log.size });

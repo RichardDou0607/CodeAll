@@ -8,7 +8,7 @@
  *   node scripts/catalog-check.mjs --locks    # 附带 flock 占用探测（多花 ~50ms）
  *   node scripts/catalog-check.mjs --runs 20  # 性能轮数（默认 10）
  *
- * 断言清单（全部基于**本机真实数据**）：
+ * 断言清单（本机真实数据 + 固定合成性能基准）：
  *   A1 会话根目录可读，项目数 ≥ 3
  *   A2 会话数 ≥ 12
  *   A3 每条会话都有非空 sessionId 与有限 updatedAt；bytes ≥ 0
@@ -23,8 +23,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { scanCatalog, toCatalogFrame, pickLogFile, probeLock, encodeProjectDirName, SESSIONS_ROOT } from '../adapters/session-catalog.mjs';
-import { decodeZstdFrames, extractMeta, activityOf, ACTIVITY_TEXT, ACTIVITY_TEXT_MAX, AGENT_VERSION } from '../adapters/dsh-meta.mjs';
+import { decodeZstdFrames, extractMeta, coarseState, firstUserTitleFromEvents, activityOf, ACTIVITY_TEXT, ACTIVITY_TEXT_MAX, AGENT_VERSION } from '../adapters/dsh-meta.mjs';
 
 const argv = process.argv.slice(2);
 const AS_JSON = argv.includes('--json');
@@ -143,7 +144,67 @@ for (const s of catalog.sessions) {
   if (d && keyOf(s) !== keyOf(d)) divergent.push({ sessionId: s.sessionId, window: [s.model, s.reasoningEffort, s.title], deep: [d.model, d.reasoningEffort, d.title] });
 }
 check('A12', '快扫(前8+末2帧) 与深扫(整文件) 的元信息差异 ≤ 25%（差异=会话中途改模型/标题）', divergent.length / Math.max(1, catalog.sessions.length) <= 0.25, { divergent: divergent.length, total: catalog.sessions.length, detail: divergent.map((d) => d.sessionId.slice(0, 20)) });
-check('A13', '深扫同样零降级，且耗时仍 < 300 ms', deep.stats.degraded === 0 && deep.tookMs < 300, { deepTookMs: Number(deep.tookMs.toFixed(1)), degraded: deep.stats.degraded });
+{
+  const benchRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-deep-bench-'));
+  const benchFiles = new Map();
+  try {
+    for (let i = 0; i < 12; i++) {
+      const sid = 'bench-deep-' + i;
+      const cwd = '/tmp/catalog-bench/project-' + (i % 3);
+      const dir = path.join(benchRoot, encodeProjectDirName(cwd), sid);
+      fs.mkdirSync(dir, { recursive: true });
+      const now = Date.now();
+      const events = [
+        { type: 'session', id: sid, cwd, createdAt: now, version: 4 },
+        { type: 'user/message', time: now + 1, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '<system-reminder>noise</system-reminder>' }] } },
+        { type: 'user/message', time: now + 2, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '基准用户标题 ' + i }] } },
+        { type: 'model/selection', time: now + 3, data: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' } },
+        { type: 'request/header', time: now + 4, data: { header: { config: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' } } } },
+        { type: 'agent-preset/selected', time: now + 5, data: { agentPreset: 'bench' } },
+      ];
+      if (i % 4 !== 0) events.push({ type: 'session/title', time: now + 6, data: { title: '基准标题 ' + i } });
+      events.push({ type: 'turn/start', time: now + 7, data: { turnId: 'turn-1' } });
+      for (let j = 0; j < 3000; j++) {
+        events.push({ type: 'assistant/message', time: now + 8 + j, data: {
+          turnId: 'turn-1', text: 'x'.repeat(1024),
+          content: Array.from({ length: 16 }, (_, k) => ({ type: 'text', text: 'y'.repeat(256), meta: { index: k, flags: [true, k] } })),
+        } });
+      }
+      events.push({ type: 'turn/end', time: now + 4000, data: { turnId: 'turn-1', reason: { kind: 'ok' } } });
+      if (i % 5 === 0) events.push({ type: 'llm/retry', time: now + 4001, data: {} });
+      if (i % 3 === 0) events.push({ type: 'turn/start', time: now + 4002, data: { turnId: 'turn-2' } });
+      const file = path.join(dir, 'session.v4.jsonl.zstd');
+      fs.writeFileSync(file, Buffer.concat(events.map((event) => zlib.zstdCompressSync(Buffer.from(JSON.stringify(event) + '\n')))));
+      benchFiles.set(sid, file);
+    }
+    const times = [];
+    let bench;
+    for (let i = 0; i < 3; i++) {
+      const t = process.hrtime.bigint();
+      bench = scanCatalog({ root: benchRoot, deep: true });
+      times.push(Number(process.hrtime.bigint() - t) / 1e6);
+    }
+    const mismatches = [];
+    for (const s of bench.sessions) {
+      const full = decodeZstdFrames(fs.readFileSync(benchFiles.get(s.sessionId)), { maxRecords: 200000 }).records;
+      const header = full.find((event) => event?.type === 'session') ?? null;
+      const meta = extractMeta(full, { header });
+      const expectedTitle = meta.title ?? firstUserTitleFromEvents(full);
+      const expectedState = coarseState(full);
+      if (s.title !== expectedTitle || s.provider !== meta.provider || s.model !== meta.model
+        || s.reasoningEffort !== meta.reasoningEffort || s.agentPreset !== meta.agentPreset
+        || s.state !== expectedState.state || s.stateSource !== expectedState.stateSource) {
+        mismatches.push({ sessionId: s.sessionId, expectedTitle, actualTitle: s.title, expectedState, actualState: { state: s.state, stateSource: s.stateSource } });
+      }
+    }
+    const sorted = [...times].sort((a, b) => a - b);
+    check('A13', '真实深扫零降级；固定语料结果一致且中位数 <300ms',
+      deep.stats.degraded === 0 && mismatches.length === 0 && sorted[1] < 300,
+      { realDeepTookMs: Number(deep.tookMs.toFixed(1)), realDegraded: deep.stats.degraded,
+        fixtureMedianMs: Number(sorted[1].toFixed(1)), fixtureRunsMs: times.map((n) => Number(n.toFixed(1))),
+        fixtureSessions: bench.sessions.length, mismatches });
+  } finally { fs.rmSync(benchRoot, { recursive: true, force: true }); }
+}
 
 // ---------------------------------------------------------------- 会话形态（恒为 desktop）
 const variantMains = catalog.sessions.filter((s) => s.kind !== 'subagent' && !s.degraded);

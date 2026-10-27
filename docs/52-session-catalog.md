@@ -11,13 +11,13 @@
 | 文件 | 作用 | 自检 |
 |---|---|---|
 | [adapters/session-catalog.mjs](../adapters/session-catalog.mjs) | 扫描 `~/.dsh/sessions/**` → **项目 → 会话**树 + 元信息；快扫/深扫两种策略；flock 占用探测；`ctl:catalog` 帧 | [scripts/catalog-check.mjs](../scripts/catalog-check.mjs) |
-| [adapters/dsh-meta.mjs](../adapters/dsh-meta.mjs) | 纯函数：多帧 zstd 解码 + 元信息抽取 + 粗粒度 activity + 契约事件组装 | 内置 `--selftest`（**45/45 通过**） |
-| [scripts/catalog-check.mjs](../scripts/catalog-check.mjs) | 真实数据自检（15 项断言）+ 性能实测 | 自身 |
+| [adapters/dsh-meta.mjs](../adapters/dsh-meta.mjs) | 纯函数：多帧 zstd 解码 + 元信息抽取 + 粗粒度 activity + 契约事件组装 | 内置 `--selftest`（**50/50 通过**） |
+| [scripts/catalog-check.mjs](../scripts/catalog-check.mjs) | 真实数据自检（16 项断言）+ 性能实测 | 自身 |
 | 本文 | 字段来源表 / 性能实测 / 打开-新建能力矩阵 | — |
 
 ```bash
 node adapters/dsh-meta.mjs --selftest     # 45/45 通过
-node scripts/catalog-check.mjs            # 15 项断言全过
+node scripts/catalog-check.mjs            # 16 项断言全过
 node adapters/session-catalog.mjs         # 人类可读目录树
 node adapters/session-catalog.mjs --json --frame   # 契约 §2.2 ctl:catalog 载荷
 ```
@@ -135,6 +135,8 @@ const MAGIC = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);   // zstd 帧魔数
 | **快扫**（默认） | 文件头 64 KB（按需翻倍，上限 1 MB）+ 文件尾 64 KB（上限 512 KB） | **前 8 帧 + 末 2 帧** | 窗口内最后一次取值（`metaComplete=false` → `metaApproximate=true`） | 列表/工作框（每 1–2 s 刷新） |
 | **深扫** `--deep` | 整文件 | 全部帧 | 精确（`metaComplete=true`） | 会话详情面板、导出、自检对照 |
 
+深扫会解压全部帧，但不会对所有行执行 `JSON.parse`：目录专用解码只解析影响最终元信息/状态的事件，保留最后一条 assistant 的相对位置与首个有效用户标题；通用回放仍使用完整事件解码。
+
 两个模式都**不需要预先知道帧数**：头窗口按 `64 KB → 128 KB → …` 翻倍，直到解出 8 个完整帧或到达 EOF。
 
 ### 3.3 性能实测（命令 + 真实输出）
@@ -154,7 +156,7 @@ $ node adapters/session-catalog.mjs --deep          # 深扫对照
 
 - **12+ 会话整体 < 300 ms 达标**：本机 16 个会话（最大 2.50 MB / 991 帧，最长 1215 帧）快扫 **16.4 ms（中位）**，只读 **1.7 MB**。
 - 快扫的 I/O 与**会话数**成正比而与**日志大小**无关（每会话上限 64 KB 头 + 64 KB 尾，实测平均约 107 KB）；深扫与日志总量成正比（16 会话 14.2 MB → 203 ms）。会话数上到 100+ 时应保持快扫 + 按需深扫单会话（单会话深扫平均 12 ms、最慢 33 ms）。
-- 自检 A13 额外断言「深扫也 < 300 ms 且零降级」，避免深扫路径腐化。
+- 自检 A13 同时要求真实深扫零降级、固定合成语料与独立全量解码结果一致，以及固定语料多轮中位数 < 300 ms；真实全量耗时仅作诊断，避免本机数据增长让性能门禁失真。
 
 ### 3.4 降级（必须有，且已实测）
 
@@ -192,10 +194,10 @@ $ node scripts/catalog-check.mjs --runs 10
   ✅ A9 扫描耗时中位数 < 300 ms
   ✅ A11 项目目录名与 DSH projectKey 编码规则一致（用真实 cwd 反推）
   ✅ A12 快扫(前8+末2帧) 与深扫(整文件) 的元信息差异 ≤ 25%（差异=会话中途改模型/标题）
-  ✅ A13 深扫同样零降级，且耗时仍 < 300 ms
+  ✅ A13 真实深扫零降级；固定语料结果一致且中位数 <300ms
   ✅ A10 契约 §2.2 ctl:catalog 帧形状正确
 
-全部 15 项断言通过
+全部 16 项断言通过
 ```
 
 **A12 的诚实说明**：快扫确实会在「会话中途换过模型/标题」的会话上与全量不一致。本机实测 **2/16（12.5%）**：
@@ -333,7 +335,7 @@ export function apply(ctx) {
 
 | # | 能力 | 结论 | 证据（命令 / 源码位置） | 替代方案 |
 |---|---|---|---|---|
-| 1 | 只读发现：项目 → 多会话树 + 元信息 | ✅ **本机实测可行** | `node scripts/catalog-check.mjs`（16 会话 / 16.4 ms / 15 项断言） | — |
+| 1 | 只读发现：项目 → 多会话树 + 元信息 | ✅ **本机实测可行** | `node scripts/catalog-check.mjs`（16 会话 / 16.4 ms / 16 项断言） | — |
 | 2 | 判断「会话是否被活进程占用」 | ✅ **本机实测可行**（可选，需要 DSH 自带原生 flock 插件） | `--locks` 输出（§5.1） | 无插件时退化为 mtime 60 s 判「活跃」 |
 | 3 | 「不用打开」就能显示状态 | ✅ **本机实测可行** | 只读 tail 日志；[demo/frame.mjs](../demo/frame.mjs) 已跑通 | 这是 Phase 1 的主路线 |
 | 4 | 打开已存在会话：在桌面 GUI 里打开 | ⚠️ **需要用户授权** | `GET :19387/` → 401（§5.2）；密钥在 `.credentials.yaml`，我们**不使用** | ①工作框按钮只做「把用户送到 DSH 窗口」；②用户在 GUI 里手动打开；③只读跟随，不接管 |

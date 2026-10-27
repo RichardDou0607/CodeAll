@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { scanClaudeCatalog, mapClaudeLine } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, mapCodexLine } from '../adapters/codex-adapter.mjs';
@@ -30,7 +31,7 @@ import zlib from 'node:zlib';
 import { SESSIONS_ROOT as CODEX_ROOT, threadIdOf } from '../adapters/codex-adapter.mjs';
 import { SESSIONS_ROOT as KIMI_ROOT } from '../adapters/kimi-code-adapter.mjs';
 import { PROJECTS_ROOT } from '../adapters/claude-code-adapter.mjs';
-import { scanCatalog } from '../adapters/session-catalog.mjs';
+import { scanCatalog, readWorkspaceIndex } from '../adapters/session-catalog.mjs';
 import { CLI_TARGETS, availableCliChannels, resolveCliBin, cliEnvFor } from '../adapters/cli-control.mjs';
 
 const AS_JSON = process.argv.includes('--json');
@@ -175,7 +176,56 @@ let cx;
     { withVersion: zcMains.filter((s) => s.agentVersion).length });
   const STATE_SET = new Set(['idle', 'thinking', 'running', 'done', 'error', 'aborted', 'unknown']);   // v0.1.3 起 aborted（手动停止）为合法粗状态（检查脚本此前未跟上）
   check('ML4', '粗状态在已知集合内（含 5min 滞留修正）', zc.sessions.every((s) => STATE_SET.has(s.state)), { states: [...new Set(zc.sessions.map((s) => s.state))] });
-  check('ML5', '扫描性能 < 300ms', tookMs < 300, { tookMs: Number(tookMs.toFixed(1)) });
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeall-zcode-bench-'));
+    const dbFile = path.join(dir, 'db.sqlite');
+    const db = new DatabaseSync(dbFile);
+    db.exec(`CREATE TABLE session (
+      id TEXT PRIMARY KEY, parent_id TEXT, path TEXT, directory TEXT, title TEXT,
+      version TEXT, task_type TEXT, title_source TEXT,
+      time_created INTEGER, time_updated INTEGER, time_archived INTEGER);
+      CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+      CREATE TABLE part (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);
+      CREATE TABLE session_entry (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, data TEXT, time_created INTEGER, time_updated INTEGER);
+      CREATE INDEX message_session_time_created_id_idx ON message(session_id, time_created, id);
+      CREATE INDEX part_session_idx ON part(session_id);`);
+    const addSession = db.prepare('INSERT INTO session (id, path, title, version, task_type, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    const addMessage = db.prepare('INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)');
+    const addPart = db.prepare('INSERT INTO part (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)');
+    db.exec('BEGIN');
+    for (let i = 0; i < 500; i++) {
+      const sid = 'bench-' + i;
+      const taskType = i % 11 === 0 ? 'selection_side_chat' : i % 7 === 0 ? 'subagent_child' : 'interactive';
+      addSession.run(sid, '/tmp/bench/project-' + (i % 5), sid, '1.0.0', taskType, 1, 2000 + i, i % 50 === 0 ? 1 : null);
+      for (let j = 0; j < 20; j++) {
+        addMessage.run('m-' + sid + '-' + j, sid, j, 1000 + j, JSON.stringify({
+          role: 'assistant', finish: j === 19 ? 'stop' : 'tool-calls',
+          semantics: { origin: 'agent_runtime' }, synthetic: false,
+        }));
+      }
+      for (let j = 0; j < 400; j++) {
+        addPart.run('p-' + sid + '-' + j, sid, j, j, JSON.stringify({
+          type: j === 399 ? 'tool' : 'text', state: { status: 'completed' },
+          input: { command: 'bench-' + 'x'.repeat(2048) },
+        }));
+      }
+    }
+    db.exec('COMMIT');
+    db.close();
+    try {
+      const times = [];
+      let stateOk = true;
+      for (let i = 0; i < 3; i++) {
+        const t = process.hrtime.bigint();
+        const cat = scanZcodeCatalog({ dbPath: dbFile });
+        times.push(Number(process.hrtime.bigint() - t) / 1e6);
+        stateOk = stateOk && !cat.error && cat.sessions.filter((s) => s.kind === 'main').every((s) => s.state === 'done');
+      }
+      const sorted = [...times].sort((a, b) => a - b);
+      check('ML5', '固定 ZCode 语料扫描中位数 <300ms（真实全量功能断言不变）', stateOk && sorted[1] < 300,
+        { realTookMs: Number(tookMs.toFixed(1)), fixtureMedianMs: Number(sorted[1].toFixed(1)), fixtureRunsMs: times.map((n) => Number(n.toFixed(1))), sessions: 500, rows: 210000 });
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
   const ctx = { sessionId: 'sess_z1', seq: 0 };
   const e1 = mapZcodeRow({ tbl: 'message', time_created: 1, data: { role: 'user', semantics: { origin: 'real_user' }, anchor: { turnId: 'turn-1' } } }, ctx);
   const e1s = mapZcodeRow({ tbl: 'message', time_created: 1, data: { role: 'user', synthetic: true, semantics: { origin: 'agent_runtime', kind: 'todo_reminder' } } }, ctx);
@@ -388,6 +438,50 @@ let cx;
   }
 }
 
+const kimiTarget = (() => {
+  let target = null, mtime = 0;
+  for (const wd of fs.readdirSync(KIMI_ROOT, { withFileTypes: true })) {
+    if (!wd.isDirectory() || wd.name.startsWith('.')) continue;
+    const wdPath = path.join(KIMI_ROOT, wd.name);
+    let ses; try { ses = fs.readdirSync(wdPath, { withFileTypes: true }); } catch { continue; }
+    for (const s of ses) {
+      if (!s.isDirectory() || !s.name.startsWith('session_')) continue;
+      const agentsDir = path.join(wdPath, s.name, 'agents');
+      let ags; try { ags = fs.readdirSync(agentsDir, { withFileTypes: true }); } catch { continue; }
+      for (const a of ags) {
+        const file = path.join(agentsDir, a.name, 'wire.jsonl');
+        try { const m = fs.statSync(file).mtimeMs; if (m > mtime) { mtime = m; target = { sessionDir: path.join(wdPath, s.name) }; } } catch { /* 无 */ }
+      }
+    }
+  }
+  return target;
+})();
+const kimiSid = (() => {
+  if (!kimiTarget) return null;
+  try { return JSON.parse(fs.readFileSync(path.join(kimiTarget.sessionDir, 'state.json'), 'utf8')).id ?? null; } catch { return null; }
+})();
+function countKimiTargetUsage() {
+  let count = 0, wires = 0;
+  if (!kimiTarget) return { count, wires };
+  let ags = []; try { ags = fs.readdirSync(path.join(kimiTarget.sessionDir, 'agents'), { withFileTypes: true }); } catch { /* 无 agents */ }
+  for (const a of ags) {
+    const file = path.join(kimiTarget.sessionDir, 'agents', a.name, 'wire.jsonl');
+    try {
+      for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+        if (!line.includes('"usage.record"')) continue;
+        let event; try { event = JSON.parse(line); } catch { continue; }
+        const u = event.usage || {};
+        const metered = ['inputOther', 'output', 'inputCacheRead', 'inputCacheCreation']
+          .some((key) => (Number.isFinite(u[key]) ? u[key] : 0) !== 0);
+        if (metered) count++;
+      }
+      wires++;
+    } catch { /* 无 wire */ }
+  }
+  return { count, wires };
+}
+const kimiRawBefore = countKimiTargetUsage();
+
 // ================================================================ M-U Token 用量（usage-collect 五源，独立对账）
 {
   const [dsh, cc, cx, km, zc, oc, qd, cs] = await Promise.all([scanDshUsage(), scanClaudeUsage(), scanCodexUsage(), scanKimiUsage(), Promise.resolve(scanZcodeUsage()), Promise.resolve(scanOpencodeUsage()), Promise.resolve(scanQoderUsage()), Promise.resolve(scanCursorUsage())]);
@@ -450,39 +544,14 @@ let cx;
       { file: path.basename(f).slice(0, 30), firstTotal, firstLast, lastTotal, inheritedPrefix: firstTotal === null ? null : Math.max(0, firstTotal - firstLast), expect, got: got?.input, byModelSum, totals: cx.totals.input });
   }
 
-  // MU3 Kimi：会话全部 wire（main + agents/<id>/ 子代理流）的 usage.record 原始行数之和 = 扫描器该会话
-  //          requests（每请求一条，直接累加）。2026-10-09 修：此前只数「最新一条 wire」——子代理 wire 比 main
-  //          新时必然对不上（本机实测 main 6 行 + agent-0 12 行 = 18，而旧断言拿 6 比 18）。
+  // MU3 Kimi：扫描前后各独立计数一次（排除四项 token 全 0 的未计量记录）；扫描结果必须落在区间内。
+  // 活跃 wire 的在途追加可解释 after>before，低于下界仍是漏账，高于上界仍是重复计数。
   {
-    let wire = null, mtime = 0;
-    for (const wd of fs.readdirSync(KIMI_ROOT, { withFileTypes: true })) {
-      if (!wd.isDirectory() || wd.name.startsWith('.')) continue;
-      const wdPath = path.join(KIMI_ROOT, wd.name);
-      let ses; try { ses = fs.readdirSync(wdPath, { withFileTypes: true }); } catch { continue; }
-      for (const s of ses) {
-        if (!s.isDirectory() || !s.name.startsWith('session_')) continue;
-        const agentsDir = path.join(wdPath, s.name, 'agents');
-        let ags; try { ags = fs.readdirSync(agentsDir, { withFileTypes: true }); } catch { continue; }
-        for (const a of ags) {
-          const w = path.join(agentsDir, a.name, 'wire.jsonl');
-          try { const m = fs.statSync(w).mtimeMs; if (m > mtime) { mtime = m; wire = { file: w, sessionDir: path.join(wdPath, s.name) }; } } catch { /* 无 */ }
-        }
-      }
-    }
-    let sid = null, rawCount = null, wires = 0;
-    if (wire) {
-      try { sid = JSON.parse(fs.readFileSync(path.join(wire.sessionDir, 'state.json'), 'utf8')).id ?? null; } catch { /* 无 state */ }
-      rawCount = 0;
-      let ags = []; try { ags = fs.readdirSync(path.join(wire.sessionDir, 'agents'), { withFileTypes: true }); } catch { /* 无 agents */ }
-      for (const a of ags) {
-        const w = path.join(wire.sessionDir, 'agents', a.name, 'wire.jsonl');
-        try { rawCount += fs.readFileSync(w, 'utf8').split('\n').filter((l) => l.includes('"usage.record"')).length; wires++; } catch { /* 无 wire */ }
-      }
-    }
-    const got = sid ? km.bySession.get(sid) : null;
-    check('MU3', 'Kimi 用量：requests = 会话全部 wire 的 usage.record 原始行数之和（独立计数对账）',
-      !!got && rawCount !== null && got.requests === rawCount && km.totals.requests > 0,
-      { sid: String(sid).slice(0, 12), got: got?.requests, rawCount, wires });
+    const kimiRawAfter = countKimiTargetUsage();
+    const got = kimiSid ? km.bySession.get(kimiSid) : null;
+    check('MU3', 'Kimi 用量：requests 落在扫描前后已计量 usage.record 计数区间内（含全部子代理 wire）',
+      !!got && got.requests >= kimiRawBefore.count && got.requests <= kimiRawAfter.count && km.totals.requests > 0,
+      { sid: String(kimiSid).slice(0, 12), got: got?.requests, before: kimiRawBefore.count, after: kimiRawAfter.count, wires: kimiRawAfter.wires });
   }
 
   // MU4 ZCode：message.tokens 路径（扫描器 SQL）vs part.step-finish 路径（独立 SQL）——双存储路径互证
@@ -676,10 +745,24 @@ let cx;
       const diskProj = (dshCat.projects || []).filter((p) => p.workspaceId).sort((a, b) => b.sessionCount - a.sessionCount)[0];
       if (diskProj) {
         const snapProj = (snap.catalog.projects || []).find((p) => p.key === diskProj.workspaceId);
-        const diskMains = diskProj.sessions.filter((s) => s.kind !== 'subagent').length;
-        check('MC5', 'workspace 项目合并磁盘全集（快照会话数 ≥ 磁盘主会话数，注册表子集不再截断列表）',
-          !!snapProj && snapProj.sessionCount >= diskMains,
-          { project: diskProj.title, snap: snapProj?.sessionCount, diskMains, registered: diskProj.registeredSessionCount });
+        const wsIndex = readWorkspaceIndex();
+        const visibleMains = diskProj.sessions.filter((s) => s.kind !== 'subagent' && !wsIndex.archived.has(s.sessionId));
+        const snapRows = [...(snap.sessions || []), ...(snap.catalog.history || [])]
+          .filter((s) => s.projectKey === diskProj.workspaceId);
+        const uniqueRows = new Map();
+        const snapDshIds = new Set();
+        for (const s of snapRows) {
+          const id = s.id ?? s.sessionId;
+          if (!id) continue;
+          uniqueRows.set(id, s);
+          if ((s.source || 'dsh') === 'dsh') snapDshIds.add(id);
+        }
+        check('MC5', 'workspace 项目合并未归档磁盘全集与多源会话（成员及计数一致）',
+          !!snapProj && visibleMains.every((s) => snapDshIds.has(s.sessionId))
+            && snapDshIds.size === visibleMains.length && snapProj.sessionCount === uniqueRows.size,
+          { project: diskProj.title, snap: snapProj?.sessionCount, snapDsh: snapDshIds.size,
+            visibleMains: visibleMains.length, archivedExcluded: diskProj.sessions.filter((s) => s.kind !== 'subagent').length - visibleMains.length,
+            registered: diskProj.registeredSessionCount });
       }
       const snapProjs = snap.catalog.projects || [];
       check('MC6', '进行中计数 ≤ 会话总数（liveCount 只数有效进行中状态，不再按 mtime/见过事件计数）',

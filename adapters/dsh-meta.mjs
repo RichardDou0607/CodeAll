@@ -58,9 +58,8 @@ export function findFrameOffsets(buf, from = 0) {
  *  - tornFrames：末尾不完整帧（正在写入）——跳过属正常
  *  - badFrames ：中间完整帧解压失败——计损坏
  */
-export function decodeZstdFrames(buf, { maxFrames = Infinity, maxRecords = Infinity } = {}) {
+export function forEachZstdFrameText(buf, onText, { maxFrames = Infinity } = {}) {
   const offsets = findFrameOffsets(buf);
-  const records = [];
   let frames = 0, tornFrames = 0, badFrames = 0, emptyTail = false, bytesConsumed = 0;
   for (let k = 0; k < offsets.length; k++) {
     if (frames >= maxFrames) break;
@@ -71,21 +70,28 @@ export function decodeZstdFrames(buf, { maxFrames = Infinity, maxRecords = Infin
     try { text = zlib.zstdDecompressSync(buf.subarray(start, end)).toString('utf8'); }
     catch {
       if (isLast) tornFrames++; else badFrames++;
-      continue; // 末帧可能仍在写入：留待下次读取
+      continue;
     }
     frames++;
     bytesConsumed = end;
     // 实测（Node v24.18）：内置 zstdDecompressSync 对**截断帧不抛错**，而是返回空串。
     // DSH 的每一帧至少含 1 条记录，因此「末帧解出 0 字节」= 该帧正在写入（torn tail），跳过即可。
     if (text.length === 0) { if (isLast) emptyTail = true; else badFrames++; continue; }
-    if (records.length < maxRecords) {
-      for (const line of text.split('\n')) {
-        const t = line.trim();
-        if (!t) continue;
-        try { records.push(JSON.parse(t)); } catch { /* 半行：丢弃 */ }
-      }
-    }
+    onText(text);
   }
+  return { frames, tornFrames, badFrames, emptyTail, bytesConsumed };
+}
+
+export function decodeZstdFrames(buf, { maxFrames = Infinity, maxRecords = Infinity } = {}) {
+  const records = [];
+  const { frames, tornFrames, badFrames, emptyTail, bytesConsumed } = forEachZstdFrameText(buf, (text) => {
+    if (records.length >= maxRecords) return;
+    for (const line of text.split('\n')) {
+      const t = line.trim();
+      if (!t) continue;
+      try { records.push(JSON.parse(t)); } catch { /* 半行：丢弃 */ }
+    }
+  }, { maxFrames });
   return { records, frames, tornFrames, badFrames, emptyTail, bytesConsumed };
 }
 

@@ -148,27 +148,37 @@ export function scanZcodeCatalog(opts = {}) {
               time_created, time_updated, time_archived
        FROM session ORDER BY time_updated DESC LIMIT ?`
     ).all(o.maxSessions);
-    // 每会话最近 N 行（message ∪ part）：窗口函数一次取齐，避免逐会话查询
+    // 全表窗口排序会扫描所有历史载荷；逐会话只取最近行及粗状态需要的字段。
     const recent = new Map();
     try {
-      const rows = db.prepare(
-        `SELECT session_id, tbl, id, time_created, time_updated, data FROM (
-           SELECT m.session_id, 'message' AS tbl, m.id, m.time_created, m.time_updated, m.data,
-                  ROW_NUMBER() OVER (PARTITION BY m.session_id ORDER BY m.time_updated DESC, m.id DESC) AS rn
-           FROM message m
-           WHERE m.session_id IN (SELECT id FROM session WHERE time_archived IS NULL AND task_type NOT IN ('selection_side_chat'))
-           UNION ALL
-           SELECT p.session_id, 'part' AS tbl, p.id, p.time_created, p.time_updated, p.data,
-                  ROW_NUMBER() OVER (PARTITION BY p.session_id ORDER BY p.time_updated DESC, p.id DESC) AS rn
-           FROM part p
-           WHERE p.session_id IN (SELECT id FROM session WHERE time_archived IS NULL AND task_type NOT IN ('selection_side_chat'))
-         ) WHERE rn <= ? ORDER BY time_updated DESC, id DESC`
-      ).all(o.coarseRows);
-      for (const r of rows) {
-        if (!recent.has(r.session_id)) recent.set(r.session_id, []);
-        recent.get(r.session_id).push({ tbl: r.tbl, time_created: r.time_created, time_updated: r.time_updated, data: safeJson(r.data) });
+      const messageRecent = db.prepare(
+        `SELECT session_id, 'message' AS tbl, id, time_created, time_updated,
+                CASE WHEN json_valid(data) THEN json_extract(data, '$.role') END AS role,
+                CASE WHEN json_valid(data) THEN json_extract(data, '$.finish') END AS finish,
+                CASE WHEN json_valid(data) THEN json_extract(data, '$.semantics.origin') END AS origin,
+                CASE WHEN json_valid(data) THEN json_extract(data, '$.synthetic') END AS synthetic
+         FROM message WHERE session_id = ? ORDER BY time_updated DESC, id DESC LIMIT ?`
+      );
+      const partRecent = db.prepare(
+        `SELECT session_id, 'part' AS tbl, id, time_created, time_updated,
+                CASE WHEN json_valid(data) THEN json_extract(data, '$.type') END AS event_type,
+                CASE WHEN json_valid(data) THEN json_extract(data, '$.state.status') END AS tool_status,
+                CASE WHEN json_valid(data) THEN json_extract(data, '$.state.error') END AS tool_error
+         FROM part WHERE session_id = ? ORDER BY time_updated DESC, id DESC LIMIT ?`
+      );
+      const project = (r) => ({
+        tbl: r.tbl, time_created: r.time_created, time_updated: r.time_updated,
+        data: r.tbl === 'message'
+          ? { role: r.role, finish: r.finish, semantics: { origin: r.origin }, synthetic: !!r.synthetic }
+          : { type: r.event_type, state: { status: r.tool_status, error: r.tool_error } },
+      });
+      const byRecent = (a, b) => ((b.time_updated ?? -Infinity) - (a.time_updated ?? -Infinity)) || (a.id === b.id ? 0 : a.id < b.id ? 1 : -1);
+      for (const s of sessions) {
+        if (s.time_archived != null || s.task_type == null || s.task_type === SIDE_CHAT) continue;
+        const rows = [...messageRecent.all(s.id, o.coarseRows), ...partRecent.all(s.id, o.coarseRows)];
+        recent.set(s.id, rows.sort(byRecent).map(project));
       }
-    } catch { /* 窗口函数不可用等：粗状态整体退回 unknown */ }
+    } catch { recent.clear(); }
     // 模型/思考档：每会话取最新一条 runtime/model_selection
     const modelBySid = new Map();
     try {
