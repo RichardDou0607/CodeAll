@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { test } from 'node:test';
-import { createUiSandbox } from './test-ui-dom.mjs';
+import { createUiSandbox, extractMainScript } from './test-ui-dom.mjs';
 import { windowFixture } from './test-ui-fixture.mjs';
 
 const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/let es=null;[\s\S]*$/, '');
+const script = extractMainScript(html).replace(/let es=null;[\s\S]*$/, '');
 const now = new Date(2026, 9, 8, 14).getTime();
 const sourceNames = ['dsh', 'claude-code', 'codex', 'kimi-code', 'zcode'];
 const tick = () => new Promise(resolve => setImmediate(resolve));

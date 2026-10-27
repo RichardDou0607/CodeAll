@@ -35,6 +35,7 @@ import { CLI_TARGETS, availableCliChannels, deliverControl, deliverCreateViaCli,
 import { loadModelRegistry, validateModelSelection } from '../adapters/model-registry.mjs';
 import net from 'node:net';
 import crypto from 'node:crypto';
+import { readBody } from './http-request.mjs';
 
 /** 多源会话目录（M-C）：DSH（workspace 注册表）+ Claude Code（目录即项目）+ Codex（session_meta.cwd 归并）+ ZCode（sqlite session.path）。 */
 const SOURCE_LABEL = { dsh: 'DSH', 'claude-code': 'Claude Code', codex: 'Codex', 'kimi-code': 'Kimi Code', zcode: 'ZCode', opencode: 'OpenCode', qoder: 'Qoder', cursor: 'Cursor' };
@@ -368,13 +369,13 @@ async function refreshUsage(force = false) {
 
 // ---------- Coding Plan 订阅使用情况（2026-10-26，用户定向「接入全部主流厂商的 coding plan 使用情况」） ----------
 // 身份/配额层 = 各家本地只读证据（模块内 60s 缓存）；用量层 = 透传 usageCache.overview 的时间窗聚合。
-// 快照不带该块（无会话身份、随用量完成节奏走），UI 打开用量页时经 /api/plan-usage 懒加载——与日历同模式。
+// 快照不带该块（无会话身份、随用量完成节奏走）；UI 打开用量页时经 /api/plan-usage 只读缓存，分钟/手动刷新后重拉。
 let planUsageCache = { at: 0, busy: false, data: null };
 async function refreshPlanUsage(force = false) {
   if (planUsageCache.busy) return;
   planUsageCache.busy = true;
   try {
-    planUsageCache.data = await scanPlanUsage({ usage: usageCache.data, refresh: force });
+    planUsageCache.data = await scanPlanUsage({ usage: usageCache.data, refresh: force, forceOnline: force, awaitOnline: force });
     planUsageCache.at = Date.now();
   } catch (e) {
     planUsageCache.data = planUsageCache.data ?? { summary: { total: 0 }, redline: '', plans: [], error: String(e?.message || e).slice(0, 120) };
@@ -1306,11 +1307,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'POST' && url.pathname === '/api/open') {
-    let body = '';
-    req.on('data', c => { body += c; });
-    req.on('end', async () => {
+    readBody(req, res, async (body) => {
       let sessionId = '';
-      try { sessionId = String(JSON.parse(body).sessionId || ''); } catch {}
+      try { sessionId = String(JSON.parse(body).sessionId || ''); } catch {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid-json' }));
+        return;
+      }
       // 路由按会话来源分流，**先**定位再决定通道：CLI 后端固定走 Terminal 续接，
       // 插件在线不得截走（qa H1：此前插件优先导致 Claude/Codex/Kimi/ZCode 的「打开」全被
       // 送进 DSH 插件、必然 open-rejected，界面表现为点击无反应）。插件只承接 DSH 会话与
@@ -1358,9 +1361,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'POST' && url.pathname === '/api/new') {
-    let body0 = '';
-    req.on('data', c => { body0 += c; });
-    req.on('end', async () => {
+    readBody(req, res, async (body0) => {
       let payload0 = {};
       try { payload0 = JSON.parse(body0); } catch {}
       const cwd = String(payload0.cwd || '').trim();
@@ -1443,11 +1444,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/plan-usage') {
-    // Coding Plan 订阅使用情况：15 家主流厂商（身份 × 本地用量窗口 × 配额/余额）。
-    // 只重算轻量层（身份+配额+GLM 账本窗口，毫秒级，不扫用量文件）；用量窗口随分钟节拍/手动刷新走。
-    if (!planUsageCache.busy && (!planUsageCache.data || Date.now() - planUsageCache.at > 60_000)) {
-      await refreshPlanUsage();
-    }
+    // Coding Plan 订阅使用情况：17 家主流厂商（身份 × 本地用量窗口 × 配额/余额；2026-10-27 起 +OpenCode Zen/Go）。
+    // 与 /api/usage、/api/usage/calendar 同口径：无参只读缓存；分钟节拍或 /api/usage?refresh=1 负责重算。
+    // ?refresh=1（订阅页手动刷新）：强制在线档位/配额层并等待结果（含 Qoder 令牌收获，最长 ~40s）。
+    if (url.searchParams.get('refresh') === '1' && !planUsageCache.busy) await refreshPlanUsage(true);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(planUsageCache.data
       ? { generatedAt: planUsageCache.at, refreshing: planUsageCache.busy, ...planUsageCache.data }
@@ -1467,19 +1467,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'POST' && url.pathname === '/api/input') {
-    let body = '';
-    let oversized = false;
-    req.on('data', c => {
-      body += c;
-      if (!oversized && Buffer.byteLength(body) > 8192) {   // 契约 §2.3 口径=8192 UTF-8 字节；回 413 而不是裸断连
-        oversized = true;
-        res.writeHead(413, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'oversized', detail: '输入超过 8192 字节上限' }));
-        setTimeout(() => { try { req.destroy(); } catch {} }, 50);
-      }
-    });
-    req.on('end', async () => {
-      if (oversized) return;
+    readBody(req, res, async (body) => {
       let text = '', askedTarget = '', askedModel = '', askedReasoning = '';
       try { const b = JSON.parse(body); text = String(b.text || ''); askedTarget = String(b.sessionId || '').trim(); askedModel = String(b.model || '').trim(); askedReasoning = String(b.reasoningEffort || '').trim(); } catch { text = String(body).trim(); }
       text = text.trim();
@@ -1514,7 +1502,12 @@ const server = http.createServer(async (req, res) => {
   }
   // ---------- 队列生命周期（qa A-1：删除单条 / 清空 / 重发） ----------
   if (req.method === 'DELETE' && url.pathname.startsWith('/api/input/')) {
-    const id = decodeURIComponent(url.pathname.slice('/api/input/'.length));
+    let id = '';
+    try { id = decodeURIComponent(url.pathname.slice('/api/input/'.length)); } catch {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: 'invalid-session-id' }));
+      return;
+    }
     const n = id ? removeInputs(i => i.id === id) : 0;
     broadcast();
     res.writeHead(n ? 200 : 404, { 'content-type': 'application/json' });
@@ -1531,9 +1524,7 @@ const server = http.createServer(async (req, res) => {
   // 按会话/目标组清空：服务端按 targetKey 全量删除（快照窗口外的条目也要删得到，
   // 此前 UI 从 8 条快照里挑 id 逐个 DELETE，200 条队列清一次剩 192 条）
   if (req.method === 'POST' && url.pathname === '/api/queue/group/clear') {
-    let body0 = '';
-    req.on('data', c => { body0 += c; });
-    req.on('end', () => {
+    readBody(req, res, (body0) => {
       let key = '';
       try { key = String((JSON.parse(body0) || {}).key || ''); } catch { /* ignore */ }
       if (!key) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'missing-key' })); return; }
@@ -1547,23 +1538,28 @@ const server = http.createServer(async (req, res) => {
   }
   const mResend = url.pathname.match(/^\/api\/input\/([^/]+)\/resend$/);
   if (req.method === 'POST' && mResend) {
-    const id = decodeURIComponent(mResend[1]);
-    const original = readInputFile().find(i => i.id === id);
-    if (original?.accepted) {
-      let confirmed = false;
-      try { confirmed = JSON.parse(await new Promise(resolve => {
-        let raw = ''; req.on('data', c => { raw += c; }); req.on('end', () => resolve(raw));
-      }))?.confirm === true; } catch { /* reject below */ }
-      if (!confirmed) {
-        res.writeHead(409, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: 'confirm-required', detail: '消息可能已被目标接收，请核对会话后确认重发' }));
+    readBody(req, res, async (raw) => {
+      let id = '';
+      try { id = decodeURIComponent(mResend[1]); } catch {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'invalid-session-id' }));
         return;
       }
-    }
-    const result = await retryInput(id);
-    res.writeHead(result.missing ? 404 : result.busy ? 409 : result.item.status === 'delivered' ? 200 : result.item.status === 'pending' ? 202 : 502, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(result.missing ? { ok: false, error: 'not-found' } : result.busy ? { ok: false, error: 'retry-in-progress' }
-      : { ok: result.item.status === 'delivered' || result.item.status === 'pending', item: result.item, removedOriginal: result.removedOriginal }));
+      const original = readInputFile().find(i => i.id === id);
+      if (original?.accepted) {
+        let confirmed = false;
+        try { confirmed = JSON.parse(raw)?.confirm === true; } catch { /* reject below */ }
+        if (!confirmed) {
+          res.writeHead(409, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'confirm-required', detail: '消息可能已被目标接收，请核对会话后确认重发' }));
+          return;
+        }
+      }
+      const result = await retryInput(id);
+      res.writeHead(result.missing ? 404 : result.busy ? 409 : result.item.status === 'delivered' ? 200 : result.item.status === 'pending' ? 202 : 502, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(result.missing ? { ok: false, error: 'not-found' } : result.busy ? { ok: false, error: 'retry-in-progress' }
+        : { ok: result.item.status === 'delivered' || result.item.status === 'pending', item: result.item, removedOriginal: result.removedOriginal }));
+    });
     return;
   }
   res.writeHead(404); res.end('not found');

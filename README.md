@@ -75,7 +75,8 @@ node demo/test-window-actions.mjs     # 交互行为回归（14 项）
 node demo/test-mini.mjs               # 迷你条渲染自检（12 项）
 node demo/test-open-routing.mjs       # 打开路由回归（CLI 走 Terminal、DSH/未知 ID 交插件）
 node demo/test-follow-budget.mjs      # 跟随器预算回归（mtime 优先 + LRU 淘汰，claude/codex/kimi）
-node demo/test-service-hardening.mjs  # 服务健壮性（日志目录不可写不崩 + 无 DSH 日志仍有 2s 心跳）
+node demo/test-service-hardening.mjs  # 服务健壮性（请求体上限/异常响应/ID 解码 + 日志目录容错 + SSE 心跳）
+node demo/test-bundle-service.mjs     # 独立安装包暂存回归（全部相对导入均存在）
 node demo/test-usage-calendar.mjs     # 用量日历自检
 node demo/test-plan-usage.mjs         # Coding Plan 订阅面板回归（身份/隐私/账本/窗口/UI）
 node scripts/multi-source-check.mjs         # 扩展多源检查（含 ZCode 性能阈值；非当前发布门槛）
@@ -199,7 +200,8 @@ node demo/test-window-actions.mjs     # Interaction behavior regression (14 item
 node demo/test-mini.mjs               # Mini bar render self-check (12 items)
 node demo/test-open-routing.mjs       # Open-routing regression (CLI → Terminal; DSH/unknown IDs → plugin)
 node demo/test-follow-budget.mjs      # Follower budget regression (mtime-first + LRU eviction; claude/codex/kimi)
-node demo/test-service-hardening.mjs  # Service hardening (unwritable log dir doesn't crash; 2 s heartbeat without DSH logs)
+node demo/test-service-hardening.mjs  # Service hardening (body limits/error responses/ID decoding + log-dir faults + SSE heartbeat)
+node demo/test-bundle-service.mjs     # Standalone bundle staging regression (all relative imports present)
 node demo/test-usage-calendar.mjs     # Usage calendar self-check
 node demo/test-plan-usage.mjs         # Coding Plan panel regression (identity/privacy/ledger/windows/UI)
 node scripts/multi-source-check.mjs         # Extended multi-source check (incl. ZCode perf threshold; not a current release gate)

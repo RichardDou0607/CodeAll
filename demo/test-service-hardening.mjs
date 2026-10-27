@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-// 服务健壮性回归（qa M2/M4）：
-//  M2：zcode 管道日志目录不可写（~/.agent-pet/cli-control 被占为普通文件）时，新建投递
-//      必须给出正常响应——修复前 mkdirSync 抛出会变成 unhandledRejection 直接崩服务。
-//  M4：无 DSH 会话日志的机器上，SSE 仍要有 2s 心跳快照（计时/相对时间不冻结）。
+// 服务健壮性回归：请求体上限（Content-Length / chunked）、业务异常与畸形 ID 响应、
+// zcode 日志目录不可写（M2）、无 DSH 日志仍有 2s SSE 心跳（M4）。
 // 隔离 HOME + mock zcode + 合成 DB，不触碰真实数据与真实 Agent。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +35,10 @@ db.close();
 // M2 场景：管道日志目录被占成普通文件 → fs.mkdirSync(CONTROL_DIR) 必然失败
 fs.mkdirSync(path.join(home, '.agent-pet'), { recursive: true });
 fs.writeFileSync(path.join(home, '.agent-pet', 'cli-control'), 'not-a-dir');
+fs.writeFileSync(path.join(home, '.agent-pet', 'input-queue.jsonl'), JSON.stringify({
+  id: 'in-retry-error', text: 'hello', at: Date.now(), status: 'queued', accepted: false,
+  sessionId: 'sess_fixture_zc', source: 'zcode', targetKey: 'sess:sess_fixture_zc',
+}) + '\n');
 
 const port = await new Promise((resolve, reject) => {
   const s = net.createServer();
@@ -82,6 +85,68 @@ try {
   }
   assert.ok(ready, '服务未就绪：' + output.slice(-500));
   const token = fs.readFileSync(path.join(home, '.agent-pet', 'token'), 'utf8').trim();
+  const coldPlan = await (await fetch(base + '/api/plan-usage')).json();
+  assert.equal(coldPlan.pending, true, '无参首次调用 /api/plan-usage 只能读缓存，不得自行重算计划层');
+
+  const bodyRoutes = ['/api/open', '/api/new', '/api/input', '/api/queue/group/clear', '/api/input/missing/resend'];
+  for (const route of bodyRoutes) {
+    const oversized = await fetch(base + route, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-pet-token': token },
+      body: JSON.stringify({ padding: 'x'.repeat(8193) }),
+    });
+    assert.equal(oversized.status, 413, route + ' 必须在读取完整请求体前拒绝超限输入');
+    assert.equal((await oversized.json()).error, 'oversized', route);
+  }
+  const chunked = await new Promise((resolve, reject) => {
+    const request = http.request(base + '/api/open', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-pet-token': token },
+    }, response => {
+      let raw = '';
+      response.on('data', chunk => { raw += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, body: JSON.parse(raw) }));
+    });
+    request.on('error', reject);
+    request.write('{"sessionId":"');
+    request.write('x'.repeat(8193));
+    request.end('"}');
+  });
+  assert.equal(chunked.status, 413, '无 Content-Length 的 chunked 请求也必须按实际字节拒绝');
+  assert.equal(chunked.body.error, 'oversized');
+  const invalidJson = await fetch(base + '/api/open', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-pet-token': token },
+    body: '{"sessionId":',
+  });
+  assert.equal(invalidJson.status, 400, '损坏 JSON 不得被当成空会话 ID 交给打开路由');
+  assert.equal((await invalidJson.json()).error, 'invalid-json');
+
+  const retryTmp = path.join(home, '.agent-pet', 'input-queue.jsonl.tmp');
+  fs.mkdirSync(retryTmp);
+  let retryResult = null, retryError = null;
+  try {
+    const r = await fetch(base + '/api/input/in-retry-error/resend', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-pet-token': token },
+      body: '{}', signal: AbortSignal.timeout(3000),
+    });
+    retryResult = { status: r.status, body: await r.json() };
+  } catch (e) { retryError = e; }
+  fs.rmSync(retryTmp, { recursive: true, force: true });
+  assert.equal(retryResult?.status, 500, '业务异常必须返回响应，不能让客户端等待超时：' + String(retryError || ''));
+  assert.equal(retryResult?.body.error, 'internal-error');
+
+  let malformedResult = null, malformedError = null;
+  try {
+    const r = await fetch(base + '/api/input/%E0%A4%A', {
+      method: 'DELETE', headers: { 'x-pet-token': token }, signal: AbortSignal.timeout(3000),
+    });
+    malformedResult = { status: r.status, body: await r.json() };
+  } catch (e) { malformedError = e; }
+  assert.equal(malformedResult?.status, 400, '畸形会话 ID 必须返回 400，不能让客户端等待超时：' + String(malformedError || ''));
+  assert.equal(malformedResult?.body.error, 'invalid-session-id');
+  const malformedResend = await fetch(base + '/api/input/%E0%A4%A/resend', {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-pet-token': token }, body: '{}',
+  });
+  assert.equal(malformedResend.status, 400, '重发路径也应把畸形 ID 视为客户端错误');
+  assert.equal((await malformedResend.json()).error, 'invalid-session-id');
 
   // ① M2：日志目录不可写时的新建投递 → 服务必须活着并给出正常 JSON 响应
   let created = null, postErr = null;
@@ -103,7 +168,7 @@ try {
   const snaps = await countSnapshots(3200);
   assert.ok(snaps >= 2, 'M4：SSE 快照数不足（' + snaps + '）——无 DSH 日志时计时会冻结');
 
-  console.log('服务健壮性：zcode 日志目录不可写不崩（M2）+ 无 DSH 日志仍有 2s 心跳（M4，3.2s 内 ' + snaps + ' 帧）通过');
+  console.log('服务健壮性：写路由 body 上限（含 chunked）+ 异常/畸形 ID 响应 + 日志目录容错（M2）+ SSE 心跳（M4，3.2s 内 ' + snaps + ' 帧）通过');
 } finally {
   child.kill('SIGKILL');
   await new Promise((resolve) => {

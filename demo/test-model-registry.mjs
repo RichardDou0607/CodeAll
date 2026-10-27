@@ -44,6 +44,9 @@ try {
   assert.ok(registry.codex.models[0].reasoningEfforts.includes('xhigh'));
   assert.ok(registry.codex.models[0].reasoningEfforts.includes('ultra'));
   assert.equal(validateModelSelection(registry, 'codex', 'test-model', 'ultra').ok, true);
+  assert.equal(registry.opencode.models[0].value, 'opencode/test-model');
+  assert.equal(registry.cursor.models[0].value, 'test-cursor-model');
+  assert.equal(registry.qoder.models[0].value, 'test-qoder-model');
   assert.equal(cached, 1);
   assert.equal(fresh, 0);
   assert.equal(invalid.available, false);

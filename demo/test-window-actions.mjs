@@ -4,11 +4,11 @@
  */
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { createUiSandbox } from './test-ui-dom.mjs';
+import { createUiSandbox, extractMainScript } from './test-ui-dom.mjs';
 import { windowFixture } from './test-ui-fixture.mjs';
 
 const html = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
-let script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+let script = extractMainScript(html);
 script = script.replace(/let es=null;[\s\S]*$/, '');
 
 const { sandbox, getEl, element, preferences, requests, themes, media } = createUiSandbox(html);

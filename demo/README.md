@@ -72,6 +72,8 @@ curl -X POST http://127.0.0.1:7799/api/input \
 
 另有两道防线：请求 Host 必须是 `127.0.0.1/localhost`（DNS rebinding 防线）；GET 类接口（state/catalog/stream）只读、免 token（Tauri 外壳探针兼容）。
 
+所有读取请求体的写路由共用 **8192 字节**上限，超限返回 `413 oversized`；损坏的会话 ID 编码返回 `400 invalid-session-id`，打开接口的 JSON 语法错误返回 `400 invalid-json`。业务处理异常统一返回 `500 internal-error`，不再只记录全局异常而让客户端无限等待。
+
 **队列文件生命周期**：`~/.agent-pet/input-queue.jsonl` 权限 0600、原子写（tmp+rename）；超过 **200 条或 1MB** 自动丢弃最旧；删除/清空即时重写文件。ZCode 被接受的消息在队列中保持「执行中」至回合终态；服务重启后未决项标为结果未知，需核对会话后确认重发。
 
 ## 「打开已存在会话 / 新建会话 / 选择投递目标」的真实状态

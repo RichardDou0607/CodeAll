@@ -716,9 +716,8 @@ let cx;
       // ---- MU5/MU6：Token 用量端到端（framed 快照 usage 块 + /api/usage 明细端点）----
       {
         let snapU = null, snapFresh = null;
-        // 像真实客户端一样先打 /api/usage 懒触发（PERF-3：/api/state 不触发扫描；无客户端时开机 5min 兜底才扫
-        // ——2026-10-27 实测 MU5 只轮 /api/state 会空等 120s+，懒触发后冷扫 ~10s 出数）
-        try { await fetch('http://127.0.0.1:' + PORT + '/api/usage'); } catch { /* 触发失败照旧轮询 */ }
+        // 当前刷新口径（docs/29 §7）：无参 /api/usage 只读缓存；显式 refresh=1 才触发手动重扫。
+        try { await fetch('http://127.0.0.1:' + PORT + '/api/usage?refresh=1'); } catch { /* 触发失败照旧轮询 */ }
         for (let i = 0; i < 60 && !snapU; i++) {           // 首轮全量 ~2s（1.1GB 转录）；冷启动+并发负载下首扫可超 40s → 预算 120s
           try {
             const r = await fetch('http://127.0.0.1:' + PORT + '/api/state');

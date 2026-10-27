@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { createHub } from './frame.mjs';
-import { createUiSandbox } from './test-ui-dom.mjs';
+import { createUiSandbox, extractMainScript } from './test-ui-dom.mjs';
 import { mapZcodeRow, coarseStateFromZcodeRows, isCancelledToolError } from '../adapters/zcode-adapter.mjs';
 
 const checks = [];
@@ -88,7 +88,7 @@ check('hub：turn.end(aborted) → 保持 aborted（非 idle）', hub.sessions.g
 
 // ---------- ③ mini.html：手动停止显示与不抢占 ----------
 const html = fs.readFileSync(new URL('./mini.html', import.meta.url), 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1].replace(/let es=null;[\s\S]*$/, '');
+const script = extractMainScript(html).replace(/let es=null;[\s\S]*$/, '');
 const ui = createUiSandbox(html);
 ui.sandbox.window.__PET_TOKEN__ = 't';
 const sandbox = ui.sandbox;

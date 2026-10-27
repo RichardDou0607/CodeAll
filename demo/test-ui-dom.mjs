@@ -1,4 +1,15 @@
 // Minimal event-capable DOM for the self-contained window/mini regression scripts.
+
+/** 提取主脚本块：所有无属性 <script> 里**最长**的一块。
+ *  不能取「第一个匹配」——2026-10-27 实测踩坑：页首带属性 script 的注释文字里出现字面
+ *  「<script>」时，/<script>([\s\S]*?)<\/script>/ 的首个命中落在注释里，截出垃圾块。
+ *  主脚本是页面里远大于其余的纯 script 块，按最长取对所有现存页面（window/mini）稳定。 */
+export function extractMainScript(html) {
+  const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  if (!blocks.length) throw new Error('extractMainScript: 无纯 <script> 块');
+  return blocks.reduce((a, b) => (b.length > a.length ? b : a));
+}
+
 export function createUiSandbox(html) {
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(m => m[1]));
   const store = new Map(), preferences = new Map(), requests = [];

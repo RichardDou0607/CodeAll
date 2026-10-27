@@ -10,6 +10,18 @@ if (binary === 'kimi' && args.join(' ') === 'provider list --json') {
   process.stdout.write(fs.readFileSync(process.env.MOCK_KIMI_MODELS_FILE, 'utf8'));
   process.exit(0);
 }
+if (binary === 'opencode' && args.join(' ') === 'models') {
+  process.stdout.write('opencode/test-model\nopencode-go/test-model\n');
+  process.exit(0);
+}
+if (binary === 'cursor-agent' && args.join(' ') === '--list-models') {
+  process.stdout.write('test-cursor-model - Test Cursor Model\n');
+  process.exit(0);
+}
+if (binary.startsWith('qoderclicn') && args.join(' ') === '--list-models') {
+  process.stdout.write('MODEL\ntest-qoder-model\n');
+  process.exit(0);
+}
 fs.appendFileSync(process.env.MOCK_CLI_CALLS, JSON.stringify({
   binary,
   args,

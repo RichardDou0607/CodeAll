@@ -8,7 +8,7 @@
  *   lib.rs resolve_repo_root()/resolve_node() 在仓库/系统路径都找不到时回退到该目录。
  *
  * 目录布局 = 仓库根的子集（framed.mjs 全部走 import.meta.url 相对寻址，可整体搬迁）：
- *   app/demo/{framed.mjs, frame.mjs, window.html, mini.html, assets/**}
+ *   app/demo/{framed.mjs, frame.mjs, http-request.mjs, window.html, mini.html, assets/**}
  *   app/adapters/*.mjs（顶层适配器）
  *   app/apps/shell/tools/{pet-input-send.mjs, mount-dsh-plugin.sh}
  *   app/plugins/dsh-pet/**（DSH 投递插件，可选功能）
@@ -47,7 +47,7 @@ fs.rmSync(STAGE, { recursive: true, force: true });
 fs.mkdirSync(STAGE, { recursive: true });
 
 // 1) 服务代码子集
-for (const f of ['framed.mjs', 'frame.mjs', 'window.html', 'mini.html']) {
+for (const f of ['framed.mjs', 'frame.mjs', 'http-request.mjs', 'window.html', 'mini.html']) {
   copyFile(path.join(ROOT, 'demo', f), path.join('demo', f));
 }
 const assets = copyTree(path.join(ROOT, 'demo', 'assets'), 'demo/assets');

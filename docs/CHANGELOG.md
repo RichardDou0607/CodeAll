@@ -1,6 +1,14 @@
 # 变更日志（文档与契约）
 
 ## 2026-10-27（十一）
+### 在线档位/配额层上线【v0.1.4 增补】：官方端点真值取代人工标注（用户定向「想办法找到具体的 coding plan 来源，而不是通过人工标注；尝试通过 api-key 查找」——明确授权使用本地凭证做只读查询）
+
+- **三家官方端点实测打通（2026-10-27 [A]）**：Kimi——OAuth 凭证明文可读，`GET api.kimi.com/coding/v1/me`（**user_level_name=Pro**）+ `/coding/v1/usages`（5h 窗 used/limit/remaining + 月度总/代码 used_ratio + 重置时间 + 加油包）；GLM——zcode credentials 为确定性回退密钥加密（docs/40 §3.12 算法本地解密），`bigmodel.cn/api/monitor/usage/quota/limit`（**level=max**，unit3=5h credits 3576/28000 · unit6=周 39670/140000）+ `/api/biz/subscription/list`（**GLM Coding Max**，VALID 至 2027-01）；Qoder——dt- 令牌仅在 CLI 进程内存，经一次性本地 MITM 收获（spawn `qoderclicn --list-models` + HTTPS_PROXY 指向本地代理、仅解密 gateway/openapi 两域；令牌即用即弃）→ `gateway.qoder.com.cn/api/v2/user/plan`（**plan_tier_name=Free**）+ `/api/v2/quota/usage`（加油包 credits 558/2000 · 28%）。
+- **实现（plan-usage.mjs）**：三家 fetcher + `refreshOnlineLayer`（缓存 `~/.agent-pet/plan-online-cache.json` 0600、**零 token 落盘**、30min TTL、PET_PLAN_ONLINE=0 可关）；档位优先级 **在线 > 本地证据 > 用户标注**（planNameSource=online，标注降为兜底）；在线配额附到 plan（onlineQuotas）；身份缓存 24h 内有效、超龄弃用。framed：订阅页 ?refresh=1 强制在线层并等待；分钟节拍后台刷新（不阻塞）。
+- **UI**：订阅页卡片在线配额条（5h/周/月·总/月·代码/credits——used/limit·百分比·进度条·重置时间）+ 「在线」徽标（悬停显抓取时间与更新节奏）+ GLM 订阅有效期行。
+- **红线纪律（凭证边界调整记录）**：原「不持凭证调云 API」为产品默认；本次用户明确授权后仅放开**只读档位/配额查询**（与厂商 CLI 自带 /usage、/plan 同源端点）。凭证只在内存过境——不写日志、不落缓存；缓存文件断言无 token 形状字符串（测试覆盖）。
+- **回归**：test-plan-usage 4/4（新增在线优先级/配额条/缓存注入断言）；全量 demo 25/25 通过（含并行会话修复的 headless-cap/model-registry 与新增 OpenCode Zen/Go 两厂商）；实机在线层 4 秒拉齐三家真值。
+
 ### OpenCode Zen / Go 两网关接入订阅面板【v0.1.4 增补，未发版】：Zen（按量网关）+ Go（$10/月订阅）如实分列（用户定向「还差一个 opencode zen 的服务，如果有 opencode go 则添加」）
 
 - **厂商注册表 15→17（plan-usage.mjs）**：新增 `opencode-zen`（OpenCode Zen 按量网关，providerID=`opencode`）与 `opencode-go`（OpenCode Go 订阅，providerID=`opencode-go`，官方模型串 `opencode-go/kimi-k3` 实证）。身份探针：auth.json provider 键名（值不读）判登录态；无登录态时回看 opencode.db 是否有经该网关的历史会话（session_v2.model / session_message.model.providerID）——有历史无登录如实标「已安装·未登录」+ 证据行，绝不把历史用量冒充当前订阅。Go 限额口径（官方公开：5h=月限 20%、周=50%、月=100%）只在云端 Console，本地不落盘。

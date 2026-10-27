@@ -19,7 +19,7 @@
  */
 import fs from 'node:fs';
 import vm from 'node:vm';
-import { createUiSandbox } from './test-ui-dom.mjs';
+import { createUiSandbox, extractMainScript } from './test-ui-dom.mjs';
 import { windowFixture } from './test-ui-fixture.mjs';
 
 let pass = 0, fail = 0;
@@ -31,7 +31,7 @@ const countOf = (html, label) => { const m = new RegExp(label + ' (\\d+)').exec(
 
 // ---------- window.html：真实内联脚本（去掉自动连接，保留 tickUpdate 定义） ----------
 const windowHtml = fs.readFileSync(new URL('./window.html', import.meta.url), 'utf8');
-let script = windowHtml.match(/<script>([\s\S]*?)<\/script>/)[1];
+let script = extractMainScript(windowHtml);
 script = script.replace(/function connect\(\)\{[\s\S]*$/, '');
 
 // 最小 DOM 不建树：为 render/tick 的 querySelectorAll + textContent 补写提供桩元素（模拟浏览器子元素）
@@ -135,7 +135,7 @@ check('T4-b full snapshot render：分类快照随 full 重建（__CAT_MAP__ 为
 
 // ---------- T5：mini.html tick 计时路径（页面内按 ts 重算 elapsedMs 并重渲染） ----------
 const miniHtml = fs.readFileSync(new URL('./mini.html', import.meta.url), 'utf8');
-const miniScript = miniHtml.match(/<script>([\s\S]*?)<\/script>/)[1];
+const miniScript = extractMainScript(miniHtml);
 const miniHarness = createUiSandbox(miniHtml);
 const miniSandbox = miniHarness.sandbox;
 let esInstance = null;

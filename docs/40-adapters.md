@@ -868,7 +868,7 @@ $ node scripts/check-fixtures.mjs /tmp/t10-pet.jsonl
 | 用量 | 复用 usage-collect 八源 overview（today/d7/d30/all 四窗透传精确/请求级/估算口径）；GLM 额外用 ZCode `db.sqlite` 的 `model_usage` 表按 provider 聚合（`account:*` 前缀 = 登录态 coding plan 计费；一条 GROUP BY 同时产出四窗的 requests/input/output/cache 列），OpenCode 按 `glm*` 模型名近似并入 | Qoder/Cursor token 在云端（既有口径）；Copilot 不在八源内 → usage.kind='none' |
 | 配额 | 仅 DeepSeek：`~/.dsh/.dshw-usage.json` 余额账本 → `balance/todayCost/d7Cost/d30Cost/allCost/daily[14]/events[5]`；**1 单位 = 1e-8 元**（debitUnits 1,676,000,000 ≙ 16.76 元、creditUnits 50,000,000,000 ≙ 充值 500 元，实测对账） | 其余厂商云端配额本地无缓存——**不持凭证调厂商 API（红线），如实标「云端配额本地不落盘」** |
 
-**接线**：framed `planUsageCache`（身份层模块内 60s 缓存）→ `refreshUsage` 完成后跟随刷新 → `GET /api/plan-usage`（懒触发，同 `/api/usage` 模式；快照不带该块）。UI 用量页「Coding Plan 使用情况」表格：状态徽标 / 计划身份 / 四时间窗 / 配额·余额 / 未安装合并行 / 每行 details 证据与明细；打开懒加载 + usage.generatedAt 变化即重拉（与日历同模式）。
+**接线**：framed `planUsageCache`（身份层模块内 60s 缓存）→ `refreshUsage` 完成后跟随刷新 → `GET /api/plan-usage`（无参只读缓存；分钟节拍/手动 `refresh=1` 重算；快照不带该块）。UI 用量页「Coding Plan 使用情况」表格：状态徽标 / 计划身份 / 四时间窗 / 配额·余额 / 未安装合并行 / 每行 details 证据与明细；打开时读取缓存 + usage.generatedAt 变化即重拉（与日历同模式）。
 
 **注册表（15 家）**：GLM Coding Plan / DeepSeek / Claude / ChatGPT(Codex) / Kimi For Coding / Qoder / Cursor / GitHub Copilot（8 家 probe 提取器）+ Gemini(Antigravity) / Qwen Code / iFlow / MiniMax / Trae / Windsurf / CodeBuddy（7 家安装检测，本机均零痕迹）。
 

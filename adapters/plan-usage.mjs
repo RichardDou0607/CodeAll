@@ -27,6 +27,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { spawn, execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { openZcodeDb, ZCODE_DB } from './zcode-adapter.mjs';
 
 const HOME = process.env.PLAN_USAGE_HOME || os.homedir();
@@ -335,6 +337,290 @@ function opencodeProviders(o) {
   return auth ? Object.keys(auth) : [];
 }
 
+/** OpenCode Zen（provider=opencode，按量网关）/ OpenCode Go（provider=opencode-go，订阅）：
+ *  登录态看 auth.json provider 键名（值不读）；无登录态但 opencode 本机在用时，回看
+ *  opencode.db 小表（session_v2.model / session_message.model.providerID）是否有经该网关的
+ *  历史会话——有则如实标注「历史在用、当前未登录」，绝不把历史用量冒充当前订阅。 */
+function opencodeGatewayIdentity(providerId, o) {
+  const evidence = [], notes = [];
+  const auth = readJson(path.join(HOME, '.local/share/opencode/auth.json'));
+  const providers = auth ? Object.keys(auth) : [];
+  const opencodeInstalled = fileExists(path.join(HOME, '.opencode/bin/opencode')) || fileExists(path.join(HOME, '.local/share/opencode'));
+  if (providers.includes(providerId)) {
+    evidence.push({ file: '~/.local/share/opencode/auth.json', field: 'provider 键名（值不读）', value: providerId + ' · ' + (auth[providerId]?.type ?? '已登录') });
+    notes.push(providerId === 'opencode-go'
+      ? 'Go/Go Plus 订阅档与限额（官方口径：5h=月限 20%、周=50%、月=100%）在云端 Console，本地不落盘——不持凭证调云 API'
+      : 'Zen 为按量计费（Console 余额），本地无余额缓存');
+    return { status: providerId === 'opencode-go' ? 'active' : 'api-billing', planName: providerId === 'opencode-go' ? 'OpenCode Go（登录态）' : 'OpenCode Zen（按量）', account: null, evidence, notes };
+  }
+  let histSessions = null, histMsgs = null;
+  if (opencodeInstalled) {
+    const db = openSqliteReadOnly(path.join(HOME, '.local/share/opencode/opencode.db'));
+    if (db) {
+      try {
+        histSessions = db.prepare("SELECT COUNT(*) AS c FROM session_v2 WHERE json_extract(model,'$.providerID') = ?").get(providerId)?.c ?? 0;
+        histMsgs = db.prepare("SELECT COUNT(*) AS c FROM session_message WHERE type='assistant' AND json_extract(data,'$.model.providerID') = ?").get(providerId)?.c ?? 0;
+      } catch { histSessions = histMsgs = null; } finally { try { db.close(); } catch { /* ignore */ } }
+    }
+  }
+  if (histSessions || histMsgs) {
+    evidence.push({ file: '~/.local/share/opencode/opencode.db', field: 'session_v2.model.providerID / session_message.model.providerID', value: '历史会话 ' + histSessions + ' 个 · assistant 行 ' + histMsgs + ' 条经该网关' });
+    notes.push('历史经该网关跑过（本地用量见下方窗口），但当前 auth.json 无登录态——状态如实标「未登录」，不冒充在订');
+  } else {
+    notes.push('本机未发现经该网关的登录态或历史会话（OpenCode 本体在用，' + (providerId === 'opencode-go' ? '如已订阅 Go：TUI 里 /connect 选 OpenCode Go 粘贴 Console API key' : '如需使用：/connect 选 OpenCode Zen') + '）');
+  }
+  return { status: opencodeInstalled ? 'not-signed-in' : 'not-installed', planName: null, account: null, evidence, notes };
+}
+
+// ---------------------------------------------------------------------------
+// 在线档位/配额层（用户 2026-10-27 授权「通过 api-key 查找 coding plan 的来源」）
+//
+// 边界调整说明：此前「不持凭证调云 API」是产品默认红线；用户明确授权后，本层使用各厂商
+// 客户端自己的本地凭证发起**只读**档位/配额查询（与厂商 CLI 自带的 /usage、/plan 命令同源端点）。
+// 纪律不变：凭证只在内存过境——不写日志、不落缓存文件；缓存只存档位与配额数值（含抓取时间）；
+// PET_PLAN_ONLINE=0 整体关闭（回退本地证据 + 用户标注兜底）。
+//
+// 三家实测端点（2026-10-27 [A]）：
+//   Kimi： GET api.kimi.com/coding/v1/me（user_level_name）+ /coding/v1/usages（5h + 月度比率 + 加油包）
+//   GLM ： 解密 zcode credentials（确定性回退密钥，docs/40 §3.12）→ bigmodel.cn
+//          /api/monitor/usage/quota/limit（unit3=5h / unit6=周，credits）+ /api/biz/subscription/list（订阅名/有效期）
+//   Qoder：dt- 令牌仅在 CLI 进程内存——经一次性本地 MITM 收获（spawn qoderclicn --list-models，
+//          HTTPS_PROXY 指向本地代理、仅解密 gateway/openapi.qoder.com.cn 两域；令牌即用即弃）→
+//          gateway.qoder.com.cn /api/v2/user/plan（plan_tier_name）+ /api/v2/quota/usage（加油包 credits）
+// ---------------------------------------------------------------------------
+const ONLINE_TTL_MS = 30 * 60_000;
+const ONLINE_CACHE_FILE = path.join(HOME, '.agent-pet', 'plan-online-cache.json');
+const onlineEnabled = () => process.env.PET_PLAN_ONLINE !== '0';
+
+const jget = async (url, headers, fetchImpl, timeoutMs = 8000) => {
+  const r = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+  const text = await r.text();
+  if (!r.ok) throw new Error('http ' + r.status + ': ' + text.slice(0, 80));
+  return JSON.parse(text);
+};
+const num2 = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+
+/** Kimi：OAuth 刷新（与 CLI refreshAccessToken 同源：POST auth.kimi.com/api/oauth/token，form 表单）。
+ * 刷新成功回写厂商自己的凭证文件（CLI 下次运行同样会刷新——与官方客户端行为一致）。 */
+async function kimiRefreshToken(credPath, cred, fetchImpl) {
+  const OAUTH_HOST = process.env.KIMI_CODE_OAUTH_HOST || process.env.KIMI_OAUTH_HOST || 'https://auth.kimi.com';
+  const CLIENT_ID = '17e5f671-d194-4dfb-9706-5516cb48c098';
+  const body = new URLSearchParams({ client_id: CLIENT_ID, grant_type: 'refresh_token', refresh_token: String(cred.refresh_token || '') });
+  const r = await fetchImpl(OAUTH_HOST.replace(/\/$/, '') + '/api/oauth/token', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body, signal: AbortSignal.timeout(15_000),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok || typeof data?.access_token !== 'string') throw new Error('refresh http ' + r.status);
+  const next = { ...cred, access_token: data.access_token };
+  if (typeof data.refresh_token === 'string' && data.refresh_token) next.refresh_token = data.refresh_token;
+  if (Number.isFinite(Number(data.expires_in))) next.expires_at = Math.floor(Date.now() / 1000) + Number(data.expires_in);
+  else if (Number.isFinite(Number(data.expires_at))) next.expires_at = Number(data.expires_at);
+  try {
+    const st = fs.statSync(credPath);
+    fs.writeFileSync(credPath, JSON.stringify(next, null, 2), { mode: st.mode & 0o777 });
+  } catch { /* 回写失败不影响本轮使用（内存中的新 token 照常查询） */ }
+  return next;
+}
+
+/** Kimi：OAuth 凭证（明文 JSON）→ /me 档位 + /usages 配额；access_token 过期时先刷新（同 CLI 行为）再查询。 */
+async function fetchKimiOnline(fetchImpl) {
+  const credPath = path.join(HOME, '.kimi-code/credentials/kimi-code.json');
+  let cred = readJson(credPath);
+  if (!cred?.access_token) return { error: 'no-credential' };
+  if (cred.expires_at && Number(cred.expires_at) * 1000 < Date.now() + 10_000) {
+    if (!cred.refresh_token) return { error: 'token-expired' };
+    try { cred = await kimiRefreshToken(credPath, cred, fetchImpl); } catch (e) { return { error: 'refresh-failed: ' + String(e?.message || e).slice(0, 60) }; }
+  }
+  const H = { Authorization: 'Bearer ' + cred.access_token, Accept: 'application/json', 'User-Agent': 'kimi-code-cli' };
+  // auth/api 偶发慢（App 内实测 >8s 超时一次）：12s 超时 + 一次重试
+  const jgetR = async (u, h) => { try { return await jget(u, h, fetchImpl, 12_000); } catch (e) { await new Promise((r) => setTimeout(r, 1200)); return await jget(u, h, fetchImpl, 12_000); } };
+  const me = await jgetR('https://api.kimi.com/coding/v1/me', H);
+  const usages = await jgetR('https://api.kimi.com/coding/v1/usages', H);
+  const h5Limit = (usages.limits || []).find((x) => x?.window?.duration === 300)?.detail ?? null;
+  const u = usages.usages || {};
+  return {
+    tier: me.user_level_name ? String(me.user_level_name) : null,
+    account: me.nickname ? maskName(me.nickname) : null,
+    quotas: {
+      h5: h5Limit ? { used: num2(h5Limit.used), limit: num2(h5Limit.limit), remaining: num2(h5Limit.remaining), resetTime: h5Limit.resetTime ?? null } : null,
+      monthTotal: u.limit_5h && u.limit_month_total ? { usedRatio: num2(u.limit_month_total.used_ratio), resetTime: u.limit_month_total.reset_time ?? null } : (u.limit_month_total ? { usedRatio: num2(u.limit_month_total.used_ratio), resetTime: u.limit_month_total.reset_time ?? null } : null),
+      monthCode: u.limit_month_code ? { usedRatio: num2(u.limit_month_code.used_ratio), resetTime: u.limit_month_code.reset_time ?? null } : null,
+    },
+  };
+}
+
+/** GLM：zcode credentials 确定性回退密钥解密（docs/40 §3.12：sha256("zcode-credential-fallback:<platform>:<homedir>:<username>")，enc:v1 AES-256-GCM）。 */
+function decryptZcodeValue(enc) {
+  try {
+    const key = crypto.createHash('sha256').update('zcode-credential-fallback:' + process.platform + ':' + HOME + ':' + os.userInfo().username).digest();
+    const [iv, tag, ct] = String(enc).replace(/^enc:v1:/, '').split('.').map((x) => Buffer.from(x, 'base64url'));
+    const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    d.setAuthTag(tag);
+    return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+  } catch { return null; }
+}
+/** GLM：bigmodel.cn 配额（authorization 裸 token，无 Bearer）+ 订阅清单。 */
+async function fetchGlmOnline(fetchImpl, decrypt = decryptZcodeValue) {
+  const creds = readJson(path.join(HOME, '.zcode/v2/credentials.json'));
+  const enc = creds?.['oauth:bigmodel:access_token'];
+  if (!enc) return { error: 'no-credential' };
+  const token = decrypt(enc);
+  if (!token) return { error: 'decrypt-failed' };
+  const H = { authorization: token, Accept: 'application/json' };
+  const limitBody = await jget('https://bigmodel.cn/api/monitor/usage/quota/limit', H, fetchImpl);
+  let sub = null;
+  try { const list = await jget('https://bigmodel.cn/api/biz/subscription/list', H, fetchImpl); sub = (list?.data || []).find((x) => x?.status === 'VALID') ?? (list?.data || [])[0] ?? null; } catch { /* 订阅清单失败不拖累配额 */ }
+  const limits = (limitBody?.data?.limits || []);
+  const win = (unit) => limits.find((x) => Number(x?.unit) === unit) ?? null;
+  const mk = (x) => x ? { used: num2(x.currentValue), limit: num2(x.usage), remaining: num2(x.remaining), percent: num2(x.percentage), resetTime: x.nextResetTime ?? null } : null;
+  return {
+    tier: sub?.productName ? String(sub.productName) : null,   // 实测 "GLM Coding Max"
+    level: limitBody?.data?.level ? String(limitBody.data.level) : null,
+    validUntil: sub?.valid ?? null,
+    quotas: { h5: mk(win(3)), weekly: mk(win(6)) },
+  };
+}
+
+/** Qoder：一次性本地 MITM 收获 dt- 令牌（仅 gateway/openapi.qoder.com.cn 两域解密；令牌即用即弃）。
+ * 流程：openssl 生成自签证书（复用）→ 起 CONNECT 代理 → 以 HTTPS_PROXY + NODE_TLS_REJECT_UNAUTHORIZED=0
+ * 环境跑一次 `qoderclicn --list-models`（Bun 支持）→ 从首个带 Authorization 的 TLS 明文捕获令牌。
+ * 令牌只在内存中存在（本函数返回后即被调用方即用即弃；不写任何文件/日志）。 */
+async function harvestQoderToken({ certDir, cliBin, spawnFn = spawn, timeoutMs = 30_000 }) {
+  if (!cliBin || !fileExists(cliBin)) return { error: 'cli-not-found' };
+  fs.mkdirSync(certDir, { recursive: true, mode: 0o700 });
+  const keyP = path.join(certDir, 'k.pem'), crtP = path.join(certDir, 'c.pem');
+  if (!fileExists(keyP) || !fileExists(crtP)) {
+    try {
+      execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-keyout', keyP, '-out', crtP, '-days', '30', '-nodes',
+        '-subj', '/CN=qoder-harvest', '-addext', 'subjectAltName=DNS:gateway.qoder.com.cn,DNS:openapi.qoder.com.cn'],
+        { timeout: 15_000, stdio: 'ignore' });
+    } catch (e) { return { error: 'cert-gen-failed' }; }
+  }
+  const net = await import('node:net');
+  const tls = await import('node:tls');
+  const srvKey = fs.readFileSync(keyP), srvCrt = fs.readFileSync(crtP);
+  let tokenPromiseResolve;
+  const tokenP = new Promise((res) => { tokenPromiseResolve = res; });
+  const server = (await import('node:http')).createServer((req, res) => { res.writeHead(404); res.end(); });
+  const conns = new Set();
+  server.on('connect', (req, clientSock, head) => {
+    const host = String(req.url || '').split(':')[0];
+    clientSock.on('error', () => {});
+    const passthrough = () => {
+      const ups = net.connect(443, host, () => { clientSock.write('HTTP/1.1 200 Connection Established\r\n\r\n'); ups.write(head); ups.pipe(clientSock); clientSock.pipe(ups); });
+      ups.on('error', () => clientSock.destroy());
+      conns.add(ups); ups.on('close', () => conns.delete(ups));
+    };
+    if (!/^(gateway|openapi)\.qoder\.com\.cn$/.test(host)) return passthrough();
+    // 两域解密：自签证书接住 CLI 的 TLS，首个带 Authorization 的请求头即收获令牌，其余字节原样转发
+    const tlsSrv = new tls.Server({ key: srvKey, cert: srvCrt }, (clear) => {
+      let buf = '';
+      const ups = net.connect(443, host, () => { clear.write('HTTP/1.1 200 Connection Established\r\n\r\n'); clear.pipe(ups); ups.pipe(clear); });
+      ups.on('error', () => clear.destroy());
+      clear.on('error', () => {});
+      conns.add(ups); ups.on('close', () => conns.delete(ups));
+      let captured = false;
+      clear.on('data', (c) => {
+        if (captured) { ups.write(c); return; }
+        buf += c.toString('latin1');
+        const m = buf.match(/authorization:\s*([^\r\n]+)/i);
+        if (m) {
+          const t = m[1].trim();
+          // 令牌后的字节原样补发给上游（保持 CLI 请求完整）
+          const rest = buf.slice(buf.indexOf(m[1]) + m[1].length).replace(/^\r\n\r\n/, '');
+          captured = true; tokenPromiseResolve(t);
+          if (rest) ups.write(Buffer.from(rest, 'latin1'));
+          clear.removeAllListeners('data');
+          clear.on('data', (c2) => ups.write(c2));
+        } else ups.write(c);
+      });
+    });
+    tlsSrv.listen(0, '127.0.0.1', () => {
+      const p = tlsSrv.address().port;
+      const local = net.connect(p, '127.0.0.1', () => { clientSock.write('HTTP/1.1 200 Connection Established\r\n\r\n'); local.write(head); local.pipe(clientSock); clientSock.pipe(local); });
+      local.on('error', () => clientSock.destroy());
+      conns.add(local); local.on('close', () => conns.delete(local));
+    });
+    tlsSrv.on('error', () => clientSock.destroy());
+  });
+  await new Promise((res) => server.listen(0, '127.0.0.1', res));
+  const port = server.address().port;
+  const child = spawnFn(cliBin, ['--list-models'], {
+    env: { ...process.env, HTTPS_PROXY: 'http://127.0.0.1:' + port, NODE_TLS_REJECT_UNAUTHORIZED: '0', NO_COLOR: '1' },
+    stdio: 'ignore',
+  });
+  const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* ignore */ } }, timeoutMs);
+  const done = new Promise((res) => child.on('exit', () => res()));
+  const token = await Promise.race([tokenP, done.then(() => null)]);
+  clearTimeout(timer);
+  try { child.kill('SIGKILL'); } catch { /* ignore */ }
+  for (const c of conns) { try { c.destroy(); } catch { /* ignore */ } }
+  try { server.close(); } catch { /* ignore */ }
+  if (!token) return { error: 'harvest-timeout' };
+  return { token };
+}
+
+/** Qoder：收获令牌 → /api/v2/user/plan + /api/v2/quota/usage（令牌即用即弃）。 */
+async function fetchQoderOnline(fetchImpl, opts = {}) {
+  const cliBin = opts.qoderCliBin ?? qoderCliBinDefault();
+  const harvest = await harvestQoderToken({ certDir: path.join(HOME, '.agent-pet', 'plan-harvest'), cliBin, spawnFn: opts.spawnFn ?? spawn, timeoutMs: opts.timeoutMs ?? 30_000 });
+  if (harvest.error || !harvest.token) return { error: harvest.error ?? 'harvest-failed' };
+  const H = { Authorization: harvest.token, Accept: 'application/json' };
+  const plan = await jget('https://gateway.qoder.com.cn/api/v2/user/plan', H, fetchImpl);
+  let quota = null;
+  try { quota = await jget('https://gateway.qoder.com.cn/api/v2/quota/usage', H, fetchImpl); } catch { /* 配额失败不拖累档位 */ }
+  const addOn = quota?.addOnQuota ?? null;
+  return {
+    tier: plan?.plan_tier_name ? String(plan.plan_tier_name) : null,
+    paid: typeof plan?.is_paid_plan === 'boolean' ? plan.is_paid_plan : null,
+    userType: plan?.user_type ? String(plan.user_type) : null,
+    quotas: addOn ? { credits: { used: num2(addOn.used), limit: num2(addOn.total), remaining: num2(addOn.remaining), percent: num2(addOn.percentage) } } : {},
+  };
+}
+
+function qoderCliBinDefault() {
+  const dir = path.join(HOME, '.qoder-cn', 'bin', 'qoderclicn');
+  try {
+    const cands = fs.readdirSync(dir).filter((f) => f.startsWith('qoderclicn-')).sort();
+    return cands.length ? path.join(dir, cands[cands.length - 1]) : null;
+  } catch { return null; }
+}
+
+/** 在线层编排：缓存（0600，零 token）+ TTL；force=true 强制重拉。单家失败不影响其余。 */
+async function refreshOnlineLayer(opts = {}) {
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  const now = Date.now();
+  let cache = {};
+  try { cache = JSON.parse(fs.readFileSync(ONLINE_CACHE_FILE, 'utf8')); } catch { /* 无缓存 */ }
+  const fresh = {};
+  const runners = [
+    ['kimi-for-coding', () => fetchKimiOnline(fetchImpl)],
+    ['glm-coding-plan', () => fetchGlmOnline(fetchImpl, opts.decryptZcode)],
+    ['qoder', () => fetchQoderOnline(fetchImpl, opts)],
+  ];
+  for (const [key, run] of runners) {
+    const prev = cache[key];
+    if (!opts.force && prev?.fetchedAt && now - prev.fetchedAt < ONLINE_TTL_MS) { fresh[key] = prev; continue; }
+    const keepPrev = () => (prev && !prev.error && prev.fetchedAt && now - prev.fetchedAt < 6 * 3_600_000
+      ? { ...prev, stale: true }   // 6h 内沿用旧成功值（厂商端点偶发超时不至于把档位打回未知）
+      : null);
+    try {
+      const r = await run();
+      fresh[key] = r?.error ? (keepPrev() ?? { ...r, fetchedAt: prev?.fetchedAt ?? null, failedAt: now }) : { ...r, fetchedAt: now };
+    } catch (e) {
+      fresh[key] = keepPrev() ?? { error: String(e?.message || e).slice(0, 80), fetchedAt: prev?.fetchedAt ?? null, failedAt: now };
+    }
+  }
+  try {
+    fs.mkdirSync(path.dirname(ONLINE_CACHE_FILE), { recursive: true });
+    const tmp = ONLINE_CACHE_FILE + '.tmp.' + process.pid;
+    fs.writeFileSync(tmp, JSON.stringify(fresh), { mode: 0o600 });
+    fs.renameSync(tmp, ONLINE_CACHE_FILE);
+  } catch (e) { console.error('[plan-usage] 在线缓存写入失败（不影响结果）：' + (e?.message || e)); }
+  return fresh;
+}
+let onlineLayerPromise = null;
+
 // ---------------------------------------------------------------------------
 // 主流厂商注册表（含本机未安装者——「全部主流厂商」盘点口径）
 // ---------------------------------------------------------------------------
@@ -348,6 +634,8 @@ export const PLAN_REGISTRY = Object.freeze([
   { id: 'qoder', vendor: '阿里巴巴 Qoder', product: 'Qoder 会员', agents: ['qoder'], category: 'subscription', probe: qoderIdentity , sem: '窗口语义未核实（本地无缓存）' },
   { id: 'cursor', vendor: 'Cursor', product: 'Cursor 订阅', agents: ['cursor'], category: 'subscription', probe: cursorIdentity , sem: '窗口语义未核实（本地无缓存）' },
   { id: 'copilot', vendor: 'GitHub', product: 'GitHub Copilot', agents: [], category: 'subscription', probe: copilotIdentity , sem: '每月额度（公开产品口径）' },
+  { id: 'opencode-zen', vendor: 'OpenCode', product: 'OpenCode Zen（按量网关）', agents: ['opencode'], modelFilter: /^opencode\//i, category: 'api-billing', probe: (o) => opencodeGatewayIdentity('opencode', o), sem: '按量计费（Console 余额，无窗口概念）；用量=OpenCode 会话里 providerID=opencode 的请求（provider 精确，非模型名近似）' },
+  { id: 'opencode-go', vendor: 'OpenCode', product: 'OpenCode Go（订阅）', agents: ['opencode'], modelFilter: /^opencode-go\//i, category: 'subscription', probe: (o) => opencodeGatewayIdentity('opencode-go', o), sem: '官方限额口径：5h=月限 20%、周=50%、月=100%（云端，本地无账本）；用量=providerID=opencode-go 的请求（provider 精确）' },
   { id: 'gemini', vendor: 'Google', product: 'Gemini Code Assist / Antigravity', agents: [], category: 'subscription',
     installPaths: ['.gemini', '.config/gemini', 'Library/Application Support/Antigravity', '/Applications/Antigravity.app'] },
   { id: 'qwen-code', vendor: '阿里通义', product: 'Qwen Code / 百炼 Coding', agents: [], category: 'subscription', installPaths: ['.qwen'] },
@@ -426,6 +714,21 @@ export async function scanPlanUsage(opts = {}) {
   const identities = identityCache.data;
 
   const overrides = readPlanOverrides();   // 每轮现读（用户可能随时编辑；文件极小）
+  let online = null;
+  if (onlineEnabled()) {
+    let cachedFresh = false;
+    try {
+      online = JSON.parse(fs.readFileSync(ONLINE_CACHE_FILE, 'utf8'));
+      cachedFresh = Object.values(online).some((x) => x?.fetchedAt && Date.now() - x.fetchedAt < ONLINE_TTL_MS);
+      for (const k of Object.keys(online)) if (Date.now() - (online[k]?.fetchedAt ?? 0) > 24 * 3_600_000) delete online[k];   // >24h 视为陈旧不采用
+    } catch { online = null; }
+    // 在线层节奏：缓存陈旧/为空 → 后台拉取（不阻塞本轮）；force（手动刷新）→ 强制并等待结果
+    if ((opts.forceOnline || !cachedFresh) && !onlineLayerPromise) {
+      onlineLayerPromise = refreshOnlineLayer({ force: !!opts.forceOnline }).catch(() => { }).finally(() => { onlineLayerPromise = null; });
+    }
+    if (opts.awaitOnline && onlineLayerPromise) { try { await onlineLayerPromise; } catch { /* ignore */ } }
+    if (opts.awaitOnline) { try { online = JSON.parse(fs.readFileSync(ONLINE_CACHE_FILE, 'utf8')); } catch { /* keep */ } }
+  }
 
   const overview = opts.usage?.overview ?? null;
   const zcodeSplit = identities['glm-coding-plan']?.status === 'not-installed'
@@ -461,7 +764,7 @@ export async function scanPlanUsage(opts = {}) {
           requestsD7: r.requestsD7, inputD7: r.inputD7, outputD7: r.outputD7 })),
       };
     } else if (p.agents.length && overview) {
-      usage = planUsageWindows(overview, p.agents);
+      usage = planUsageWindows(overview, p.agents, p.modelFilter);
     }
     const plan = {
       id: p.id, vendor: p.vendor, product: p.product, category: p.category,
@@ -470,18 +773,33 @@ export async function scanPlanUsage(opts = {}) {
       evidence: id.evidence ?? [], notes: id.notes ?? [],
       usage, quota: id.quota ?? null,
     };
-    // 用户标注档位（2026-10-27：用户确认 Kimi=Pro、Qoder=Free——两家云端档位本机均无缓存）
+    // 档位来源优先级（2026-10-27 用户定向「通过 api-key 查找 coding plan 来源」）：
+    //   在线官方端点（最权威、带配额）> 本地证据 > 用户标注（兜底；plan-overrides.json）
+    const on = online ? online[p.id] : null;
+    if (on && !on.error && on.fetchedAt) {
+      if (on.tier) {
+        plan.planName = on.tier;
+        plan.planNameSource = 'online';
+        plan.onlineFetchedAt = on.fetchedAt;
+        if (on.validUntil) plan.onlineValidUntil = on.validUntil;
+        if (on.level) plan.onlineLevel = on.level;
+        if (on.account) plan.account = on.account;
+        if (plan.status === 'signed-in' || plan.status === 'not-signed-in') plan.status = 'active';
+        plan.evidence.push({ file: '厂商官方端点（在线只读）', field: p.id + ' 在线档位', value: on.tier + '（' + new Date(on.fetchedAt).toLocaleString('zh-CN') + '）' });
+      }
+      if (on.quotas && Object.values(on.quotas).some(Boolean)) plan.onlineQuotas = on.quotas;
+    }
     const ov = overrides[p.id];
-    if (ov?.planName) {
+    if (ov?.planName && plan.planNameSource !== 'online') {
       const local = plan.planName;
       if (local && local !== ov.planName) plan.notes.push('用户标注档位「' + ov.planName + '」与本地证据「' + local + '」不一致——以用户标注为准（本地缓存可能滞后）');
-      else if (!local) plan.notes.push('档位为用户标注（plan-overrides.json）；厂商云端不落盘，出现本地实测证据后自动以实测为准');
+      else if (!local) plan.notes.push('档位为用户标注（plan-overrides.json）；在线端点可用后自动以在线结果为准');
       plan.planName = ov.planName;
       plan.planNameSource = 'user-asserted';
       plan.planNameAsOf = ov.asOf ?? null;
       plan.evidence.push({ file: '~/.agent-pet/plan-overrides.json', field: p.id + '.planName', value: ov.planName + '（用户标注' + (ov.asOf ? '，' + ov.asOf : '') + '）' });
       if (plan.status === 'signed-in' || plan.status === 'not-signed-in') plan.status = 'active';
-    } else if (plan.planName) plan.planNameSource = 'local-evidence';
+    } else if (plan.planName && !plan.planNameSource) plan.planNameSource = 'local-evidence';
     // ZCode 里非 coding-plan 的 provider（deepseek/moonshot-kimi 自备 key）如实提示到对应厂商行
     if (p.id === 'glm-coding-plan' && zcodeSplit.available) {
       const others = zcodeSplit.providers.filter((r) => !r.isCodingPlan);
@@ -519,6 +837,7 @@ export async function scanPlanUsage(opts = {}) {
 
 /** 测试钩子：清空身份缓存。 */
 export function resetPlanUsageCache() { identityCache = { at: 0, data: null }; }
+export { refreshOnlineLayer, fetchKimiOnline, fetchGlmOnline, fetchQoderOnline, harvestQoderToken, decryptZcodeValue, ONLINE_CACHE_FILE, ONLINE_TTL_MS };
 
 // ---------------------------------------------------------------------------
 // CLI

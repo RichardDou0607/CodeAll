@@ -6,11 +6,15 @@ import { fileURLToPath } from 'node:url';
 export function writeModelFixture(home) {
   const binDir = path.join(home, 'bin');
   fs.mkdirSync(binDir, { recursive: true });
-  for (const name of ['claude', 'codex', 'kimi']) {
+  for (const name of ['claude', 'codex', 'kimi', 'opencode', 'cursor-agent']) {
     const bin = path.join(binDir, name);
     fs.copyFileSync(fileURLToPath(new URL('./mock-cli-create.cjs', import.meta.url)), bin);
     fs.chmodSync(bin, 0o755);
   }
+  const qoderBin = path.join(home, '.qoder-cn', 'bin', 'qoderclicn', 'qoderclicn-9.9.9');
+  fs.mkdirSync(path.dirname(qoderBin), { recursive: true });
+  fs.copyFileSync(fileURLToPath(new URL('./mock-cli-create.cjs', import.meta.url)), qoderBin);
+  fs.chmodSync(qoderBin, 0o755);
   const file = (name, data) => {
     const location = path.join(home, name);
     fs.writeFileSync(location, JSON.stringify(data));

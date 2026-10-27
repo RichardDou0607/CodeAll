@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
+import { extractMainScript } from './test-ui-dom.mjs';
 
 const frameUrl = new URL('./frame.html', import.meta.url);
 if (!fs.existsSync(frameUrl)) {          // frame.html 为生成产物（不入库）：缺失时从合成样本自动构建
@@ -13,7 +14,7 @@ if (!fs.existsSync(frameUrl)) {          // frame.html 为生成产物（不入�
   if (r.status !== 0) { console.error('❌ demo/frame.html 不存在且自动生成失败（node demo/build-html.mjs）'); process.exit(1); }
 }
 const html = fs.readFileSync(frameUrl, 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const script = extractMainScript(html);
 const ids = ['frame', 'log', 'strip', 'pos', 'stats', 'play', 'step', 'speed', 'restart'];
 const store = new Map();
 const doc = {
