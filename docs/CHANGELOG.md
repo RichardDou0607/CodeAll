@@ -1,6 +1,15 @@
 # 变更日志（文档与契约）
 
 ## 2026-10-27（十）
+### 用量刷新节奏收口【v0.1.4 增补，未发版】：一分钟自动节拍 + 手动按钮，打开页面不再触发扫描（用户定向「用量刷新应该保持在一分钟+手动」）
+
+- **移除端点懒触发（framed.mjs 三处）**：`/api/usage`、`/api/usage/calendar`、`/api/plan-usage` 的「≥60s 陈旧即异步重扫」分支全部移除——打开用量页/订阅页、无参 API 调用一律**只读缓存立即返回**（哪怕数据是旧的，生成时间可见）。perf-verify P3③ 的「纯空闲零后台扫描」口径保持，且不再有页面打开引发的计划外扫描。
+- **自动刷新 = 分钟节拍（MRF-1 保持不变）**：有 SSE 客户端（应用开着）时每 60s 自动重扫一轮；无客户端零扫描。首轮在启动后 1 分钟内出现（boot 5min 兜底仅防极端情况）。
+- **手动 = 刷新按钮**：用量页「重新扫描」（`?refresh=1` 强制）不变；订阅页「刷新」升级为**强制重扫用量 + 重算计划层**（此前只重算轻量层）。
+- **文案同步**：订阅页 legend/空态、用量页首扫空态改为「每 60s 自动一轮 + 手动按钮」口径。
+- **测试**：test-minute-refresh M1–M3 全过（M1 明确绕开懒触发通路——不受影响）；test-usage-calendar 6/6、test-plan-usage 4/4、test-window 正常；perf-verify 同步三处后 14/17（回到既有基线，失败仅 P1-a/P4-a/P5 三个已定性环境项）：P3② 改「手动 refresh=1 触发」、P3③ 文案更新、triggerAndAwait 懒触发改手动、**P7-b 第二段改走分钟节拍路径**（refresh=1 是强制重扫会跳过检查点加载——节拍扫描才是检查点复用的真实验证，dsh read=0 恢复）。
+- **边界**：`?refresh=1` 仍是强制重扫唯一入口（除分钟节拍外）；并发保护（usageCache.busy）不变。
+
 ### 用户标注档位机制【v0.1.4 增补，未发版】：Kimi=Pro、Qoder=Free 如实上屏（用户纠偏「月之暗面目前订阅的是 pro，证明没有成功；Qoder 的订阅是 free」）
 
 - **深挖结论（两轮只读侦察）**：Kimi（credentials/config.toml/client-configs 缓存/query-store 16 分片/telemetry 属性键/运行日志/桌面 App leveldb）与 Qoder（main.sqlite 全部 110 表逐列扫档位值/qoder-data.v1.json/Preferences/leveldb）**均无订阅档位缓存**——档位真值只在厂商云端（Kimi CLI 的 membership/quota 属在线查询；Qoder 客户端在线拉取）。本地证据路线已穷尽。

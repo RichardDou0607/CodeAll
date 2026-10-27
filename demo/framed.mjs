@@ -1411,8 +1411,8 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/usage/calendar') {
-    // PERF-3：用量视图打开即按需触发重扫（≥60s 陈旧时异步重扫，响应仍回当前缓存；首轮 pending:true）
-    if (!usageCache.busy && (!usageCache.data || Date.now() - usageCache.at > 60_000)) refreshUsage();
+    // 2026-10-27 用户定向「用量刷新保持在一分钟+手动」：端点只读缓存，不触发扫描——
+    // 自动刷新走分钟节拍（有客户端时每 REFRESH_MS 一轮），手动走 /api/usage?refresh=1。
     const u = usageCache.data;
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
     res.end(JSON.stringify(u ? {
@@ -1422,8 +1422,8 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method === 'GET' && url.pathname === '/api/usage') {
     // 全量用量明细（overview + 每源 byModel/bySession）；?refresh=1 七源强制重扫（P0-2：含 zcode/opencode）
+    // 2026-10-27 用户定向：只有 ?refresh=1（手动/订阅页刷新按钮）强制重扫；无参调用只读缓存
     if (url.searchParams.get('refresh') === '1') refreshUsage(true);
-    else if (!usageCache.busy && (!usageCache.data || Date.now() - usageCache.at > 60_000)) refreshUsage();   // PERF-3：同日历端点的懒触发
     const u = usageCache.data;
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(u ? {
@@ -1443,9 +1443,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   if (req.method === 'GET' && url.pathname === '/api/plan-usage') {
-    // Coding Plan 订阅使用情况：15 家主流厂商（身份 × 本地用量窗口 × 配额/余额）；身份层懒触发（60s 缓存）
+    // Coding Plan 订阅使用情况：15 家主流厂商（身份 × 本地用量窗口 × 配额/余额）。
+    // 只重算轻量层（身份+配额+GLM 账本窗口，毫秒级，不扫用量文件）；用量窗口随分钟节拍/手动刷新走。
     if (!planUsageCache.busy && (!planUsageCache.data || Date.now() - planUsageCache.at > 60_000)) {
-      if (!usageCache.busy && (!usageCache.data || Date.now() - usageCache.at > 60_000)) refreshUsage();   // 用量层懒触发（同 /api/usage）
       await refreshPlanUsage();
     }
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -1606,8 +1606,9 @@ server.listen(PORT, '127.0.0.1', () => {
     }
     if (snapshotDirty) broadcast(); else broadcastTick();
   }, 2000);
-  // PERF-3：用量扫描懒触发——去掉 60s 周期与启动即扫；首轮延后 5min（首屏不阻塞），
-  // 打开用量视图（/api/usage*）按需触发；完成由 refreshUsage 内的 broadcast() 推新。
+  // 2026-10-27 用户定向「用量刷新保持在一分钟+手动」：自动刷新 = 分钟节拍（上方有客户端分支），
+  // 手动 = /api/usage?refresh=1（用量页/订阅页刷新按钮）；打开视图与端点调用一律只读缓存不触发扫描。
+  // 首轮：启动后随首个分钟节拍出现（boot 5min 兜底仅防「始终无节拍」的极端情况）。
   setTimeout(() => { if (!usageCache.data) refreshUsage(); }, 5 * 60_000).unref();
   setInterval(flushNewQueues, FLUSH_MS);   // 投递即新建 / busy 入队的排队项：CLI 恢复或槽位释放后自动重试
   // PERF-0（docs/25）：可选资源探针——PET_PERF_PROBE=<file> 时每 5s 追加一行采样

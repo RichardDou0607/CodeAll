@@ -223,19 +223,20 @@ async function suiteService() {
         u.pending ? 'pending:true（首轮未发生）' : '已有数据——启动即扫回归！');
     }
 
-    // P3②：视图打开触发 → 完成且数字入册
+    // P3②：手动 refresh=1 触发 → 完成且数字入册（2026-10-27 用户定向「一分钟+手动」：
+    // 端点懒触发已移除——打开视图/无参调用只读缓存，强制重扫只剩手动 refresh=1 与分钟节拍两条路）
     {
-      await fetch(svc.base + '/api/usage/calendar');
+      await fetch(svc.base + '/api/usage?refresh=1');
       let done = null;
       for (let i = 0; i < 40; i++) { await sleep(500); const s = await (await fetch(svc.base + '/api/state')).json(); if (s.usage && !s.usage.pending && s.usage.generatedAt) { done = s.usage; break; } }
-      check('P3②', '用量端点触发重扫并完成', !!done,
+      check('P3②', '手动 refresh=1 触发重扫并完成', !!done,
         done ? `generatedAt=${new Date(done.generatedAt).toISOString().slice(11, 19)}` : '20s 未完成');
       // P3③：70s 无后台重扫（期间只碰 /api/state；向用量文件追加一条「诱饵」——旧 60s 周期必然吸收它）
       fs.appendFileSync(corpus.ccFile, JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { role: 'assistant', model: 'glm-5.3', usage: { input_tokens: 999999, output_tokens: 1, cache_read_input_tokens: 0 } } }) + '\n');
       const genBefore = (await (await fetch(svc.base + '/api/state')).json()).usage.generatedAt;
       let genAfter = genBefore;
       for (let i = 0; i < 15; i++) { await sleep(5000); genAfter = (await (await fetch(svc.base + '/api/state')).json()).usage.generatedAt; if (genAfter !== genBefore) break; }
-      check('P3③', '70s 内无后台重扫（无客户端时分钟兜底不运行，懒触发口径不变）', genAfter === genBefore,
+      check('P3③', '70s 内无后台重扫（无客户端时分钟节拍不运行；打开视图/端点均不触发扫描——「一分钟+手动」口径）', genAfter === genBefore,
         genAfter === genBefore ? `generatedAt 稳定 ${genBefore}` : `generatedAt 变化 ${genBefore}→${genAfter}（无客户端仍周期扫描回归！）`);
     }
 
@@ -565,7 +566,8 @@ async function suiteCheckpoint() {
     return { home, corpus: buildCorpus(home, 64) };
   };
   const triggerAndAwait = async (base) => {
-    await fetch(base + '/api/usage/calendar');                       // 懒触发（无需客户端）
+    // 2026-10-27「一分钟+手动」口径：端点懒触发已移除，强制重扫走手动 refresh=1（与用户点刷新按钮同路）
+    await fetch(base + '/api/usage?refresh=1');
     let u = null;
     for (let i = 0; i < 120; i++) { await sleep(250); u = (await (await fetch(base + '/api/state')).json()).usage; if (u && !u.pending && u.generatedAt) return u; }
     return null;
@@ -599,12 +601,21 @@ async function suiteCheckpoint() {
       s1.kill();                                                       // SIGKILL：检查点必须已落盘
       const decoy = JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { role: 'assistant', model: 'glm-5.3', usage: { input_tokens: 999999, output_tokens: 1, cache_read_input_tokens: 0 } } }) + '\n';
       fs.appendFileSync(corpus.ccFile, decoy);
-      const s2 = await bootService(home);
+      // 2026-10-27「一分钟+手动」口径：第二段不能走 refresh=1（强制重扫会跳过检查点加载）——
+      // 改走分钟节拍（短周期 + SSE 客户端在），与生产自动刷新同路，才是检查点复用的真实验证。
+      const s2 = await bootService(home, { PET_REFRESH_MS: '5000' });
       try {
-        const g2 = await triggerAndAwait(s2.base);
+        const rec2 = openSse(s2.base);
+        let g2 = null;
+        for (let i = 0; i < 60 && !g2; i++) {
+          await sleep(500);
+          const u = (await (await fetch(s2.base + '/api/state')).json()).usage;
+          if (u && !u.pending && u.generatedAt && (!g1 || u.generatedAt > g1.generatedAt)) g2 = u;
+        }
         const detail = await (await fetch(s2.base + '/api/usage')).json();
         const cc = detail.perSource?.['claude-code'] ?? {}, dsh = detail.perSource?.dsh ?? {};
         const absorbed = (cc.bySession?.[ccSid]?.input ?? 0) >= 999999;
+        await rec2.close();
         check('P7-b', '检查点跨重启复用（追加被吸收 + 未变文件零重读 readBytes ≪ corpusBytes）',
           !!g1 && !!g2 && g2.generatedAt > g1.generatedAt && absorbed
             && (dsh.stats?.readBytes ?? 1e9) === 0 && (cc.stats?.readBytes ?? 1e9) <= (cc.stats?.corpusBytes ?? 1),

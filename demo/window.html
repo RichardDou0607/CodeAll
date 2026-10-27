@@ -301,10 +301,51 @@ dialog::backdrop{background:#0008}
 @media(max-width:759px){header{padding:8px 13px;gap:8px}.local{display:none}.brand-label{font-size:8px}.brand-name{font-size:14px}#view-nav{padding:0 13px;gap:20px}.nav-end{display:none}#project-sidebar{width:145px}.workspace-head{padding:14px 13px 10px}#toolbar{padding:7px 10px;gap:4px}#agent-tabs{padding:0 10px 8px;gap:2px}#chips{padding:0 13px 10px;gap:8px}.search-row{padding:7px 12px}#proj-hint{max-width:45%}.srow{padding:10px;gap:6px}.srow .src{width:47px;font-size:8px}.srow .tm{display:none}.srow .pend{position:absolute;right:65px;bottom:7px;font-size:8px}.srow .st{font-size:9px}footer{padding:9px 13px}.statusbar{padding:4px 13px}.scard{padding:12px}#status-page,#usage-page,#plans-page{padding:18px 15px}}
 @media(max-width:539px){header .aggchip{display:none}.theme-switch .icon-btn{width:24px}#project-sidebar{width:112px}.side-h{padding:12px 10px 8px}.pitem{gap:4px;padding:7px 4px;font-size:10px}.pitem .icon{display:none}.pitem .plive{display:none}.workspace-head{align-items:flex-start;gap:5px}.workspace-head .btn{font-size:10px;padding:4px 6px}.workspace-head .btn .icon{width:13px}.workspace-head h1{font-size:17px}.eyebrow{font-size:8px}#chips{gap:7px}.chip{font-size:9px}.chip strong{font-size:11px}#variant-filter{flex-wrap:wrap}.fbtn{font-size:9px;padding:3px 4px}search-row{flex-wrap:wrap}.search-box{flex-basis:100%}#proj-hint{max-width:none;text-align:left;font-size:8px}.srow{gap:5px;flex-wrap:wrap;min-height:86px}.srow .src{width:auto;order:1}.srow .dot{order:0}.srow .mid{order:3;flex-basis:100%;padding-right:45px}.srow .st{order:2;margin-left:auto}.srow .row-actions{position:absolute;right:7px;bottom:8px}.srow .pend{right:12px;top:7px;bottom:auto}.srow:has(.pend) .st{margin-right:36px}.srow .lbl{font-size:11px}.srow .meta{font-size:8px}#status-cards{grid-template-columns:minmax(0,1fr)}.u-tot{gap:12px}.utable th,.utable td{padding:8px 6px;font-size:10px}#connection-label{display:none}.crow .hint{font-size:8px}#queue-clear{width:22px}}
 @media(max-width:539px){.uc-head{align-items:flex-start}.uc-title{min-width:100%;flex-basis:100%}.uc-controls{width:100%;justify-content:space-between}.uc-segment{max-width:100%;overflow:auto}.uc-segment button{padding:3px 5px}.uc-select{max-width:43%}.uc-grid{gap:2px}.uc-day,.uc-blank{min-height:52px}.uc-day{padding:5px}.uc-day-val{font-size:9px}.uc-day-mark{font-size:7px}.uc-detail{grid-template-columns:minmax(0,1fr);gap:10px}.uc-breakdown{margin-left:-2px;margin-right:-2px}}
-@media(prefers-reduced-motion:no-preference){button{transition:background-color .12s,color .12s}header .brand-mark{animation:boot .4s ease-out}@keyframes boot{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}}
+/* 开机动画：CRT 上电自检——扫描线点亮 → 自检日志 → 日志缩回光束 → 百叶揭幕 → UI 分层入场。
+   纯 CSS 定时，无 JS 也会在 2.1s 自行收场（bt-gone）；#boot 恒 pointer-events:none，绝不挡交互；
+   reduced-motion 时 #boot 默认 display:none，整套动画不渲染。 */
+#boot{display:none;position:fixed;inset:0;z-index:99;pointer-events:none;overflow:hidden;animation:bt-gone 1ms linear 2.1s forwards}
+@media(prefers-reduced-motion:no-preference){
+button{transition:background-color .12s,color .12s}
+#boot{display:block}
+.bt-shutter{position:absolute;left:0;width:100%;height:50.5%;background:var(--bg)}
+.bt-shutter::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0deg,transparent 0 2px,color-mix(in srgb,var(--txt) 3%,transparent) 2px 3px)}
+.bt-top{top:0;animation:bt-up .55s cubic-bezier(.75,0,.2,1) 1.46s forwards}
+.bt-bot{bottom:0;animation:bt-down .55s cubic-bezier(.75,0,.2,1) 1.46s forwards}
+.bt-beam{position:absolute;left:50%;top:50%;width:min(46%,340px);height:2px;margin-top:-1px;background:var(--acc);box-shadow:0 0 14px 1px color-mix(in srgb,var(--acc) 60%,transparent),0 0 3px var(--acc);transform:translate(-50%,-50%) scaleX(0);animation:bt-beam 2s ease forwards}
+.bt-log{position:absolute;left:50%;top:50%;width:272px;transform:translate(-50%,calc(-100% - 18px));color:var(--dim);animation:bt-log .24s ease-in 1.18s forwards}
+.bt-title{color:var(--txt);font-size:11px;font-weight:650;letter-spacing:.22em;margin-bottom:9px;white-space:nowrap;animation:bt-reveal .18s ease-out .4s both}
+.bt-title span{color:var(--dim);font-weight:400}
+.bt-row{display:flex;align-items:baseline;gap:8px;font-size:10px;letter-spacing:.08em;white-space:nowrap;animation:bt-reveal .16s ease-out both}
+.bt-row:nth-child(2){animation-delay:.54s}
+.bt-row:nth-child(3){animation-delay:.66s}
+.bt-row:nth-child(4){animation-delay:.78s}
+.bt-row b{color:var(--txt);font-weight:500}
+.bt-row i{flex:1;border-bottom:1px dotted var(--line);transform:translateY(-2px)}
+.bt-row em{font-style:normal;color:var(--acc);font-size:9px;letter-spacing:.16em}
+.bt-caret{display:block;width:7px;height:11px;margin-top:7px;background:var(--acc);opacity:0;animation:bt-caret .44s linear .9s infinite backwards}
+header,#view-nav,#main,footer,.statusbar{animation:bt-ui .34s ease-out both}
+header{animation-delay:1.58s}
+#view-nav{animation-delay:1.66s}
+#main{animation-delay:1.74s}
+footer{animation-delay:1.82s}
+.statusbar{animation-delay:1.9s}
+header .brand-mark{animation:bt-mark .5s ease-out 1.64s both}
+}
+@keyframes bt-reveal{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+@keyframes bt-caret{0%{opacity:0}1%{opacity:1}49%{opacity:1}50%{opacity:0}100%{opacity:0}}
+@keyframes bt-log{to{opacity:0;transform:translate(-50%,calc(-100% - 4px))}}
+@keyframes bt-beam{0%{opacity:0;transform:translate(-50%,-50%) scaleX(0)}6%{opacity:1}16%{transform:translate(-50%,-50%) scaleX(1)}70%{opacity:1;transform:translate(-50%,-50%) scaleX(1)}74%{transform:translate(-50%,-50%) scaleX(1.04);filter:brightness(2.4)}100%{opacity:0;transform:translate(-50%,-50%) scaleX(1.9);filter:brightness(1.5)}}
+@keyframes bt-up{to{transform:translateY(-101%)}}
+@keyframes bt-down{to{transform:translateY(101%)}}
+@keyframes bt-ui{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes bt-mark{0%{clip-path:inset(0 100% 0 0);filter:brightness(1.9) saturate(.6)}60%{filter:brightness(1.2)}100%{clip-path:inset(0 0 0 0)}}
+@keyframes bt-gone{to{visibility:hidden}}
 </style>
 </head>
 <body>
+<!-- 开机动画遮罩：装饰层，aria-hidden；恒不拦截指针，JS 掉线时 CSS 兜底自隐 -->
+<div id="boot" aria-hidden="true"><div class="bt-shutter bt-top"></div><div class="bt-shutter bt-bot"></div><div class="bt-log"><div class="bt-title">CODEALL <span>TACTICAL TERMINAL</span></div><div class="bt-row"><b>RADIO LINK</b><i></i><em>LOCKED</em></div><div class="bt-row"><b>SESSION LEDGER</b><i></i><em>MOUNTED</em></div><div class="bt-row"><b>AGENT SPECTRUM</b><i></i><em>ARMED</em></div><span class="bt-caret"></span></div><div class="bt-beam"></div></div>
 <!-- Lucide static 0.468.0 (ISC). License: demo/assets/lucide-LICENSE -->
 <svg id="ui-symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style="display:none">
 <symbol id="i-terminal" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5" />
@@ -880,7 +921,7 @@ function planDetailHtml(p){
 }
 function planUsageHtml(pu,now){
   const head='<section class="chart-section" aria-label="Coding Plan 使用情况"><h2 class="chart-title">Coding Plan 使用情况</h2><div class="chart-caption">订阅身份来自各家本机只读元数据（账号已打码、凭证值不读）；用量=本地观察时间窗（口径见下方各表）；云端配额数值本地不落盘的厂商如实标注——安全红线：不持凭证调厂商 API。悬停数值看精确值，行内「证据与明细」看逐条出处。</div>';
-  if(!pu||pu.pending)return head+'<div class="empty" style="text-align:left">正在读取订阅计划…</div></section>';
+  if(!pu||pu.pending)return head+'<div class="empty" style="text-align:left">正在读取订阅计划…（订阅身份与 GLM 账本窗口立即可算；其余窗口随用量扫描出现）</div></section>';
   if(pu.error)return head+'<div class="empty" style="text-align:left">读取失败：'+esc(pu.error)+'</div></section>';
   const plans=pu.plans||[];
   const shown=plans.filter(p=>p.status!=='not-installed');
@@ -922,7 +963,7 @@ function planUsageRow(p){
 const PLANS_WINDOW_LABELS=[['h5','5 小时'],['today','今日'],['d7','7 日'],['d30','30 日'],['all','全部']];
 function plansLegendText(pu){
   const hasH5=!!((pu&&pu.plans)||[]).find(p=>p.usage&&p.usage.windows&&p.usage.windows.h5&&p.usage.windows.h5.available);
-  return '窗口口径：5h 滚动窗'+(hasH5?'（ZCode 逐请求账本精确归属，高亮列）':'（本地无逐请求账本的源如实标 —）')+' · 今日=本地自然日 · 7日/30日=滚动窗口 · 数据随用量扫描懒刷新（60s 缓存），打开本页或点刷新即触发 · 限额数值在厂商云端、本机无缓存（安全红线：不持凭证调厂商 API）';
+  return '窗口口径：5h 滚动窗'+(hasH5?'（ZCode 逐请求账本精确归属，高亮列）':'（本地无逐请求账本的源如实标 —）')+' · 今日=本地自然日 · 7日/30日=滚动窗口 · 刷新节奏：每 60s 自动一轮（应用开着时）+ 手动刷新按钮；打开本页只读缓存、不触发扫描 · 限额数值在厂商云端、本机无缓存（安全红线：不持凭证调厂商 API）';
 }
 function planTierBadge(p){
   return p.planNameSource==='user-asserted'
@@ -962,7 +1003,7 @@ function planCardHtml(p,pu){
     +'</div>';
 }
 function plansPageHtml(pu,now){
-  if(!pu||pu.pending)return '<div class="empty">正在读取订阅计划…（打开本页会触发用量懒扫描，完成后自动出现）</div>';
+  if(!pu||pu.pending)return '<div class="empty">正在读取订阅计划…（身份层立即可用；用量窗口随 60s 自动扫描或手动刷新出现）</div>';
   if(pu.error)return '<div class="empty">读取失败：'+esc(pu.error)+'</div>';
   const plans=pu.plans||[];
   const shown=plans.filter(p=>p.status!=='not-installed');
@@ -975,7 +1016,7 @@ function plansPageHtml(pu,now){
 }
 function usageHtml(us,now){
   const calendar=usageCalendarHtml(window.__USAGE_CALENDAR__,now);
-  if(!us||us.pending)return calendar+'<div class="empty" style="text-align:left;margin-left:6px">首次全量扫描中…（本机 1.1GB 转录约需数秒，完成后自动出现）</div>';
+  if(!us||us.pending)return calendar+'<div class="empty" style="text-align:left;margin-left:6px">首次全量扫描将在启动后一分钟内自动进行（每 60s 一轮 · 或点右上角立即扫描）…</div>';
   const range=window.__USAGE_RANGE__||'all';
   const view=range==='all'?us:(us.ranges||{})[range];
   const rl={today:'当日',d7:'7 日内',d30:'30 日内'}[range];
@@ -1425,7 +1466,7 @@ $('view-plans').onclick=function(){window.__VIEW__='plans';if(window.__SNAP__)re
 $('plans-refresh').onclick=async()=>{
   if(window.__PLAN_USAGE_REFRESHING__)return;
   window.__PLAN_USAGE_REFRESHING__=true;$('plans-refresh').disabled=true;
-  try{await loadPlanUsage(true)}catch(e){console.error('CodeAll plans refresh:',e)}
+  try{await api('/api/usage?refresh=1',undefined,'GET');await loadPlanUsage(true)}catch(e){console.error('CodeAll plans refresh:',e)}
   finally{window.__PLAN_USAGE_REFRESHING__=false;if(window.__SNAP__)render(window.__SNAP__)}
 };
 function renderCalendarFocus(key){
@@ -1800,5 +1841,6 @@ function connect(){
 }
 connect();
 </script>
+<script>try{var __boot=document.getElementById('boot');if(__boot)setTimeout(function(){__boot.remove()},2400)}catch(e){}</script>
 </body>
 </html>
