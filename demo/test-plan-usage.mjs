@@ -288,6 +288,10 @@ test('MU-PU7 UI：用量页 Coding Plan 区渲染（行、打码、余额、红�
       { id: 'kimi-for-coding', vendor: '月之暗面 Moonshot', product: 'Kimi For Coding', category: 'subscription', status: 'active', planName: 'Pro', planNameSource: 'online', onlineFetchedAt: NOW - 60_000, account: null, agents: ['kimi-code'], sem: '5h + 月度（官方在线端点）', evidence: [{ file: '厂商官方端点（在线只读）', field: 'kimi-for-coding 在线档位', value: 'Pro' }], notes: [], identityAt: null,
         onlineQuotas: { h5: { used: 20, limit: 100, remaining: 80, resetTime: '2026-10-27T08:11:09Z' }, monthTotal: { usedRatio: 0.4964, resetTime: '2026-11-03T00:00:00Z' }, monthCode: { usedRatio: 0.4857, resetTime: '2026-11-03T00:00:00Z' } },
         usage: { kind: 'exact', kindLabel: '精确 token', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地无逐请求时间戳账本' }, all: { available: true, requests: 2, tokens: 360, approximate: false, unavailable: false }, today: { available: true, requests: 1, tokens: 60, approximate: false, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } }, quota: null },
+            { id: 'copilot', vendor: 'GitHub', product: 'GitHub Copilot', category: 'subscription', status: 'active', planName: 'Free（有限额度）', planNameSource: 'local-evidence', account: null, agents: [], sem: '每月额度（公开产品口径）', evidence: [{ file: 'VS Code state.vscdb', field: 'copilotSku', value: 'free_limited_copilot' }], notes: [], identityAt: null, usage: { kind: 'none', kindLabel: '无观察源', windows: null }, quota: null },
+            { id: 'qoder', vendor: '阿里巴巴 Qoder', product: 'Qoder 会员', category: 'subscription', status: 'active', planName: 'Free', planNameSource: 'online', onlineFetchedAt: NOW - 60_000, account: 'R***u', agents: ['qoder'], sem: '窗口语义未核实（本地无缓存）', evidence: [{ file: '厂商官方端点（在线只读）', field: 'qoder 在线档位', value: 'Free' }], notes: [], identityAt: null,
+        usage: { kind: 'estimate', kindLabel: '含包络估算', windows: { h5: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false, reason: '本地无逐请求时间戳账本' }, all: { available: true, requests: 85, tokens: 811750, approximate: true, unavailable: false }, today: { available: true, requests: 0, tokens: 0, approximate: true, unavailable: false }, d7: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false }, d30: { available: false, requests: 0, tokens: 0, approximate: false, unavailable: false } } },
+        onlineQuotas: { credits: { used: 558, limit: 2000, remaining: 1442, percent: 0.28 } }, quota: null },
       { id: 'gemini', vendor: 'Google', product: 'Gemini Code Assist / Antigravity', category: 'subscription', status: 'not-installed', planName: null, account: null, agents: [], evidence: [], notes: ['本机未发现安装痕迹'], identityAt: null, usage: { kind: 'none', kindLabel: '无观察源', windows: null }, quota: null },
     ],
   };
@@ -312,6 +316,8 @@ test('MU-PU7 UI：用量页 Coding Plan 区渲染（行、打码、余额、红�
   assert.match(text, /assets\/agents\/zcode\.png/);                // 厂商图标（GLM→zcode 资产）
   assert.match(text, /assets\/agents\/deepseek\.png/);
   assert.match(text, /assets\/agents\/cursor\.svg/);
+  assert.match(text, /assets\/agents\/github\.svg/, 'GitHub Copilot 用官方 GitHub mark');
+  assert.match(text, /assets\/agents\/alibaba\.png/, 'Qoder（阿里巴巴）用官方 Alibaba 图标');
   assert.match(text, /pu-vendor/);
   assert.match(text, /GLM Coding Plan/);
   assert.match(text, /account:bigmodel-individual-coding-plan/);

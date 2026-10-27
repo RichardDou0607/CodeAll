@@ -907,11 +907,13 @@ function usageSourceChart(view){
 }
 // ---- Coding Plan 使用情况（/api/plan-usage，2026-10-26）：订阅身份 × 本地用量窗口 × 配额/余额 ----
 const PLAN_STATUS={active:['订阅在用','var(--run)'],'api-billing':['API/余额计费','var(--acc)'],'signed-in':['已登录 · 档位未知','var(--wait)'],'not-signed-in':['已安装 · 未登录','var(--dim)'],unknown:['未知','var(--dim)'],'not-installed':['未安装','var(--dim)']};
-const PLAN_LOGO={'glm-coding-plan':'zcode',deepseek:'dsh',claude:'claude-code','chatgpt-codex':'codex','kimi-for-coding':'kimi-code',qoder:'qoder',cursor:'cursor','opencode-zen':'opencode','opencode-go':'opencode'};
+const PLAN_LOGO={ // 订阅页厂商图标：八源资产复用 + 官方图标（github=GitHub 官方 mark favicon.svg；alibaba=Alibaba 官方 512 manifest 图标）
+  'glm-coding-plan':'zcode.png',deepseek:'deepseek.png',claude:'claude.png','chatgpt-codex':'codex.png',
+  'kimi-for-coding':'kimi.png',qoder:'alibaba.png',cursor:'cursor.svg',copilot:'github.svg',
+  'opencode-zen':'opencode.svg','opencode-go':'opencode.svg'};
 function planLogo(p){
-  const src=PLAN_LOGO[p.id];
-  if(src)return agentLogo(src,'agent-logo pu-logo');
-  return '<img class="agent-logo pu-logo" src="/assets/codeall-mark.svg" alt="" loading="lazy">';
+  const f=PLAN_LOGO[p.id];
+  return '<img class="agent-logo pu-logo" src="'+(f?'/assets/agents/'+f:'/assets/codeall-mark.svg')+'" alt="" loading="lazy" onerror="this.onerror=null;this.src=\'/assets/codeall-mark.svg\'">';
 }
 function planWindowCell(p,win,cost){
   if(cost!=null)return Number.isFinite(cost)?'<span title="本地账本精确成本（1 单位 = 1e-8 元）">¥'+cost+'</span>':'—';
