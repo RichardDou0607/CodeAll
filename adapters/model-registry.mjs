@@ -12,6 +12,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { describeModelMap, loadModelMap, mapModelName } from './model-map.mjs';
 import { resolveQoderCliBin } from './qoder-adapter.mjs';
+import { resolveCliBinPath, localData, desktopAppDir } from './platform.mjs';
 
 const HOME = os.homedir();
 const CACHE_MS = 30_000;
@@ -128,17 +129,7 @@ function source(models, extra = {}) {
 }
 
 function findExecutable(name, extra = []) {
-  const candidates = [];
-  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-    if (dir) candidates.push(path.join(dir, name));
-  }
-  candidates.push(path.join(HOME, '.local', 'bin', name), ...extra);
-  for (const file of candidates) {
-    try {
-      if (fs.statSync(file).isFile()) return file;
-    } catch { /* continue */ }
-  }
-  return null;
+  return resolveCliBinPath(name, extra);
 }
 
 function parseCodex(map = null) {
@@ -174,7 +165,7 @@ function parseCodex(map = null) {
 
 function parseClaude(map = null) {
   const file = process.env.CLAUDE_MODEL_CATALOG
-    || path.join(HOME, 'Library', 'Application Support', 'Claude-3p', 'model-catalog', 'published.json');
+    || localData('Claude-3p', 'model-catalog', 'published.json');
   const wrapper = readJson(file);
   if (!wrapper) return emptySource('claude-model-catalog-unreadable');
   let document;
@@ -214,7 +205,7 @@ function parseClaude(map = null) {
 // contains provider credentials; project only model metadata, never log it.
 function parseKimi() {
   const kimiHome = process.env.KIMI_CODE_HOME || process.env.KIMI_HOME || path.join(HOME, '.kimi-code');
-  const bin = findExecutable('kimi', [path.join(kimiHome, 'bin', 'kimi')]);
+  const bin = findExecutable('kimi', [path.join(kimiHome, 'bin', process.platform === 'win32' ? 'kimi.exe' : 'kimi')]);
   if (!bin) return emptySource('kimi-cli-not-found');
   let payload;
   try {
@@ -292,15 +283,22 @@ function zcodeProviderModels(config, rules, canCreateDefault) {
   return out;
 }
 
+// Windows 桌面 ZCode 安装目录随盘符（实测 D:\ZCode），经注册表异步反查缓存
+let zcodeAppDirCache = null;
+desktopAppDir('zcode').then((d) => { zcodeAppDirCache = d; }).catch(() => {});
+
 function parseZcode() {
   const userFile = process.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE
     || path.join(HOME, '.zcode', 'v2', 'provider_config.json');
   const builtinFile = process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE
+    || (process.platform === 'win32' && zcodeAppDirCache ? path.join(zcodeAppDirCache, 'resources', 'config', 'provider', 'zcode-builtin.json') : null)
     || '/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json';
   const user = readJson(userFile);
   const builtin = readJson(builtinFile);
   if (!user && !builtin) return emptySource('zcode-provider-registry-unreadable');
-  const bin = findExecutable('zcode', ['/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs']);
+  const bin = findExecutable('zcode', process.platform === 'win32'
+    ? (zcodeAppDirCache ? [path.join(zcodeAppDirCache, 'resources', 'glm', 'zcode.cjs')] : [])
+    : ['/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs']);
   const rules = [...zcodeReasoningRules(builtin), ...zcodeReasoningRules(user)];
   const models = [
     ...zcodeProviderModels(user, rules, !!bin),

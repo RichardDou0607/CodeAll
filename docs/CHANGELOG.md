@@ -1,5 +1,15 @@
 # 变更日志（文档与契约）
 
+## 2026-10-27（十五）
+### 平台抽象层落地 + Windows 服务侧全链实测（v0.2.0 PLAT-1 + PLAT-2 机制项，Win11 沙箱实机验证）
+
+- **PLAT-1 平台层（新增 `adapters/platform.mjs`）**：数据目录（appSupport/localData/npm 全局候选）、进程快照（mac/linux `ps` / Windows PowerShell CIM——行内反斜杠归一 `/`、UTF8 输出、win 侧 5s 快照缓存扛 3s 轮询）、版本读取（PlistBuddy / PE VersionInfo 永久缓存）、CLI 解析（PATH 平台分隔 + PATHEXT 探测 + 兜底目录）、**spawn 目标解包**（npm shim `.cmd/.ps1` 内提取产品入口：claude 是包内原生 exe 直跑、codex 是 node+js，不落 cmd 不经 shell——绕开 Node ≥18.20 spawn .cmd EINVAL 与 cmd 注入两层问题）、插件通道地址（unix socket / `\\.\pipe\agent-pet-dsh-plugin`）、终端启动链（Terminal.app / wt.exe→`start` 兜底 / linux 三级）、Windows 桌面安装目录注册表反查（DisplayName 精确+带版本前缀双匹配，10min 缓存）。新增 `scripts/platform-check.mjs` 每平台快照断言，mac/win 双绿。
+- **四态误判修复（docs/36 §4 PLAT-2 工单）**：`local-agents.mjs` 注册表加 `installPathsWin/processReWin/appDirId+appExe` 口径，桌面安装目录经注册表反查不写盘符。沙箱实测：claude/codex/kimi/zcode/opencode 全部正确识别——CLI/桌面拆行正确（MSIX Claude 与 Claude-3p 内置 CLI 归桌面行、npm CLI 独立；Codex 桌面 = MSIX「OpenAI.Codex」进程名 ChatGPT.exe）、ZCode 9 / OpenCode 87 会话计数与 docs/36 矩阵一致、PE 版本读取正常。
+- **观察源路径全部收进平台层**：kimi 桌面 LevelDB（%APPDATA%）、Cursor/Qoder appSupport、Claude-3p 模型目录（%LOCALAPPDATA%）、ZCode 桌面捆绑 config 与模型注册表（注册表反查 D:\ZCode）、DSH flock addon（注册表反查 D:\DSH，查到前诚实 unknown 不阻塞）、Copilot/VS Code（%APPDATA%）；OpenCode 数据目录本就跨平台。沙箱直测六源目录计数：dsh 24 / claude 3 / codex 48 / zcode 9 / opencode 87（kimi 无会话如实 0）。
+- **插件通道 Windows 化**：framed 与 dsh-pet 插件端统一命名管道地址（修复 `TMPDIR||/tmp` vs `os.tmpdir()` 在 Windows 的两端口径漂移）；插件端 listen/dispose 按管道语义改造（不 mkdir、不清陈旧文件、socketIno 跳过、锁文件与调试日志落临时目录）。沙箱 `/api/state` 如实报插件未挂载（ENOENT→不可用降级），四态面板 `plugin` 通道地址正确。
+- **cli-control Windows 化**：headlessRun 经 `resolveSpawnCommand` 解包后参数数组 spawn（沙箱 `--version` 实测 claude/codex/kimi/opencode 四家全部 exit=0）；`resolveCliBin` 走平台层；tmux 恒 `[]`；zcode 捆绑 config 识别兼容 `resources/glm/` 布局；ZCode UI 粘贴通道（osascript 专用）在 Windows 如实报不支持；深链打开走 `cmd start`；`--selftest` 平台分发——沙箱实测 wt.exe 新标签通道 ✅。
+- **回归**：macOS 契约 16/16、目录 16/16、用量 36/36、demo 全套全绿零回归（test-tick 批跑偶发计时抖动，单跑 11/11）；Windows `check-fixtures` 通过、`platform-check` 通过、四态/观察/控制通道/终端链实测通过。真实模型投递轮次（V01/V02/V04）按验证纪律留待用户授权；命名管道 ACL 跨用户语义与 Tauri Win 外壳（lib.rs + NSIS）待后续（docs/36 §7）。
+
 ## 2026-10-27（十四）
 ### Win11 远端验证机（沙箱）接入：环境脚本与验证记录（docs/36）
 

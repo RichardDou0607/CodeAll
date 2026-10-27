@@ -8,9 +8,14 @@
  * 三级探测（全部只读，不启动/不杀进程，不读凭证）：
  *   安装：候选路径存在性检查（App 包 / CLI 二进制 / 配置与数据目录）。
  *         思路同 cc-switch（src-tauri/src/config.rs 的 ConfigStatus{exists,path}：~/.claude、~/.codex 等）。
- *   运行：ps axo pid=,ucomm=,args= 每轮只跑一次，逐 agent 用一条正则匹配整行（pid+ucomm+args）。
+ *   运行：平台层进程快照（platform.listProcesses，mac/linux ps / Windows CIM）每轮只跑一次，
+ *         逐 agent 用一条正则匹配整行（pid+名称+命令行；Windows 行内反斜杠已归一为 `/`）。
  *   连接：观察通道是否有「新鲜数据」——会话/状态文件 mtime 在 45s 窗口内（对齐契约 §4.4）。
  *         DSH 例外：插件 socket 是真连接（优先），日志新鲜度兜底（由调用方经 ctx.dsh 注入）。
+ *
+ * 平台口径（v0.2.0 PLAT-2，Win11 实机数据 2026-10-27）：
+ *   桌面 App 安装目录不写盘符——Windows 走注册表反查（platform.desktopAppDir）；
+ *   MSIX 应用（Claude/Codex 桌面）不在 Uninstall 注册表，用其数据目录作安装证据。
  *
  * 用法：
  *   node adapters/local-agents.mjs            # 人类可读表格
@@ -18,19 +23,14 @@
  *   import { scanLocalAgents } from '...'     # framed.mjs 每 3s 调一次
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { HOME, IS_WIN, appSupport, localData, npmGlobalCandidates, listProcesses, appVersion, desktopAppDir } from './platform.mjs';
 import { KIMI_LEVELDB, scanKimiCatalog, scanKimiLegacyCount } from './kimi-code-adapter.mjs';
 import { scanZcodeCatalog } from './zcode-adapter.mjs';
 import { scanOpencodeCatalog } from './opencode-adapter.mjs';
 import { scanQoderCatalog } from './qoder-adapter.mjs';
 import { scanCursorCatalog } from './cursor-adapter.mjs';
-
-const execFileP = promisify(execFile);
-const HOME = os.homedir();
 
 /** 连接判定窗口：与契约 §4.4 的 45s 离线判定同口径。 */
 export const CONNECT_WINDOW_MS = 45_000;
@@ -39,17 +39,20 @@ const STAT_BUDGET = 4000;
 
 /**
  * 本地域 agent 注册表。新增软件只需追加一行：
- *   installPaths  安装证据（任一存在即视为已安装；全部进 evidence 供 UI tooltip）
- *   processRe     运行判定（对 ps 整行匹配；务必收窄，避免误伤相近名字的进程）
- *   activity      连接判定（这些目录下 fileRe 文件的最新 mtime）
- *   appBundle     有 App 包时顺带读版本号（PlistBuddy，结果缓存）
+ *   installPaths      安装证据（任一存在即视为已安装；全部进 evidence 供 UI tooltip）
+ *   processRe         运行判定（对快照整行匹配；务必收窄，避免误伤相近名字的进程）
+ *   processReWin 等   Windows 行口径的可选覆盖（缺省回落 processRe）
+ *   activity          连接判定（这些目录下 fileRe 文件的最新 mtime）
+ *   appBundle         mac App 包（读版本号）；Windows 版本经 appDirId + appExe 走 PE 元数据
+ *   appDirId          Windows/mac 桌面安装目录解析键（platform.desktopAppDir；注册表 / /Applications）
  */
 export const LOCAL_AGENTS = Object.freeze([
   {
-    id: 'dsh', name: 'DeepSeek Harness', source: 'dsh',
+    id: 'dsh', name: 'DeepSeek Harness', source: 'dsh', appDirId: 'dsh',
     installPaths: ['/Applications/DeepSeek Harness.app', path.join(HOME, '.dsh')],
     appBundle: '/Applications/DeepSeek Harness.app',
     processRe: /DeepSeek Harness\.app\/|(^|\s)DeepSeek Harness(\s|$)/,
+    processReWin: /DeepSeek Harness\.exe/i,
     activity: [{ dir: path.join(HOME, '.dsh', 'sessions'), depth: 3, fileRe: /\.jsonl(\.zstd)?$/ }],
     note: '连接 = 插件 socket / 事件流 / 日志新鲜（DSH 专用的真连接口径）',
   },
@@ -59,109 +62,147 @@ export const LOCAL_AGENTS = Object.freeze([
       path.join(HOME, '.local/bin/claude'), '/usr/local/bin/claude', '/opt/homebrew/bin/claude',
       '/usr/local/lib/node_modules/@anthropic-ai/claude-code',
     ],
+    installPathsWin: [
+      ...npmGlobalCandidates('@anthropic-ai/claude-code'),
+      path.join(appSupport('npm'), 'claude.cmd'),
+    ],
     processRe: /^\s*\d+\s+claude\s|\/claude(\s|$)|@anthropic-ai\/claude-code/,  // ucomm 锚定：不再误伤 args 里出现的 “claude ” 文本
     processExclude: /\.app\/|Claude-3p/,                 // 排除桌面 App 的内置 CLI
+    processReWin: /@anthropic-ai\/claude-code/,
     activity: [{ dir: path.join(HOME, '.claude', 'projects'), depth: 2, fileRe: /\.jsonl$/ }],
-    note: '命令行版：~/.local/bin/claude（npm）',
+    note: '命令行版：~/.local/bin/claude（mac）/ %APPDATA%\\npm（Windows，npm shim 解包为 node 入口）',
   },
   {
     id: 'claude-code-desktop', name: 'Claude Code 桌面端', source: 'claude-code', base: 'claude-code', variantTag: 'desktop',
     installPaths: ['/Applications/Claude.app', path.join(HOME, 'Library/Application Support/Claude')],
+    installPathsWin: [localData('Claude-3p'), appSupport('Claude')],   // MSIX：WindowsApps 不进 Uninstall 注册表，用内置 CLI 的用户数据目录作证据
     appBundle: '/Applications/Claude.app',
     processRe: /(^|\/)claude(\s|$)|Claude-3p/,
     processInclude: /\.app\/|Claude-3p/,                 // 只数桌面 App 进程（Claude.app 的 Code 能力）
+    processReWin: /Claude-3p\/|claude-desktop\.exe|WindowsApps\/Claude_/,
     activity: [{ dir: path.join(HOME, '.claude', 'projects'), depth: 2, fileRe: /\.jsonl$/ }],
-    note: '桌面版：Claude.app 内置 Code（转录 entrypoint=claude-desktop-3p）',
+    note: '桌面版：Claude.app（mac）/ MSIX Claude（Windows，内置 Code 走 Claude-3p\\claude-code\\<版本>\\claude.exe）',
   },
   {
     id: 'codex-cli', name: 'Codex CLI', source: 'codex', base: 'codex', variantTag: 'cli',
     installPaths: [path.join(HOME, '.local/bin/codex'), '/usr/local/bin/codex', '/opt/homebrew/bin/codex', path.join(HOME, '.codex')],
+    installPathsWin: [
+      ...npmGlobalCandidates('@openai/codex'),
+      path.join(appSupport('npm'), 'codex.cmd'),
+      path.join(HOME, '.codex'),
+    ],
     processRe: /^\s*\d+\s+codex\s|\/codex(\s|$)/,  // ucomm 锚定（同 claude）
     processExclude: /Codex\+\+|\.app\//,
+    processReWin: /@openai\/codex/,
+    processExcludeWin: /OpenAI[\\/]Codex[\\/]|codex-windows-sandbox/,   // 桌面 App（MSIX OpenAI.Codex）自带的 app-server/sandbox
     activity: [{ dir: path.join(HOME, '.codex', 'sessions'), depth: 4, fileRe: /^rollout-.*\.jsonl$/ }],
-    note: '命令行版：~/.local/bin/codex（npm）',
+    note: '命令行版：~/.local/bin/codex（mac）/ %APPDATA%\\npm（Windows）',
   },
   {
     id: 'codex-desktop', name: 'Codex 桌面端', source: 'codex', base: 'codex', variantTag: 'desktop',
     installPaths: ['/Applications/Codex++.app', '/Applications/Codex++ 2.app'],
+    installPathsWin: [localData('OpenAI', 'Codex'), localData('Codex++')],
     appBundle: '/Applications/Codex++.app',
     processRe: /Codex\+\+/,
     processExclude: /CodexPlusPlusManager/,             // “Codex++ 管理工具”是壳的管理器，不是 Agent 本体进程
+    processReWin: /OpenAI[/.]Codex[_/]|codex-windows-sandbox|Codex\+\+/,  // Windows 桌面端是 MSIX「OpenAI.Codex」（进程名 ChatGPT.exe）；另有 Codex++ 壳
     activity: [{ dir: path.join(HOME, '.codex', 'sessions'), depth: 4, fileRe: /^rollout-.*\.jsonl$/ }],
-    note: '桌面版：Codex++ 壳（rollout originator=Codex Desktop）',
+    note: '桌面版：Codex++ 壳（mac）/ MSIX OpenAI Codex（Windows，进程名 ChatGPT.exe）',
   },
   {
     id: 'kimi-cli', name: 'Kimi CLI', source: 'kimi-code', base: 'kimi-code', variantTag: 'cli',
     installPaths: [path.join(HOME, '.kimi-code', 'bin', 'kimi'), path.join(HOME, '.kimi-code')],
+    installPathsWin: [path.join(HOME, '.kimi-code', 'bin', 'kimi.exe'), path.join(HOME, '.kimi-code')],
     processRe: /^\s*\d+\s+kimi\s|\.kimi-code\/bin\/kimi/,  // ucomm 锚定（同 claude）
+    processReWin: /\.kimi-code[\\/]bin[\\/]kimi\.exe/i,
     activity: [{ dir: path.join(HOME, '.kimi-code', 'sessions'), depth: 4, fileRe: /(wire\.jsonl|state\.json)$/ }],
     note: '命令行版：~/.kimi-code/bin/kimi（与桌面共用数据目录）',
   },
   {
     id: 'kimi-desktop', name: 'Kimi Code 桌面端', source: 'kimi-code', base: 'kimi-code', variantTag: 'desktop',
     installPaths: ['/Applications/Kimi Code.app', path.join(HOME, 'Library/Application Support/kimi-code-app')],
+    installPathsWin: [appSupport('kimi-code-app')],
+    appDirId: 'kimi-code', appExe: 'Kimi Code.exe',
     appBundle: '/Applications/Kimi Code.app',
     processRe: /Kimi Code\.app\//,
+    processReWin: /Kimi Code\.exe|kimi-code-app/i,
+    processExcludeWin: /\.kimi-code[\\/]bin[\\/]kimi\.exe/i,
     activity: [{ dir: KIMI_LEVELDB, depth: 1, fileRe: /\.(log|ldb)$/ }],
-    note: '桌面版：Kimi Code.app（Electron）',
+    note: '桌面版：Kimi Code.app（mac）/ Kimi Code.exe（Windows，Electron）',
   },
   {
-    id: 'zcode', name: 'ZCode', source: 'zcode',
+    id: 'zcode', name: 'ZCode', source: 'zcode', appDirId: 'zcode', appExe: 'ZCode.exe',
     installPaths: ['/Applications/ZCode.app', path.join(HOME, '.zcode')],
     appBundle: '/Applications/ZCode.app',
     // 进程特征：App 包路径 / 裸 CLI / 桌面 App 的 zcode-cli、zcode-host-local-1 辅助进程
     //（大写 ZCode 只认 .app 路径段，避免误伤 Application Support/ZCode 之外的普通词）
     processRe: /ZCode\.app\/|^\s*\d+\s+zcode(\.cjs|-cli|-host-local-1)?\s|(^|\/)zcode\.cjs(\s|$)/,  // ucomm 锚定 + App 路径
+    // Windows：桌面端 ZCode.exe；CLI 是 npm zcode-cli（node shim）
+    processReWin: /(^|\/)ZCode\.exe|zcode-cli|zcode\.cjs/,
     activity: [{ dir: path.join(HOME, '.zcode', 'cli', 'db'), depth: 1, fileRe: /^db\.sqlite(-wal|-shm)?$/ }],
     note: 'GLM 系桌面 Agent：观察 = sqlite 只读（WAL 并发读）',
   },
   {
     id: 'opencode-cli', name: 'OpenCode CLI', source: 'opencode', base: 'opencode', variantTag: 'cli',
     installPaths: [path.join(HOME, '.opencode', 'bin', 'opencode'), path.join(HOME, '.local', 'share', 'opencode')],
+    installPathsWin: [path.join(HOME, '.opencode', 'bin', 'opencode.exe'), path.join(HOME, '.local', 'share', 'opencode')],
     processRe: /^\s*\d+\s+opencode\s|\/(\.opencode\/bin|\.local\/bin)\/opencode(\s|$)/,  // ucomm 锚定（同 claude/codex）
     processExclude: /\.app\/|ai\.opencode\.desktop/,      // 排除桌面 App 及其内置 serve 服务进程
+    processReWin: /(^|\/)opencode(\.exe)?\s/,             // 安装目录随用户（实测 D:\OpenCode\bin），只锚定二进制名
     activity: [{ dir: path.join(HOME, '.local', 'share', 'opencode'), depth: 0, fileRe: /^opencode\.db(-wal|-shm)?$/ }],
     note: '命令行版：~/.opencode/bin/opencode（与桌面共用后台服务与库，会话形态库内不可分）',
   },
   {
     id: 'opencode-desktop', name: 'OpenCode 桌面端', source: 'opencode', base: 'opencode', variantTag: 'desktop',
     installPaths: ['/Applications/OpenCode.app', path.join(HOME, 'Library/Application Support/ai.opencode.desktop')],
+    installPathsWin: [appSupport('ai.opencode.desktop')],
     appBundle: '/Applications/OpenCode.app',
     processRe: /OpenCode\.app\/|ai\.opencode\.desktop/,   // 含 App 包内进程与 opencode-cli serve --service 后台服务
+    processReWin: /ai\.opencode\.desktop/,
     activity: [{ dir: path.join(HOME, '.local', 'share', 'opencode'), depth: 0, fileRe: /^opencode\.db(-wal|-shm)?$/ }],
     note: '桌面版：OpenCode.app（内置 opencode-cli serve 后台服务，写共用库）',
   },
   {
     id: 'cursor-cli', name: 'Cursor CLI', source: 'cursor', base: 'cursor', variantTag: 'cli',
     installPaths: [path.join(HOME, '.local', 'bin', 'cursor-agent'), path.join(HOME, '.cursor', 'chats')],
+    installPathsWin: [path.join(HOME, '.cursor', 'chats')],
     processRe: /^\s*\d+\s+cursor-agent\s|\/cursor-agent(\s|$)/,  // ucomm 锚定
     processExclude: /\.app\//,
+    processReWin: /(^|\/)cursor-agent(\.exe)?\s/,
     activity: [{ dir: path.join(HOME, '.cursor', 'chats'), depth: 2, fileRe: /^(meta\.json|.+\.jsonl?)$/ }],
     note: '命令行版：~/.local/bin/cursor-agent（cursor-agent -p --resume 续接；控制走 CLI）',
   },
   {
     id: 'cursor-desktop', name: 'Cursor 桌面端', source: 'cursor', base: 'cursor', variantTag: 'desktop',
     installPaths: ['/Applications/Cursor.app', path.join(HOME, 'Library/Application Support/Cursor')],
+    installPathsWin: [appSupport('Cursor')],
+    appDirId: 'cursor', appExe: 'Cursor.exe',
     appBundle: '/Applications/Cursor.app',
     processRe: /Cursor\.app\//,
     processExclude: /TextInputUIMacHelper/,           // 系统输入法服务「CursorUIViewService」不是 Cursor 本体
-    activity: [{ dir: path.join(HOME, 'Library/Application Support/Cursor/User/globalStorage'), depth: 0, fileRe: /^state\.vscdb(-wal|-shm)?$/ }],
+    processReWin: /(^|\/)Cursor\.exe/,
+    activity: [{ dir: appSupport('Cursor', 'User', 'globalStorage'), depth: 0, fileRe: /^state\.vscdb(-wal|-shm)?$/ }],
     note: '桌面版：Cursor.app（composerHeaders sqlite 只读观察；桌面会话无外部控制通道）',
   },
   {
     id: 'qoder-cli', name: 'Qoder CLI', source: 'qoder', base: 'qoder', variantTag: 'cli',
     installPaths: [path.join(HOME, '.qoder-cn', 'bin', 'qoderclicn'), path.join(HOME, '.qoder-cn')],
+    installPathsWin: [path.join(HOME, '.qoder-cn')],
     processRe: /^\s*\d+\s+qoderclicn|\/\.qoder-cn\/bin\/qoderclicn\//,   // ucomm 锚定（qoderclicn-<版本>）
     processExclude: /\.app\//,
-    activity: [{ dir: path.join(HOME, 'Library/Application Support/com.qodercn.app.stable'), depth: 0, fileRe: /^main\.sqlite(-wal|-shm)?$/ }],
+    processReWin: /qoderclicn/i,
+    activity: [{ dir: appSupport('com.qodercn.app.stable'), depth: 0, fileRe: /^main\.sqlite(-wal|-shm)?$/ }],
     note: '命令行版：~/.qoder-cn/bin/qoderclicn/qoderclicn-<版本>（与桌面共用会话库，可互相续接；会话形态库内不可分）',
   },
   {
     id: 'qoder-desktop', name: 'Qoder 桌面端', source: 'qoder', base: 'qoder', variantTag: 'desktop',
     installPaths: ['/Applications/Qoder CN.app', '/Applications/Qoder.app', path.join(HOME, 'Library/Application Support/com.qodercn.app.stable')],
+    installPathsWin: [appSupport('com.qodercn.app.stable')],
+    appDirId: 'qoder', appExe: 'Qoder CN.exe',
     appBundle: '/Applications/Qoder CN.app',
     processRe: /Qoder( CN)?\.app\//,                     // ucomm 为「Qoder CN」；只认 App 路径段，防误伤
-    activity: [{ dir: path.join(HOME, 'Library/Application Support/com.qodercn.app.stable'), depth: 0, fileRe: /^main\.sqlite(-wal|-shm)?$/ }],
+    processReWin: /(^|\/)Qoder( CN)?\.exe/,
+    activity: [{ dir: appSupport('com.qodercn.app.stable'), depth: 0, fileRe: /^main\.sqlite(-wal|-shm)?$/ }],
     note: '桌面版：Qoder CN.app（Electron）——观察 = sqlite 只读（chat_sessions/messages 结构化列，不读消息原文）',
   },
   // v0.1.0 首发收录五源；OpenCode（docs/21 M-I）与 Qoder（docs/22 AGT-3）已于本轮接入回到注册表。
@@ -171,14 +212,6 @@ export const LOCAL_AGENTS = Object.freeze([
 // ---------------------------------------------------------------------------
 // 探测原语
 // ---------------------------------------------------------------------------
-
-/** ps 快照：每轮扫描只跑一次；失败（权限/异常）返回空串 = 全部「运行未知→按未运行」。 */
-async function psLines() {
-  try {
-    const { stdout } = await execFileP('ps', ['axo', 'pid=,ucomm=,args='], { maxBuffer: 16 * 1024 * 1024, timeout: 4000 });
-    return stdout.split('\n');
-  } catch { return []; }
-}
 
 /** 深度受限的最新 mtime（只 stat 预算内的条目；返回 ms 或 null）。 */
 export function newestMtime(dir, depth, fileRe, budget = STAT_BUDGET) {
@@ -197,18 +230,9 @@ export function newestMtime(dir, depth, fileRe, budget = STAT_BUDGET) {
   return best || null;
 }
 
-/** macOS App 版本号（PlistBuddy；每 bundle 只读一次，结果永久缓存）。 */
-const versionCache = new Map();
-async function macAppVersion(bundle) {
-  if (!bundle) return null;
-  if (versionCache.has(bundle)) return versionCache.get(bundle);
-  let v = null;
-  try {
-    const { stdout } = await execFileP('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleShortVersionString', path.join(bundle, 'Contents/Info.plist')], { timeout: 2000 });
-    v = stdout.trim() || null;
-  } catch { /* 无包/读失败 */ }
-  versionCache.set(bundle, v);
-  return v;
+/** macOS App 版本号兼容包装（platform.appVersion 已按平台分发）。 */
+async function appBundleVersion(bundle) {
+  return appVersion(bundle);
 }
 
 /** CLI 版本号：直接读 npm 全局 package.json（不起进程，毫秒级）。 */
@@ -217,6 +241,11 @@ function pkgVersion(candidates) {
     try { const j = JSON.parse(fs.readFileSync(p, 'utf8')); if (j?.version) return j.version; } catch { /* 下一个 */ }
   }
   return null;
+}
+
+/** npm 全局包 package.json 候选（平台层口径）。 */
+function npmPkgJson(pkgDir) {
+  return npmGlobalCandidates(pkgDir).map((d) => path.join(d, 'package.json'));
 }
 
 /** Kimi 会话计数（30s 缓存）：优先 ~/.kimi-code 目录（精确）；无则退回 LevelDB 键名去重（近似）。 */
@@ -289,18 +318,32 @@ export async function scanLocalAgents(ctx = {}) {
   const t0 = process.hrtime.bigint();
   const now = Number.isFinite(ctx.now) ? ctx.now : Date.now();
   const windowMs = ctx.windowMs ?? CONNECT_WINDOW_MS;
-  const lines = await psLines();
+  const [lines, appDirs] = await Promise.all([
+    listProcesses(),
+    (async () => {
+      const ids = [...new Set(LOCAL_AGENTS.map((a) => a.appDirId).filter(Boolean))];
+      const out = {};
+      await Promise.all(ids.map(async (id) => { out[id] = await desktopAppDir(id); }));
+      return out;
+    })(),
+  ]);
   const agents = [];
   for (const a of LOCAL_AGENTS) {
     const evidence = [];
-    for (const p of a.installPaths) { try { if (fs.existsSync(p)) evidence.push(p); } catch { /* ignore */ } }
+    const installPaths = IS_WIN && a.installPathsWin ? a.installPathsWin : a.installPaths;
+    for (const p of installPaths) { try { if (fs.existsSync(p)) evidence.push(p); } catch { /* ignore */ } }
+    const appDir = a.appDirId ? appDirs[a.appDirId] : null;
+    if (appDir) evidence.push(appDir);
+    const re = IS_WIN && a.processReWin ? a.processReWin : a.processRe;
+    const includeRe = IS_WIN ? (a.processIncludeWin ?? a.processInclude) : a.processInclude;
+    const excludeRe = IS_WIN ? (a.processExcludeWin ?? a.processExclude) : a.processExclude;
     const procs = [];
     for (const line of lines) {
       if (procs.length >= 5) break;                       // 计数封顶 5，够显示即可
       // CLI 与桌面端按进程路径特征区分（cc-switch 思路：安装位置/路径归属）：
       //   桌面端进程路径含 .app/Contents 或专属目录（Claude-3p / Codex++ / Kimi Code.app）；
       //   CLI 是裸二进制路径（~/.local/bin、~/.kimi-code/bin、node_modules）
-      if (a.processRe.test(line) && (!a.processInclude || a.processInclude.test(line)) && !(a.processExclude && a.processExclude.test(line))) { const pid = Number((line.trim().match(/^(\d+)/) || [])[1]); if (Number.isFinite(pid)) procs.push(pid); }
+      if (re.test(line) && (!includeRe || includeRe.test(line)) && !(excludeRe && excludeRe.test(line))) { const pid = Number((line.trim().match(/^(\d+)/) || [])[1]); if (Number.isFinite(pid)) procs.push(pid); }
     }
     const installed = evidence.length > 0 || procs.length > 0;
     if (procs.length) evidence.push('运行中进程 pid=' + procs.join(','));
@@ -323,6 +366,7 @@ export async function scanLocalAgents(ctx = {}) {
       else if (lastActivityMs && now - lastActivityMs < windowMs) { connected = true; connectionKind = 'log'; }
     }
     const status = !installed ? 'not-installed' : procs.length === 0 ? 'closed' : connected ? 'connected' : 'open-unconnected';
+    const winExe = IS_WIN && appDir && a.appExe ? path.join(appDir, a.appExe) : null;
     agents.push({
       id: a.id, name: a.name, source: a.source || a.id, base: a.base || undefined, variantTag: a.variantTag || undefined, status,
       installed, running: procs.length > 0, connected, connectionKind,
@@ -335,9 +379,9 @@ export async function scanLocalAgents(ctx = {}) {
         : a.id === 'cursor-desktop' ? cursorSessionCount().count
         : undefined,
       sessionCountApproximate: a.id === 'kimi-desktop' ? kimiSessionCount().approximate || undefined : undefined,
-      version: (await macAppVersion(a.appBundle))
-        ?? (a.id === 'claude-code-cli' ? pkgVersion(['/usr/local/lib/node_modules/@anthropic-ai/claude-code/package.json', path.join(HOME, '.local/lib/node_modules/@anthropic-ai/claude-code/package.json')]) : null)
-        ?? (a.id === 'codex-cli' ? pkgVersion([path.join(HOME, '.local/lib/node_modules/@openai/codex/package.json'), '/usr/local/lib/node_modules/@openai/codex/package.json']) : null),
+      version: (await appBundleVersion(IS_WIN ? winExe : a.appBundle))
+        ?? (a.id === 'claude-code-cli' ? pkgVersion(npmPkgJson('@anthropic-ai/claude-code')) : null)
+        ?? (a.id === 'codex-cli' ? pkgVersion(npmPkgJson('@openai/codex')) : null),
       evidence, note: a.note ?? null,
     });
   }

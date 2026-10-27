@@ -81,6 +81,7 @@ node demo/test-usage-calendar.mjs     # 用量日历自检
 node demo/test-plan-usage.mjs         # Coding Plan 订阅面板回归（身份/隐私/账本/窗口/UI）
 node scripts/multi-source-check.mjs         # 扩展多源检查（含 ZCode 性能阈值；非当前发布门槛）
 node scripts/catalog-check.mjs        # 会话目录验收（16 项）
+node scripts/platform-check.mjs       # 平台层快照自检（v0.2.0；macOS/Windows/Linux 各自运行）
 node adapters/local-agents.mjs        # 软件四态探测（CLI 表格 / --json）
 node adapters/cli-control.mjs --selftest   # 控制通道自检（投递·新建·打开）
 
@@ -207,6 +208,7 @@ node demo/test-usage-calendar.mjs     # Usage calendar self-check
 node demo/test-plan-usage.mjs         # Coding Plan panel regression (identity/privacy/ledger/windows/UI)
 node scripts/multi-source-check.mjs         # Extended multi-source check (incl. ZCode perf threshold; not a current release gate)
 node scripts/catalog-check.mjs        # Session catalog acceptance (16 items)
+node scripts/platform-check.mjs       # Platform layer snapshot self-check (v0.2.0; run per OS)
 node adapters/local-agents.mjs        # Four-state software probe (CLI table / --json)
 node adapters/cli-control.mjs --selftest   # Control channel self-test (deliver · new · open)
 

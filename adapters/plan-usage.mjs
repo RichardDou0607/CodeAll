@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { openZcodeDb, ZCODE_DB } from './zcode-adapter.mjs';
+import { appSupport, localData } from './platform.mjs';
 
 const HOME = process.env.PLAN_USAGE_HOME || os.homedir();
 const DAY_MS = 86_400_000;
@@ -309,8 +310,9 @@ const COPILOT_SKU_LABEL = {
 };
 function copilotIdentity(o) {
   const evidence = [], notes = [];
-  const installed = ['/Applications/GitHub Copilot.app', path.join(HOME, '.copilot'), path.join(HOME, 'Library/Caches/github-copilot-sdk')].some(fileExists);
-  const dbPath = path.join(HOME, 'Library/Application Support/Code/User/globalStorage/state.vscdb');
+  const installed = ['/Applications/GitHub Copilot.app', path.join(HOME, '.copilot'),
+    path.join(HOME, 'Library/Caches/github-copilot-sdk'), localData('GitHub Copilot')].some(fileExists);
+  const dbPath = appSupport('Code', 'User', 'globalStorage', 'state.vscdb');
   let sku = null;
   const db = openSqliteReadOnly(dbPath);
   if (db) {

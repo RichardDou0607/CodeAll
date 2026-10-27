@@ -13,10 +13,12 @@
  *        增长，观察跟随器（M-A/M-B/M-H）自动看到状态变化 —— 控制→观察闭环。
  *
  *   新建会话：服务端要求首条消息；CLI 无头新建，ZCode 经 app-server create+send。
- *   打开会话：Terminal.app 新窗口 `cd <cwd> && <cli> resume <id>`（DSH 仍走插件，不经此文件）。
+ *   打开会话：终端新窗口 `cd <cwd> && <cli> resume <id>`（mac Terminal.app / Windows wt.exe・cmd，
+ *             经 platform.openTerminalWindow；DSH 仍走插件，不经此文件）。
  *
  * 安全边界：
  *   - 一律 execFile/spawn 参数数组，**不经 shell 拼接**（防注入）；Terminal 的 AppleScript 用 JSON.stringify 转义。
+ *     Windows npm shim（.cmd/.ps1）由平台层解包成 node + 入口 js 直接 spawn，不落 cmd。
  *   - 不使用任何越权 flag（无 --dangerously-skip-permissions / yolo / full-auto）——各 CLI 自身权限模式照常生效。
  *   - 不读不存任何凭证；无头进程继承当前用户环境。
  */
@@ -28,6 +30,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolveQoderCliBin } from './qoder-adapter.mjs';
+import { IS_WIN, HOME as PLAT_HOME, resolveCliBinPath, resolveSpawnCommand, openTerminalWindow } from './platform.mjs';
 
 const execFileP = promisify(execFile);
 
@@ -90,7 +93,7 @@ export const CLI_TARGETS = Object.freeze({
     openArgs: (id) => ['-S', id],
     interactiveArgs: () => [],
     modelArgs: (model) => ['-m', model],
-    extraPaths: () => [path.join(os.homedir(), '.kimi-code', 'bin', 'kimi')],
+    extraPaths: () => [path.join(os.homedir(), '.kimi-code', 'bin', IS_WIN ? 'kimi.exe' : 'kimi')],
   }),
   zcode: Object.freeze({
     name: 'ZCode',
@@ -104,7 +107,8 @@ export const CLI_TARGETS = Object.freeze({
     createArgs: (text) => ['--mode', 'build', '--prompt', text],
     openArgs: (id) => ['--resume', id],
     interactiveArgs: () => [],
-    extraPaths: () => [path.join('/Applications', 'ZCode.app', 'Contents', 'Resources', 'glm', 'zcode.cjs')],
+    // Windows：CLI 经 npm 全局（%APPDATA%\npm 在 PATH），无 App 包捆绑形态
+    extraPaths: () => IS_WIN ? [] : [path.join('/Applications', 'ZCode.app', 'Contents', 'Resources', 'glm', 'zcode.cjs')],
     /**
      * 桌面 App 进程会注入的 provider 配置路径（CLI 脱离 App 环境运行时缺它 →
      * "无法定位 CLI ZCode Built-in Provider Config" → Model creation failed，2026-10-07 实测）。
@@ -112,7 +116,9 @@ export const CLI_TARGETS = Object.freeze({
      */
     envFor: (bin) => {
       const out = {};
-      const bundled = bin && /ZCode\.app\//.test(bin)
+      const norm = bin ? String(bin).replace(/\\/g, '/') : '';
+      // 捆绑 config 取 bin 同级的 App 包 config（mac Resources/../../config/provider；Windows <安装目录>\resources\config\provider）
+      const bundled = norm.includes('ZCode.app/') || /\/resources\/glm\//.test(norm)
         ? path.join(path.dirname(path.dirname(bin)), 'config', 'provider', 'zcode-builtin.json')
         : null;
       if (bundled && fs.existsSync(bundled)) out.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = bundled;
@@ -133,7 +139,9 @@ export const CLI_TARGETS = Object.freeze({
     createArgs: (text) => ['run', text],
     openArgs: (id) => ['--session', id],
     interactiveArgs: () => [],
-    extraPaths: () => [path.join(os.homedir(), '.opencode', 'bin', 'opencode'), path.join('/Applications', 'OpenCode.app', 'Contents', 'Resources', 'opencode-cli')],
+    extraPaths: () => IS_WIN
+      ? [path.join(os.homedir(), '.opencode', 'bin', 'opencode.exe')]
+      : [path.join(os.homedir(), '.opencode', 'bin', 'opencode'), path.join('/Applications', 'OpenCode.app', 'Contents', 'Resources', 'opencode-cli')],
   }),
   qoder: Object.freeze({
     name: 'Qoder',
@@ -190,24 +198,14 @@ function openControlLog(prefix) {
   }
 }
 
-/** PATH 里找 CLI 二进制（结果缓存 60s；卸载/改装后自动重查）。 */
+/** PATH 里找 CLI 二进制（结果缓存 60s；卸载/改装后自动重查）。解析经平台层（PATHEXT / 路径分隔）。 */
 const binCache = new Map();
 export function resolveCliBin(source) {
   const t = CLI_TARGETS[source];
   if (!t) return null;
   const hit = binCache.get(source);
   if (hit && Date.now() - hit.at < 60_000) return hit.path;
-  const dirs = (process.env.PATH || '').split(':');
-  let found = null;
-  for (const d of dirs) {
-    if (!d) continue;
-    const p = path.join(d, t.bin);
-    try { if (fs.statSync(p).isFile() && fs.accessSync(p, fs.constants.X_OK) === undefined) { found = p; break; } } catch { /* 下一个 */ }
-  }
-  // 常见兜底（不在 PATH 时）：~/.local/bin + 各后端声明的 extraPaths（如 ZCode.app 内捆绑的 CLI）
-  if (!found) for (const p of [path.join(os.homedir(), '.local', 'bin', t.bin), ...(t.extraPaths ? t.extraPaths() : [])]) {
-    try { if (fs.statSync(p).isFile()) { found = p; break; } } catch { /* 下一个 */ }
-  }
+  const found = resolveCliBinPath(t.bin, t.extraPaths ? t.extraPaths() : []);
   binCache.set(source, { at: Date.now(), path: found });
   return found;
 }
@@ -223,8 +221,9 @@ export function availableCliChannels() {
 // tmux 仅用于新建交互窗口；目录相同不能证明 pane 属于指定会话。
 // ---------------------------------------------------------------------------
 
-/** tmux 全部 pane 列表：[{pane, command, path}]；tmux 不可用/服务未跑返回 []。 */
+/** tmux 全部 pane 列表：[{pane, command, path}]；tmux 不可用/服务未跑返回 []（Windows 无 tmux，恒 []）。 */
 function tmuxPanes() {
+  if (IS_WIN) return [];
   try {
     const out = execFileSync('tmux', ['list-panes', '-a', '-F', '#{pane_id}\t#{pane_current_command}\t#{pane_current_path}'], { timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] });
     return String(out).split('\n').filter(Boolean).map((l) => { const [pane, command, cwd] = l.split('\t'); return { pane, command, cwd }; });
@@ -278,7 +277,9 @@ async function headlessRun(source, cwd, args, label, envExtra = {}) {
     const out = fs.openSync(logFile, 'a', 0o600);
     // PWD 同步 cwd：opencode v2 客户端按 $PWD（非 getcwd）判定会话项目目录——不覆盖时无头子进程
     // 继承宿主的 PWD，会话全部落进服务进程目录（2026-10-22 实测：spawn cwd=/tmp 仍写 agent桌宠）。
-    const child = spawn(bin, args, {
+    // Windows npm shim（.cmd/.ps1）先经平台层解包成 node + 入口 js，参数数组直达不经 shell。
+    const spawnTarget = resolveSpawnCommand(bin);
+    const child = spawn(spawnTarget.file, [...spawnTarget.prefixArgs, ...args], {
       cwd,
       detached: true, stdio: ['ignore', out, out],
       env: { ...sanitizedEnv(), PWD: cwd, ...cliEnvFor(source, bin), ...envExtra },
@@ -669,6 +670,9 @@ async function deliverViaZcodePipe(session, text) {
  *  PET_ZCODE_UI_DELIVER=0 可关闭该通道（回落为如实失败）。 */
 const UI_PERM_RE = /assistive|accessibility|25211|1002|不允许发送按键|辅助功能/i;
 async function deliverViaZcodeUi(session, text) {
+  // UI 自动化通道是 macOS 专用（osascript + System Events + pbcopy）；Windows 无 TCC 等价面，
+  // SendKeys 类方案对「投进哪个会话」同样无法核验——如实报不支持，不静默换通道。
+  if (IS_WIN) return { ok: false, error: 'ui-automation', detail: 'ZCode UI 粘贴投递通道暂不支持 Windows（macOS 专用）；请用 ZCode 桌面 App 内直接操作' };
   const cwd = session?.cwd && fs.existsSync(session.cwd) ? session.cwd : os.homedir();
   // 权限前置探测（2026-10-08）：无辅助功能权限时一个像素都不能动——此前先开深链再等
   // osascript 被拒，用户看到的是「只打开了文件夹、消息没进会话」。探测用只读查询，无副作用。
@@ -1067,14 +1071,15 @@ export async function deliverCreateViaCli(source, cwd, text, model = '', reasoni
 // Terminal.app / tmux 新建与打开
 // ---------------------------------------------------------------------------
 
-/** AppleScript 的 do script：JSON.stringify 的双引号转义与 AppleScript 字符串字面量兼容。 */
-function terminalDo(cmd) {
-  return execFileP('osascript', ['-e', 'tell application "Terminal" to do script ' + JSON.stringify(cmd)], { timeout: 4000 });
+/** 深链打开（ZCode account 会话 → 桌面 App）：mac `open`，Windows `cmd start`，linux xdg-open。 */
+async function openDeepLink(url) {
+  if (IS_WIN) return execFileP('cmd.exe', ['/d', '/s', '/c', 'start', '', url], { timeout: 4000, windowsVerbatimArguments: false });
+  if (process.platform === 'linux') return execFileP('xdg-open', [url], { timeout: 4000 });
+  return execFileP('open', [url], { timeout: 4000 });
 }
-function shQuote(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 
 /**
- * 新建会话：可见、可交互（tmux 在跑则开 window，否则 Terminal.app 新窗口）。
+ * 新建会话：可见、可交互（tmux 在跑则开 window，否则平台终端新窗口）。
  * model：可选启动模型（claude --model / codex -m / kimi -m，本机 --help 实测）；
  * 不支持启动指定模型的 CLI（zcode 仅 TUI 内 /model）忽略该参数，照常以默认模型创建。
  */
@@ -1087,20 +1092,21 @@ export async function newCliSession(source, cwd, model = '') {
   const extra = [...t.interactiveArgs()];
   const wanted = String(model || '').trim().slice(0, 80);
   if (wanted && t.modelArgs) extra.push(...t.modelArgs(wanted));
-  const envVars = Object.entries(cliEnvFor(source, bin));        // Terminal/tmux 里跑 CLI 同样需要（zcode 的 provider 路径）
+  const envVars = Object.entries(cliEnvFor(source, bin));        // 终端/tmux 里跑 CLI 同样需要（zcode 的 provider 路径）
   try {
     if (tmuxPanes().length) {
       await execFileP('tmux', ['new-window', '-c', dir, ...envVars.flatMap(([k, v]) => [k + '=' + v]), bin, ...extra], { timeout: 2000 });
       return { ok: true, via: 'tmux new-window（' + t.bin + ' @ ' + dir + '）' };
     }
-    await terminalDo('cd ' + shQuote(dir) + ' && ' + (envVars.length ? envVars.map(([k, v]) => 'export ' + k + '=' + shQuote(v) + '; ').join('') : '') + shQuote(bin) + (extra.length ? ' ' + extra.map(shQuote).join(' ') : ''));
-    return { ok: true, via: 'Terminal 新窗口（' + t.bin + ' @ ' + dir + '）' };
+    const r = await openTerminalWindow({ cwd: dir, env: Object.fromEntries(envVars), file: bin, args: extra });
+    if (!r.ok) return { ok: false, error: 'terminal', detail: r.error || r.via };
+    return { ok: true, via: r.via + '（' + t.bin + ' @ ' + dir + '）' };
   } catch (e) {
     return { ok: false, error: 'terminal', detail: String(e.message || e).slice(0, 120) };
   }
 }
 
-/** 打开（续接）既有会话：Terminal.app 新窗口跑 `cli resume <id>`（DSH 走插件，不经此）。
+/** 打开（续接）既有会话：终端新窗口跑 `cli resume <id>`（DSH 走插件，不经此）。
  *  ZCode account:* 会话例外：无头/交互续接都会卡 provider 注册（上游限制），改走
  *  `zcode://workspace/open?path=` 深链把桌面 App 带到该项目（App 内点该会话继续）。 */
 export async function openCliSession(source, session) {
@@ -1111,7 +1117,7 @@ export async function openCliSession(source, session) {
   const dir = session?.cwd && fs.existsSync(session.cwd) ? session.cwd : os.homedir();
   if (source === 'zcode' && typeof session?.provider === 'string' && session.provider.startsWith('account:')) {
     try {
-      await execFileP('open', ['zcode://workspace/open?path=' + encodeURIComponent(dir)]);
+      await openDeepLink('zcode://workspace/open?path=' + encodeURIComponent(dir));
       return { ok: true, via: 'ZCode 桌面 App 深链（workspace ' + dir.slice(-40) + '；account 会话请在 App 内点击继续）', opened: true };
     } catch (e) {
       return { ok: false, error: 'terminal', detail: '深链打开失败：' + String(e.message || e).slice(0, 100) };
@@ -1120,8 +1126,9 @@ export async function openCliSession(source, session) {
   const id = String(session.sessionId || session.id);
   const envVars = Object.entries(cliEnvFor(source, bin));
   try {
-    await terminalDo('cd ' + shQuote(dir) + ' && ' + (envVars.length ? envVars.map(([k, v]) => 'export ' + k + '=' + shQuote(v) + '; ').join('') : '') + shQuote(bin) + ' ' + t.openArgs(id).map(shQuote).join(' '));
-    return { ok: true, via: 'Terminal 新窗口（' + t.bin + ' resume ' + id.slice(0, 12) + '…）', opened: true };
+    const r = await openTerminalWindow({ cwd: dir, env: Object.fromEntries(envVars), file: bin, args: t.openArgs(id) });
+    if (!r.ok) return { ok: false, error: 'terminal', detail: r.error || r.via };
+    return { ok: true, via: r.via + '（' + t.bin + ' resume ' + id.slice(0, 12) + '…）', opened: true };
   } catch (e) {
     return { ok: false, error: 'terminal', detail: String(e.message || e).slice(0, 120) };
   }
@@ -1176,11 +1183,16 @@ async function main(argv) {
   const panes = tmuxPanes();
   console.log('tmux：' + (panes.length ? panes.length + ' 个 pane（仅用于新建交互窗口）' : '服务未跑（无头投递 + Terminal 新窗口）'));
   if (argv.includes('--selftest')) {
-    // 机制自检：Terminal do script 通道（无害命令，窗口一闪即关）
-    try {
-      await execFileP('osascript', ['-e', 'tell application "Terminal" to do script "echo agent-pet-terminal-ok && exit"'], { timeout: 4000 });
-      console.log('Terminal.app do script 通道：✅（已开一个自检窗口）');
-    } catch (e) { console.log('Terminal.app do script 通道：❌ ' + String(e.message || e).slice(0, 80)); }
+    // 机制自检：终端窗口通道（无害命令，窗口一闪即关/数秒自退）
+    if (IS_WIN) {
+      const r = await openTerminalWindow({ cwd: os.homedir(), env: {}, file: 'cmd.exe', args: ['/d', '/c', 'echo agent-pet-terminal-ok & timeout /t 2'] });
+      console.log('终端窗口通道（wt/start）：' + (r.ok ? '✅（' + r.via + '，已开一个自检窗口）' : '❌ ' + (r.error || '')));
+    } else {
+      try {
+        await execFileP('osascript', ['-e', 'tell application "Terminal" to do script "echo agent-pet-terminal-ok && exit"'], { timeout: 4000 });
+        console.log('Terminal.app do script 通道：✅（已开一个自检窗口）');
+      } catch (e) { console.log('Terminal.app do script 通道：❌ ' + String(e.message || e).slice(0, 80)); }
+    }
   }
 }
 

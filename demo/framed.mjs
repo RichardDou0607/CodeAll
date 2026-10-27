@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { createHub, makeMapper, findSessionLog } from './frame.mjs';
 import { scanCatalog, readWorkspaceIndex, DSH_HOME, WORKSPACE_STORE } from '../adapters/session-catalog.mjs';
+import { pluginSocketPath } from '../adapters/platform.mjs';
 import { scanLocalAgents } from '../adapters/local-agents.mjs';
 import { scanClaudeCatalog, followClaudeLogs, SOURCE as CC_SOURCE } from '../adapters/claude-code-adapter.mjs';
 import { scanCodexCatalog, followCodexLogs, SOURCE as CX_SOURCE } from '../adapters/codex-adapter.mjs';
@@ -51,7 +52,8 @@ export function isCodexTaskCwd(source, cwd) {
 }
 
 // ---------- DSH 插件通道（优先）：存在则用进程内事件 + 输入投递；不存在则退回日志 tail + 本地队列 ----------
-const PLUGIN_SOCK = process.env.PET_PLUGIN_SOCK || path.join(process.env.TMPDIR || '/tmp', 'agent-pet', 'dsh-plugin.sock');
+// 地址经平台层：unix socket（mac/linux）/ 命名管道 \\.\pipe\agent-pet-*（Windows）；PET_PLUGIN_SOCK 可覆盖
+const PLUGIN_SOCK = process.env.PET_PLUGIN_SOCK || pluginSocketPath();
 const plugin = { available: false, socket: PLUGIN_SOCK, lastProbe: 0, info: null, events: 0 };
 /** 极简 HTTP-over-UnixSocket 客户端（零依赖） */
 function pluginRequest(method, urlPath, body, timeoutMs) {

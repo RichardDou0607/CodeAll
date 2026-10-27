@@ -52,7 +52,7 @@
 
 注意：`local-agents.mjs` 在 Windows 上把部分已装 CLI 误判为「未下载」——其安装探测路径
 （`~/.local/bin` 等）是 macOS/Linux 口径，Windows 的 npm 全局路径与进程特征适配是 **PLAT-2 的工作项**，
-本表已按实况人工校正。
+本表已按实况人工校正。**（同日已修复：平台抽象层落地，见 §7。）**
 
 ## 5. 坑与约定（写代码前必读）
 
@@ -71,3 +71,24 @@
 - PLAT-0 的 Win11 侧「可远程操作验证机」**就绪**（本机 = 本文机器）。
 - PLAT-2「Windows 全功能」在其上开发：路径/进程特征适配（§4 误判即工单）、`wt.exe` 终端投递、
   Tauri Win 外壳（源码已随 sync.sh 到位，`pnpm tauri build` 待 Windows 侧装 Rust 工具链）。
+
+## 7. 平台层落地与 PLAT-2 机制实测（2026-10-27 第二轮）
+
+PLAT-1 平台抽象层 `adapters/platform.mjs` 落地并同步到本机实测，PLAT-2 的服务侧机制项（观察 + 控制）全链通过：
+
+| 项 | 实测结果 |
+|---|---|
+| 平台快照自检 `scripts/platform-check.mjs` | mac/win 双平台通过；PE 版本读取（DSH 0.2.1.0 / ZCode 3.16.2.8769 / Kimi 1.0.4.0，注册表反查 D 盘安装目录） |
+| 四态探测（PLAT-2 工单修复） | claude/codex/kimi/zcode/opencode 全部正确识别；CLI 与桌面拆行正确（MSIX Claude+Claude-3p 内置 CLI ↔ npm CLI；Codex 桌面 = MSIX ChatGPT.exe）；ZCode 9 会话 / OpenCode 87 会话与 §4 矩阵一致 |
+| 观察源 | dsh 24 / claude 3 / codex 48 / zcode 9 / opencode 87（kimi 无会话如实 0）；`check-fixtures` 通过；framed `/api/state` 200、目录 58 项目热身正常 |
+| 控制通道 | 五家 CLI 全部解析成功；`--version` 实测经解包 spawn 全部 exit=0（claude→包内原生 exe、codex→node+js、kimi/opencode→原生 exe）；`--selftest` 终端链 wt.exe 新标签 ✅ |
+| 插件通道 | 命名管道 `\\.\pipe\agent-pet-dsh-plugin` 地址正确；DSH 未挂插件时如实报不可用（ENOENT→降级） |
+
+发现与口径：
+
+- **zcode npm shim 的 junction 已损坏**（`node_modules\zcode-cli` 指向失效目标）——该机 ZCode 真身是桌面 App（D:\ZCode）；CLI 解析会诚实降级为 cmd 兜底，且 ZCode 投递本就走 app-server 管道，不经此路径。
+- **Windows 注册表 Uninstall 的 DisplayName 带版本号**（"DeepSeek Harness 0.2.1-rc.2"）——反查用「精确 + 前缀」双匹配；**MSIX 应用不进 Uninstall 表**（Claude/Codex 桌面用其数据目录作安装证据）。
+- **Cursor 桌面不在 Uninstall 注册表**（装在非标准目录）——用 `%APPDATA%\Cursor` 数据目录作证据，版本如实缺省。
+- 命名管道 ACL 的跨用户语义仍未实测（沙箱单用户环境无对照），PLAT-2 验收时补。
+- 真实模型投递轮次（V01/V02/V04 同口径）按验证纪律**留待用户授权**，本轮只做机制级验证（`--version` 零额度消耗）。
+- Tauri Win 外壳（lib.rs 窗口行为 + NSIS 安装包）不在本轮：需 Windows 侧 Rust 工具链，装包前另行确认。

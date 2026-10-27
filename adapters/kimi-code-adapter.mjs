@@ -31,14 +31,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { categoryOf } from '../demo/frame.mjs';
+import { appSupport } from './platform.mjs';
 
 export const SOURCE = 'kimi-code';
 export const AGENT_NAME = 'Kimi Code';
 export const KIMI_HOME = process.env.KIMI_HOME || path.join(os.homedir(), '.kimi-code');
 export const SESSIONS_ROOT = path.join(KIMI_HOME, 'sessions');
 export const WORKSPACES_STORE = path.join(KIMI_HOME, 'workspaces.json');
-/** Electron 前端层缓存（第三层兜底，见文件头勘误）。 */
-export const KIMI_LEVELDB = process.env.KIMI_APP_SUPPORT || path.join(os.homedir(), 'Library', 'Application Support', 'kimi-code-app', 'Local Storage', 'leveldb');
+/** Electron 前端层缓存（第三层兜底，见文件勘误）。目录随平台：mac ~/Library/Application Support；Windows %APPDATA%（Win11 实测在）。 */
+export const KIMI_LEVELDB = process.env.KIMI_APP_SUPPORT || appSupport('kimi-code-app', 'Local Storage', 'leveldb');
 
 export const DEFAULT_OPTS = Object.freeze({
   root: SESSIONS_ROOT,

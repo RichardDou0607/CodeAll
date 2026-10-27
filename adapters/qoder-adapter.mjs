@@ -41,11 +41,12 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { appSupport } from './platform.mjs';
 
 export const SOURCE = 'qoder';
 export const AGENT_NAME = 'Qoder';
 export const QODER_APP_SUPPORT = process.env.QODER_APP_SUPPORT
-  || path.join(os.homedir(), 'Library', 'Application Support', 'com.qodercn.app.stable');
+  || appSupport('com.qodercn.app.stable');
 export const QODER_DB = process.env.QODER_DB || path.join(QODER_APP_SUPPORT, 'main.sqlite');
 
 /**

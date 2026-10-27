@@ -39,6 +39,11 @@ const HEARTBEAT_MS = 15000;
 const OBSERVES = ['session.*', 'turn.*', 'step.*', 'tool.*', 'approval.*', 'message.assistant', 'error.*', 'pet.heartbeat'];
 
 function defaultSocketPath() {
+  // Windows：命名管道（net 原生支持 \\.\pipe\ 前缀）；unix：临时目录 socket。
+  // 两端（DSH 内插件 + CodeAll 服务）必须算出同一地址——口径收在 adapters/platform.mjs。
+  if (process.platform === 'win32') {
+    return process.env.DSH_PET_SOCK || '\\\\.\\pipe\\agent-pet-dsh-plugin';
+  }
   const base = process.env.DSH_PET_DIR || path.join(os.tmpdir(), 'agent-pet');
   return process.env.DSH_PET_SOCK || path.join(base, 'dsh-plugin.sock');
 }
@@ -720,7 +725,10 @@ export class PetBridge {
     this.ctx = ctx;
     this.options = options;
     this.socketPath = options.socket || defaultSocketPath();
-    this.lockPath = path.join(path.dirname(this.socketPath), SOURCE + '-plugin.lock');
+    // Windows 命名管道没有「目录」，锁文件落临时目录同口径位置
+    this.lockPath = String(this.socketPath).startsWith('\\\\.\\pipe\\')
+      ? path.join(os.tmpdir(), 'agent-pet', SOURCE + '-plugin.lock')
+      : path.join(path.dirname(this.socketPath), SOURCE + '-plugin.lock');
     this.subscribers = new Set();
     this.seqBySession = new Map();
     this.mapper = new DshEventMapper();
@@ -1019,11 +1027,14 @@ export class PetBridge {
   }
 
   listen() {
-    this.debugLog = path.join(path.dirname(this.socketPath), 'plugin-debug.log');
+    const isPipe = String(this.socketPath).startsWith('\\\\.\\pipe\\');
+    // Windows 命名管道：没有目录/文件语义——调试日志与锁落临时目录；不 mkdir、不清陈旧文件
+    const logDir = isPipe ? path.join(os.tmpdir(), 'agent-pet') : path.dirname(this.socketPath);
+    this.debugLog = path.join(logDir, 'plugin-debug.log');
     this.dbg('listen 开始：' + this.socketPath);
-    fs.mkdirSync(path.dirname(this.socketPath), { recursive: true });
+    if (!isPipe) fs.mkdirSync(path.dirname(this.socketPath), { recursive: true });
     this.acquireLock();
-    if (fs.existsSync(this.socketPath)) {
+    if (!isPipe && fs.existsSync(this.socketPath)) {
       try { fs.unlinkSync(this.socketPath); this.warn('清理了陈旧的 socket 文件 ' + this.socketPath); this.dbg('listen：清理陈旧 socket 文件'); }
       catch (error) { const m = '无法清理陈旧 socket ' + this.socketPath + '：' + String((error && error.message) || error); this.dbg('listen 失败：' + m); throw new Error(m); }
     }
@@ -1039,7 +1050,9 @@ export class PetBridge {
       this.server.once('error', (error) => { this.dbg('listen 拒绝：' + String((error && error.message) || error)); reject(error); });
       this.server.listen(this.socketPath, () => {
         this.started = Date.now();
-        try { this.socketIno = fs.statSync(this.socketPath).ino; } catch { this.socketIno = null; }
+        if (!String(this.socketPath).startsWith('\\\\.\\pipe\\')) {
+          try { this.socketIno = fs.statSync(this.socketPath).ino; } catch { this.socketIno = null; }
+        }
         this.dbg('listen 成功：ino=' + this.socketIno);
         this.log('socket 已监听 ' + this.socketPath + '（契约 v' + CONTRACT + '）');
         resolve();

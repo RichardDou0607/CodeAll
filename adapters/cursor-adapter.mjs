@@ -35,11 +35,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
+import { appSupport } from './platform.mjs';
 
 export const SOURCE = 'cursor';
 export const AGENT_NAME = 'Cursor';
 export const CURSOR_APP_SUPPORT = process.env.CURSOR_APP_SUPPORT
-  || path.join(os.homedir(), 'Library', 'Application Support', 'Cursor');
+  || appSupport('Cursor');
 export const CURSOR_GLOBAL_DB = process.env.CURSOR_GLOBAL_DB
   || path.join(CURSOR_APP_SUPPORT, 'User', 'globalStorage', 'state.vscdb');
 export const CURSOR_HOME = process.env.CURSOR_HOME || path.join(os.homedir(), '.cursor');
