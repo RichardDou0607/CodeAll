@@ -19,20 +19,18 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性�
 
 观察会话与用量仍可用；本轮重点是 Claude Code/Codex/Kimi Code **CLI 主会话**与 DSH 已授权插件会话的定向对话。DSH 未挂插件时仅观察/入队，不宣称已投递；ZCode app-server 控制为实验能力，不列入 v0.1.0 必过通道。开发模式（从源码运行）见下节。
 
-## 〇·一、下载安装（Linux · Ubuntu 24.04 · arm64 实机验收，amd64 由 CI 出包标注「已构建未实机验证」）
+## 〇·一、Linux 版状态（v0.2.0 PLAT-3 · Ubuntu 24.04 · arm64 实机验收）
 
-> Linux 版随 v0.2.0 PLAT-3（2026-10-28，实机验收于本机 arm64 Ubuntu Desktop 24.04 VM，证据 [docs/37](./docs/37-linux-sandbox.md) 与 [qa/linux-manual-tests.md](./qa/linux-manual-tests.md)）。同样**安装包自带本地服务与 Node 运行时**，无需先装 Node。
+> **当前 GitHub Releases 尚无 Linux 安装包**（v0.1.4 仍为 macOS 专属发布；Linux 包随 v0.2.0 W06/W07 收口后正式发布）。PLAT-3 已于 2026-10-28 在本机 arm64 Ubuntu Desktop 24.04 VM 完成实机验收（证据：[docs/37](./docs/37-linux-sandbox.md) 与 [qa/linux-manual-tests.md](./qa/linux-manual-tests.md)），产物形态与获取方式如下。安装包同样**自带本地服务与 Node 运行时**，无需先装 Node。
 
-**deb（推荐，Ubuntu/Debian）**
-
-```bash
-sudo apt install ./CodeAll_0.1.4_arm64.deb   # 装完即用：/usr/bin/agent-pet-shell，包内 Node 自起本地服务
-```
-
-**AppImage（免安装）**
+**从源码构建（当前唯一途径；构建机需 webkit2gtk-4.1 等依赖，见 docs/37 §2）**
 
 ```bash
-chmod +x CodeAll_0.1.4_aarch64.AppImage && ./CodeAll_0.1.4_aarch64.AppImage
+cd apps/shell
+pnpm install
+pnpm tauri build --bundles deb appimage   # 产物：src-tauri/target/release/bundle/{deb,appimage}/
+sudo apt install ./src-tauri/target/release/bundle/deb/CodeAll_*_arm64.deb   # /usr/bin/agent-pet-shell，装完即用
+# 或免安装：bundle/appimage/CodeAll_*_aarch64.AppImage（chmod +x 后直接运行）
 ```
 
 **开机自启（可选）**：把 `/usr/share/applications/CodeAll.desktop` 复制到 `~/.config/autostart/`（AppImage 版自建一份 Exec 指向绝对路径的 .desktop 同理）。
