@@ -16,7 +16,7 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 HOST="${WIN11_HOST:-win11}"
 DEST="${WIN11_DEST:-C:\\Users\\admin\\codeall}"
-DEST_FWD='C:/Users/admin/codeall'
+DEST_FWD="${DEST//\\//}"
 
 say() { printf '\033[36m[win11-sync]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[win11-sync]\033[0m %s\n' "$*" >&2; exit 1; }

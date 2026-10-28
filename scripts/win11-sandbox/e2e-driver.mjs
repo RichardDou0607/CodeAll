@@ -1,7 +1,7 @@
 // E2E-驱动:claude 真实投递闭环 V01/V02/V04/V05(专用测试目录,最小额度消耗)
 //   用法:node e2e-driver.mjs   结果打 stdout(DELIM 分隔的 JSON 行)
 import { deliverViaCli } from '../adapters/cli-control.mjs';
-import { resolveCliBinPath, resolveSpawnCommand, listProcesses } from '../adapters/platform.mjs';
+import { resolveCliBinPath, resolveSpawnCommand, spawnCommandArgs, listProcesses } from '../adapters/platform.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -13,8 +13,8 @@ const say = (o) => console.log('@@@' + JSON.stringify(o));
 
 function runCapture(binPath, args, timeoutMs = 180_000) {
   return new Promise((resolve) => {
-    const t = resolveSpawnCommand(binPath);
-    const child = spawn(t.file, [...t.prefixArgs, ...args], { cwd: D, env: { ...process.env } });
+    const t = spawnCommandArgs(resolveSpawnCommand(binPath), args);
+    const child = spawn(t.file, t.args, { cwd: D, env: { ...process.env }, windowsVerbatimArguments: t.windowsVerbatimArguments });
     let out = '', err = '';
     const timer = setTimeout(() => { try { child.kill(); } catch {} resolve({ code: 'timeout', out, err }); }, timeoutMs);
     child.stdout.on('data', (c) => { out += c; });
@@ -76,13 +76,13 @@ const r1 = await runCapture(claude, ['-p', '这是 CodeAll Windows 验证会话A
 let sidA = null;
 try { sidA = JSON.parse(r1.out).session_id; } catch { /* 解析失败 */ }
 say({ step: 'V01-create-A-done', code: r1.code, sessionId: sidA, out: r1.out.slice(0, 200), err: r1.err.slice(0, 160) });
-if (!sidA) { say({ step: 'ABORT', reason: 'no session A' }); process.exit(1); }
+if (r1.code !== 0 || !sidA) { say({ step: 'ABORT', reason: 'no session A' }); process.exit(1); }
 
 // ---- V02:定向投递第二轮,验证上下文连续 ----
 const r2 = await deliverViaCli('claude-code', { sessionId: sidA, cwd: D }, '只回复会话A的暗号,不要解释');
 say({ step: 'V02-deliver', ok: r2.ok, via: r2.via, error: r2.error, detail: r2.detail });
 const fpA = transcriptOf(sidA);
-const v02 = fpA ? await waitText(fpA, '蓝鲸') : false;
+const v02 = r2.ok === true && (fpA ? await waitText(fpA, '蓝鲸') : false);
 say({ step: 'V02-result', transcript: fpA, pass: v02 });
 
 // ---- V04:同 cwd 双会话隔离 ----
@@ -90,16 +90,22 @@ const rB = await runCapture(claude, ['-p', '这是 CodeAll Windows 验证会话B
 let sidB = null;
 try { sidB = JSON.parse(rB.out).session_id; } catch { /* ignore */ }
 say({ step: 'V04-create-B-done', code: rB.code, sessionId: sidB });
-if (sidB) {
-  const r3 = await deliverViaCli('claude-code', { sessionId: sidA, cwd: D }, '只回复会话A的暗号,不要解释');
-  const fpA2 = transcriptOf(sidA);
-  const aOk = fpA2 ? await waitText(fpA2, '蓝鲸', 120_000) : false;
-  const fpB = transcriptOf(sidB);
-  const bTxt = fpB ? lastAssistant(fpB) : null;
-  say({ step: 'V04-result', aPass: aOk, bLastText: bTxt, pass: aOk });
-}
+if (rB.code !== 0 || !sidB) { say({ step: 'ABORT', reason: 'no session B' }); process.exit(1); }
+const r3 = await deliverViaCli('claude-code', { sessionId: sidA, cwd: D }, '只回复会话A的暗号,不要解释');
+const r4 = await deliverViaCli('claude-code', { sessionId: sidB, cwd: D }, '只回复会话B的暗号,不要解释');
+say({ step: 'V04-deliver-A', ok: r3.ok, error: r3.error });
+say({ step: 'V04-deliver-B', ok: r4.ok, error: r4.error });
+const fpA2 = transcriptOf(sidA);
+const fpB = transcriptOf(sidB);
+const aOk = fpA2 ? await waitText(fpA2, '蓝鲸', 120_000) : false;
+const bOk = fpB ? await waitText(fpB, '海豚', 120_000) : false;
+const v04 = r3.ok === true && r4.ok === true && aOk && bOk;
+say({ step: 'V04-result', aPass: aOk, bPass: bOk, pass: v04 });
 
 // ---- V05:失败可辨(不存在的会话 ID) ----
 const r5 = await deliverViaCli('claude-code', { sessionId: 'e2e-nonexistent-00000000', cwd: D }, '不应到达');
-say({ step: 'V05-result', ok: r5.ok, error: r5.error, detail: (r5.detail || '').slice(0, 140), pass: r5.ok === false });
-say({ step: 'ALL-DONE' });
+const v05 = r5.ok === false;
+say({ step: 'V05-result', ok: r5.ok, error: r5.error, detail: (r5.detail || '').slice(0, 140), pass: v05 });
+const pass = v02 && v04 && v05;
+say({ step: 'ALL-DONE', pass });
+if (!pass) process.exitCode = 1;

@@ -25,7 +25,7 @@ import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { decodeZstdFrames, forEachZstdFrameText, extractMeta, coarseState as coarseStateOf, findFrameOffsets, firstUserTitleFromEvents, AGENT_NAME, AGENT_VERSION } from './dsh-meta.mjs';
-import { desktopAppDir } from './platform.mjs';
+import { PLATFORM_ID, IS_MAC, desktopAppDirSync } from './platform.mjs';
 
 export const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 export const SESSIONS_ROOT = process.env.DSH_SESSIONS || path.join(DSH_HOME, 'sessions');
@@ -155,23 +155,16 @@ let flockBinding;
 function loadFlock() {
   if (flockBinding !== undefined) return flockBinding;
   const require = createRequire(import.meta.url);
-  const platformPkg = '@deepseek-ai/node-addon-system-' + process.platform + '-' + process.arch + '/bin/system.node';
-  // mac：/Applications 固定布局；Windows：安装目录随盘符（实测 D:\DSH），经注册表反查——
-  // 注册表查询是异步的，这里用启动时缓存（首查未回填前先走 candidates 已有项，下一轮回填）
-  const winAddonDir = winAddonDirCache || process.env.LOCALAPPDATA || '';
-  const unpacked = process.platform === 'darwin'
+  const platformPkg = '@deepseek-ai/node-addon-system-' + PLATFORM_ID + '-' + process.arch + '/bin/system.node';
+  const appDir = IS_MAC ? null : desktopAppDirSync('dsh');
+  const unpacked = IS_MAC
     ? '/Applications/DeepSeek Harness.app/Contents/Resources/app.asar.unpacked/dsh/node_modules/' + platformPkg
-    : path.join(winAddonDir, 'resources', 'app.asar.unpacked', 'dsh', 'node_modules', platformPkg);
+    : appDir ? path.join(appDir, 'resources', 'app.asar.unpacked', 'dsh', 'node_modules', platformPkg) : null;
   const candidates = [process.env.DSH_FLOCK_ADDON, unpacked].filter(Boolean);
   for (const c of candidates) { try { if (fs.existsSync(c)) { flockBinding = require(c); return flockBinding; } } catch { /* 继续 */ } }
   try { flockBinding = require(platformPkg); return flockBinding; } catch { /* 本机无插件 */ }
   flockBinding = null;
   return null;
-}
-// Windows 注册表反查回填（异步；查到前 flock 探测诚实返回 unknown，不阻塞观察主链路）
-let winAddonDirCache = null;
-if (process.platform === 'win32') {
-  desktopAppDir('dsh').then((d) => { if (d) { winAddonDirCache = d; flockBinding = undefined; } }).catch(() => {});
 }
 
 /** 非阻塞 flock 探测：只在「无人持有」时瞬时取得并立即 close 释放，绝不写入文件。 */

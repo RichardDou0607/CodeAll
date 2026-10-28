@@ -27,6 +27,8 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { IS_WIN, pluginSocketPath } from '../../adapters/platform.mjs';
+import { secureNamedPipe } from './pipe-acl.mjs';
 
 export const name = 'dsh-pet';
 export const inject = ['sessions'];
@@ -39,13 +41,10 @@ const HEARTBEAT_MS = 15000;
 const OBSERVES = ['session.*', 'turn.*', 'step.*', 'tool.*', 'approval.*', 'message.assistant', 'error.*', 'pet.heartbeat'];
 
 function defaultSocketPath() {
-  // Windows：命名管道（net 原生支持 \\.\pipe\ 前缀）；unix：临时目录 socket。
-  // 两端（DSH 内插件 + CodeAll 服务）必须算出同一地址——口径收在 adapters/platform.mjs。
-  if (process.platform === 'win32') {
-    return process.env.DSH_PET_SOCK || '\\\\.\\pipe\\agent-pet-dsh-plugin';
+  if (!IS_WIN && process.env.DSH_PET_DIR) {
+    return process.env.DSH_PET_SOCK || path.join(process.env.DSH_PET_DIR, 'dsh-plugin.sock');
   }
-  const base = process.env.DSH_PET_DIR || path.join(os.tmpdir(), 'agent-pet');
-  return process.env.DSH_PET_SOCK || path.join(base, 'dsh-plugin.sock');
+  return process.env.DSH_PET_SOCK || pluginSocketPath();
 }
 
 /** 生命周期调试日志（超 256KB 重置；诊断 HMR 重载问题用）。写在 socket 同目录，随实例走。 */
@@ -1032,7 +1031,7 @@ export class PetBridge {
     const logDir = isPipe ? path.join(os.tmpdir(), 'agent-pet') : path.dirname(this.socketPath);
     this.debugLog = path.join(logDir, 'plugin-debug.log');
     this.dbg('listen 开始：' + this.socketPath);
-    if (!isPipe) fs.mkdirSync(path.dirname(this.socketPath), { recursive: true });
+    if (!isPipe) fs.mkdirSync(path.dirname(this.socketPath), { recursive: true, mode: 0o700 });
     this.acquireLock();
     if (!isPipe && fs.existsSync(this.socketPath)) {
       try { fs.unlinkSync(this.socketPath); this.warn('清理了陈旧的 socket 文件 ' + this.socketPath); this.dbg('listen：清理陈旧 socket 文件'); }
@@ -1048,14 +1047,21 @@ export class PetBridge {
     this.server.on('error', (error) => { this.warn('socket 服务错误：' + String((error && error.message) || error)); this.dbg('server error 事件：' + String((error && error.message) || error)); });
     return new Promise((resolve, reject) => {
       this.server.once('error', (error) => { this.dbg('listen 拒绝：' + String((error && error.message) || error)); reject(error); });
-      this.server.listen(this.socketPath, () => {
-        this.started = Date.now();
-        if (!String(this.socketPath).startsWith('\\\\.\\pipe\\')) {
-          try { this.socketIno = fs.statSync(this.socketPath).ino; } catch { this.socketIno = null; }
+      this.server.listen(this.socketPath, async () => {
+        try {
+          await secureNamedPipe(this.socketPath);
+          this.started = Date.now();
+          if (!String(this.socketPath).startsWith('\\\\.\\pipe\\')) {
+            try { this.socketIno = fs.statSync(this.socketPath).ino; } catch { this.socketIno = null; }
+          }
+          this.dbg('listen 成功：ino=' + this.socketIno);
+          this.log('socket 已监听 ' + this.socketPath + '（契约 v' + CONTRACT + '）');
+          resolve();
+        } catch (error) {
+          try { this.server.close(); } catch { /* ignore */ }
+          this.warn('命名管道 ACL 设置失败，监听已关闭：' + String((error && error.message) || error));
+          reject(error);
         }
-        this.dbg('listen 成功：ino=' + this.socketIno);
-        this.log('socket 已监听 ' + this.socketPath + '（契约 v' + CONTRACT + '）');
-        resolve();
       });
     });
   }

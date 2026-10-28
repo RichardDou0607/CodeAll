@@ -25,7 +25,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HOME, IS_WIN, appSupport, localData, npmGlobalCandidates, listProcesses, appVersion, desktopAppDir } from './platform.mjs';
+import { HOME, IS_WIN, IS_LINUX, appSupport, localData, npmGlobalCandidates, listProcesses, appVersion, desktopAppDir } from './platform.mjs';
 import { KIMI_LEVELDB, scanKimiCatalog, scanKimiLegacyCount } from './kimi-code-adapter.mjs';
 import { scanZcodeCatalog } from './zcode-adapter.mjs';
 import { scanOpencodeCatalog } from './opencode-adapter.mjs';
@@ -42,14 +42,20 @@ const STAT_BUDGET = 4000;
  *   installPaths      安装证据（任一存在即视为已安装；全部进 evidence 供 UI tooltip）
  *   processRe         运行判定（对快照整行匹配；务必收窄，避免误伤相近名字的进程）
  *   processReWin 等   Windows 行口径的可选覆盖（缺省回落 processRe）
+ *   processReLinux 等 Linux 行口径的可选覆盖（缺省回落 processRe）
  *   activity          连接判定（这些目录下 fileRe 文件的最新 mtime）
  *   appBundle         mac App 包（读版本号）；Windows 版本经 appDirId + appExe 走 PE 元数据
- *   appDirId          Windows/mac 桌面安装目录解析键（platform.desktopAppDir；注册表 / /Applications）
+ *   appDirId          Windows/mac/linux 桌面安装目录解析键（platform.desktopAppDir；注册表 / /Applications / .desktop 反查）
+ *
+ * Linux 槽位口径（PLAT-3）：CLI 行的 installPaths 多为 HOME 相对路径（~/.local/bin、~/.kimi-code 等），
+ * 与 mac 槽位天然同值，不另设；仅当 mac 槽位含 /Applications 或 ~/Library 硬路径、会让 Linux 装机
+ * 误判 not-installed 时才补 installPathsLinux（用户数据目录作证据）。进程正则 procps 口径待矩阵实测
+ * 后再收窄，缺省回落 processRe。
  */
 export const LOCAL_AGENTS = Object.freeze([
   {
     id: 'dsh', name: 'DeepSeek Harness', source: 'dsh', appDirId: 'dsh',
-    installPaths: ['/Applications/DeepSeek Harness.app', path.join(HOME, '.dsh')],
+    installPaths: ['/Applications/DeepSeek Harness.app', path.join(HOME, '.dsh'), path.join(HOME, '.local', 'bin', 'dsh')],   // npm 版 CLI（linux 实测装于 ~/.local/bin）
     appBundle: '/Applications/DeepSeek Harness.app',
     processRe: /DeepSeek Harness\.app\/|(^|\s)DeepSeek Harness(\s|$)/,
     processReWin: /DeepSeek Harness\.exe/i,
@@ -111,7 +117,7 @@ export const LOCAL_AGENTS = Object.freeze([
   },
   {
     id: 'kimi-cli', name: 'Kimi CLI', source: 'kimi-code', base: 'kimi-code', variantTag: 'cli',
-    installPaths: [path.join(HOME, '.kimi-code', 'bin', 'kimi'), path.join(HOME, '.kimi-code')],
+    installPaths: [path.join(HOME, '.kimi-code', 'bin', 'kimi'), path.join(HOME, '.kimi-code'), path.join(HOME, '.local', 'bin', 'kimi')],   // 官方装脚本 ~/.kimi-code/bin；npm 版 ~/.local/bin（linux 实测）
     installPathsWin: [path.join(HOME, '.kimi-code', 'bin', 'kimi.exe'), path.join(HOME, '.kimi-code')],
     processRe: /^\s*\d+\s+kimi\s|\.kimi-code\/bin\/kimi/,  // ucomm 锚定（同 claude）
     processReWin: /\.kimi-code[\\/]bin[\\/]kimi\.exe/i,
@@ -176,6 +182,7 @@ export const LOCAL_AGENTS = Object.freeze([
     id: 'cursor-desktop', name: 'Cursor 桌面端', source: 'cursor', base: 'cursor', variantTag: 'desktop',
     installPaths: ['/Applications/Cursor.app', path.join(HOME, 'Library/Application Support/Cursor')],
     installPathsWin: [appSupport('Cursor')],
+    installPathsLinux: [appSupport('Cursor'), path.join(HOME, '.cursor')],   // Cursor 有 Linux 发行版（deb/AppImage），用户数据 ~/.config/Cursor
     appDirId: 'cursor', appExe: 'Cursor.exe',
     appBundle: '/Applications/Cursor.app',
     processRe: /Cursor\.app\//,
@@ -198,6 +205,7 @@ export const LOCAL_AGENTS = Object.freeze([
     id: 'qoder-desktop', name: 'Qoder 桌面端', source: 'qoder', base: 'qoder', variantTag: 'desktop',
     installPaths: ['/Applications/Qoder CN.app', '/Applications/Qoder.app', path.join(HOME, 'Library/Application Support/com.qodercn.app.stable')],
     installPathsWin: [appSupport('com.qodercn.app.stable')],
+    installPathsLinux: [appSupport('com.qodercn.app.stable'), path.join(HOME, '.qoder-cn')],   // 桌面无 Linux 发行版与否待矩阵；CLI 数据目录先作证据
     appDirId: 'qoder', appExe: 'Qoder CN.exe',
     appBundle: '/Applications/Qoder CN.app',
     processRe: /Qoder( CN)?\.app\//,                     // ucomm 为「Qoder CN」；只认 App 路径段，防误伤
@@ -330,13 +338,17 @@ export async function scanLocalAgents(ctx = {}) {
   const agents = [];
   for (const a of LOCAL_AGENTS) {
     const evidence = [];
-    const installPaths = IS_WIN && a.installPathsWin ? a.installPathsWin : a.installPaths;
+    const installPaths = (IS_WIN && a.installPathsWin) || (IS_LINUX && a.installPathsLinux) || a.installPaths;
     for (const p of installPaths) { try { if (fs.existsSync(p)) evidence.push(p); } catch { /* ignore */ } }
     const appDir = a.appDirId ? appDirs[a.appDirId] : null;
     if (appDir) evidence.push(appDir);
-    const re = IS_WIN && a.processReWin ? a.processReWin : a.processRe;
-    const includeRe = IS_WIN ? (a.processIncludeWin ?? a.processInclude) : a.processInclude;
-    const excludeRe = IS_WIN ? (a.processExcludeWin ?? a.processExclude) : a.processExclude;
+    const re = (IS_WIN && a.processReWin) || (IS_LINUX && a.processReLinux) || a.processRe;
+    const includeRe = IS_WIN ? (a.processIncludeWin ?? a.processInclude)
+      : IS_LINUX ? (a.processIncludeLinux ?? a.processInclude)
+      : a.processInclude;
+    const excludeRe = IS_WIN ? (a.processExcludeWin ?? a.processExclude)
+      : IS_LINUX ? (a.processExcludeLinux ?? a.processExclude)
+      : a.processExclude;
     const procs = [];
     for (const line of lines) {
       if (procs.length >= 5) break;                       // 计数封顶 5，够显示即可

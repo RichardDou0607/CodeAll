@@ -30,7 +30,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolveQoderCliBin } from './qoder-adapter.mjs';
-import { IS_WIN, HOME as PLAT_HOME, resolveCliBinPath, resolveSpawnCommand, openTerminalWindow } from './platform.mjs';
+import { IS_WIN, IS_LINUX, HOME as PLAT_HOME, resolveCliBinPath, resolveSpawnCommand, spawnCommandArgs, openTerminalWindow } from './platform.mjs';
 
 const execFileP = promisify(execFile);
 
@@ -107,8 +107,8 @@ export const CLI_TARGETS = Object.freeze({
     createArgs: (text) => ['--mode', 'build', '--prompt', text],
     openArgs: (id) => ['--resume', id],
     interactiveArgs: () => [],
-    // Windows：CLI 经 npm 全局（%APPDATA%\npm 在 PATH），无 App 包捆绑形态
-    extraPaths: () => IS_WIN ? [] : [path.join('/Applications', 'ZCode.app', 'Contents', 'Resources', 'glm', 'zcode.cjs')],
+    // Windows：CLI 经 npm 全局（%APPDATA%\npm 在 PATH），无 App 包捆绑形态；Linux 同（npm 全局 + PATH）
+    extraPaths: () => (IS_WIN || IS_LINUX) ? [] : [path.join('/Applications', 'ZCode.app', 'Contents', 'Resources', 'glm', 'zcode.cjs')],
     /**
      * 桌面 App 进程会注入的 provider 配置路径（CLI 脱离 App 环境运行时缺它 →
      * "无法定位 CLI ZCode Built-in Provider Config" → Model creation failed，2026-10-07 实测）。
@@ -278,11 +278,12 @@ async function headlessRun(source, cwd, args, label, envExtra = {}) {
     // PWD 同步 cwd：opencode v2 客户端按 $PWD（非 getcwd）判定会话项目目录——不覆盖时无头子进程
     // 继承宿主的 PWD，会话全部落进服务进程目录（2026-10-22 实测：spawn cwd=/tmp 仍写 agent桌宠）。
     // Windows npm shim（.cmd/.ps1）先经平台层解包成 node + 入口 js，参数数组直达不经 shell。
-    const spawnTarget = resolveSpawnCommand(bin);
-    const child = spawn(spawnTarget.file, [...spawnTarget.prefixArgs, ...args], {
+    const spawnTarget = spawnCommandArgs(resolveSpawnCommand(bin), args);
+    const child = spawn(spawnTarget.file, spawnTarget.args, {
       cwd,
       detached: true, stdio: ['ignore', out, out],
       env: { ...sanitizedEnv(), PWD: cwd, ...cliEnvFor(source, bin), ...envExtra },
+      windowsVerbatimArguments: spawnTarget.windowsVerbatimArguments,
     });
     const pid = child.pid;
     if (!pid) {
@@ -672,7 +673,8 @@ const UI_PERM_RE = /assistive|accessibility|25211|1002|不允许发送按键|辅
 async function deliverViaZcodeUi(session, text) {
   // UI 自动化通道是 macOS 专用（osascript + System Events + pbcopy）；Windows 无 TCC 等价面，
   // SendKeys 类方案对「投进哪个会话」同样无法核验——如实报不支持，不静默换通道。
-  if (IS_WIN) return { ok: false, error: 'ui-automation', detail: 'ZCode UI 粘贴投递通道暂不支持 Windows（macOS 专用）；请用 ZCode 桌面 App 内直接操作' };
+  // Linux 同理（无辅助功能授权模型；xdotool 对「投进哪个会话」同样无法核验）。
+  if (IS_WIN || IS_LINUX) return { ok: false, error: 'ui-automation', detail: 'ZCode UI 粘贴投递通道为 macOS 专用（osascript + 辅助功能）；本平台无等价可核验面，请用 ZCode 桌面 App 内直接操作' };
   const cwd = session?.cwd && fs.existsSync(session.cwd) ? session.cwd : os.homedir();
   // 权限前置探测（2026-10-08）：无辅助功能权限时一个像素都不能动——此前先开深链再等
   // osascript 被拒，用户看到的是「只打开了文件夹、消息没进会话」。探测用只读查询，无副作用。
@@ -1074,7 +1076,7 @@ export async function deliverCreateViaCli(source, cwd, text, model = '', reasoni
 /** 深链打开（ZCode account 会话 → 桌面 App）：mac `open`，Windows `cmd start`，linux xdg-open。 */
 async function openDeepLink(url) {
   if (IS_WIN) return execFileP('cmd.exe', ['/d', '/s', '/c', 'start', '', url], { timeout: 4000, windowsVerbatimArguments: false });
-  if (process.platform === 'linux') return execFileP('xdg-open', [url], { timeout: 4000 });
+  if (IS_LINUX) return execFileP('xdg-open', [url], { timeout: 4000 });
   return execFileP('open', [url], { timeout: 4000 });
 }
 
@@ -1187,6 +1189,10 @@ async function main(argv) {
     if (IS_WIN) {
       const r = await openTerminalWindow({ cwd: os.homedir(), env: {}, file: 'cmd.exe', args: ['/d', '/c', 'echo agent-pet-terminal-ok & timeout /t 2'] });
       console.log('终端窗口通道（wt/start）：' + (r.ok ? '✅（' + r.via + '，已开一个自检窗口）' : '❌ ' + (r.error || '')));
+    } else if (IS_LINUX) {
+      // linux 三级链自检（xdg-terminal-exec → gnome-terminal → kitty；platform 层选路）
+      const r = await openTerminalWindow({ cwd: os.homedir(), env: {}, file: 'bash', args: ['-c', 'echo agent-pet-terminal-ok; sleep 2'] });
+      console.log('终端窗口通道（linux 三级链）：' + (r.ok ? '✅（via ' + r.via + '，已开一个自检窗口）' : '❌ ' + (r.error || '')));
     } else {
       try {
         await execFileP('osascript', ['-e', 'tell application "Terminal" to do script "echo agent-pet-terminal-ok && exit"'], { timeout: 4000 });

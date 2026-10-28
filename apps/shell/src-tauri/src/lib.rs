@@ -143,6 +143,7 @@ fn parse_port() -> u16 {
 
 /// 打包内自带的服务目录（布局 = 仓库根子集）。存在 = 独立分发的安装包，无需源码仓库与系统 Node。
 /// macOS .app：Contents/Resources/app；Windows NSIS：资源落在安装目录（exe 同级 /app，兼容 /resources/app）。
+/// Linux deb：二进制在 /usr/bin，资源在 /usr/lib/<名称>/app；AppImage：AppDir 挂载点内同 deb 的 usr/ 布局。
 fn bundled_app_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -152,6 +153,24 @@ fn bundled_app_root() -> Option<PathBuf> {
         }
         candidates.push(exe_dir.join("app"));
         candidates.push(exe_dir.join("resources").join("app"));
+        // deb 与 AppImage 都把资源放在 <安装根>/usr/lib/<名称>/ 下（AppImage 即挂载的 AppDir，
+        // 从 current_exe 逐级向上可摸到挂载根）。tauri-bundler 实际用原始 productName（CodeAll）
+        // 做目录名、kebab（code-all）只做 deb 包名，这里三种写法宽覆盖；候选需首包核对校准。
+        #[cfg(target_os = "linux")]
+        for anc in exe_dir.ancestors().skip(1) {
+            for rel in [
+                "app",
+                "resources/app",
+                "usr/lib/CodeAll/app",
+                "usr/lib/code-all/app",
+                "usr/lib/codeall/app",
+                "lib/CodeAll/app",
+                "lib/code-all/app",
+                "lib/codeall/app",
+            ] {
+                candidates.push(anc.join(rel));
+            }
+        }
     }
     candidates
         .into_iter()
@@ -211,6 +230,12 @@ fn resolve_node() -> Option<PathBuf> {
     }
     #[cfg(target_os = "macos")]
     for c in ["/usr/local/bin/node", "/opt/homebrew/bin/node", "/usr/bin/node"] {
+        if Path::new(c).exists() {
+            return Some(PathBuf::from(c));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    for c in ["/usr/bin/node", "/usr/local/bin/node"] {
         if Path::new(c).exists() {
             return Some(PathBuf::from(c));
         }
@@ -296,6 +321,40 @@ fn http_probe(port: u16, path: &str, timeout: Duration) -> (bool, String) {
     (ok, format!("{} ({} 字节)", status, buf.len()))
 }
 
+// ---------------------------------------------------------------- Linux：Wayland 会话判定与能力降级
+
+/// 保守判定当前是否 Wayland 会话：只信应用自身进程 env（WAYLAND_DISPLAY 非空，
+/// 或 XDG_SESSION_TYPE == "wayland"）。拿不准一律按 X11 处理——误判成 X11 只是
+/// 某项能力尝试后失败，误判成 Wayland 会白白跳过可用能力。shell 侧另有 loginctl
+/// 佐证，这里不做跨进程查询。
+#[cfg(target_os = "linux")]
+fn is_wayland_session() -> bool {
+    if let Ok(w) = std::env::var("WAYLAND_DISPLAY") {
+        if !w.trim().is_empty() {
+            return true;
+        }
+    }
+    matches!(std::env::var("XDG_SESSION_TYPE").as_deref(), Ok("wayland"))
+}
+
+/// Wayland 下跳过某项 X11-only 窗口能力时统一走这里：记一行
+/// 「DEGRADED wayland: <能力名>」日志（selftest/L7 脚本直接 grep 这个前缀）并返回
+/// true。非 Linux 平台恒为 false，mac/win 现行为零变化。
+#[cfg(target_os = "linux")]
+fn wayland_skip(cap: &str) -> bool {
+    if is_wayland_session() {
+        log(&format!("DEGRADED wayland: {} 跳过（位置/置顶类窗口操作在 Wayland 下不可靠）", cap));
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn wayland_skip(_cap: &str) -> bool {
+    false
+}
+
 // ---------------------------------------------------------------- 窗口位置记忆
 
 fn is_on_screen(win: &WebviewWindow, x: i32, y: i32, w: u32, h: u32) -> bool {
@@ -358,6 +417,10 @@ fn persist_window(app: &AppHandle, win: &WebviewWindow, reason: &str) {
 }
 
 fn restore_window(app: &AppHandle, win: &WebviewWindow) {
+    if wayland_skip("window-restore") {
+        // Wayland：窗口位置由合成器分配，记忆的坐标无法恢复（上面已记 DEGRADED 日志）
+        return;
+    }
     let path = window_file(app);
     let txt = match fs::read_to_string(&path) {
         Ok(t) => t,
@@ -483,7 +546,18 @@ fn floating_space_flags(win: &WebviewWindow) -> Option<(bool, bool)> {
     ))
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Linux：tao 的 set_visible_on_all_workspaces 在 X11 映射为 _NET_WM_STATE_STICKY
+/// （常驻所有工作区，对应 mac CanJoinAllSpaces 的桌宠需求；置顶走 set_always_on_top
+/// 的 _NET_WM_STATE_ABOVE，两者互不干扰）。Wayland 下无统一协议，失败不致命——
+/// 返回 Err 交由调用方记日志，窗口仍在当前工作区可用。
+#[cfg(target_os = "linux")]
+fn set_floating_space_behavior(win: &WebviewWindow) -> Result<bool, String> {
+    win.set_visible_on_all_workspaces(true)
+        .map(|_| true)
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn set_floating_space_behavior(_win: &WebviewWindow) -> Result<bool, String> {
     Ok(false)
 }
@@ -887,9 +961,11 @@ fn start_selftest(handle: AppHandle, spec: String) {
         };
         std::thread::sleep(Duration::from_millis(700));
         if let Some(w) = handle.get_webview_window("main") {
-            match w.set_position(tauri::LogicalPosition::new(x, y)) {
-                Ok(_) => log(&format!("SELFTEST_MOVED logical={},{}", x, y)),
-                Err(e) => log(&format!("SELFTEST_MOVE_ERR err={}", e)),
+            if !wayland_skip("selftest-move") {
+                match w.set_position(tauri::LogicalPosition::new(x, y)) {
+                    Ok(_) => log(&format!("SELFTEST_MOVED logical={},{}", x, y)),
+                    Err(e) => log(&format!("SELFTEST_MOVE_ERR err={}", e)),
+                }
             }
         }
         std::thread::sleep(Duration::from_millis(1500));
@@ -979,7 +1055,9 @@ fn shell_window_diag(window: WebviewWindow) -> Result<Value, String> {
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let outer = window.outer_size().map_err(|e| e.to_string())?;
     let inner = window.inner_size().map_err(|e| e.to_string())?;
-    Ok(json!({
+    // mut 只在 Linux 分支用得到；cfg_attr 避免非 Linux 平台报 unused_mut 警告
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut diag = json!({
         "label": window.label(),
         "title": window.title().unwrap_or_default(),
         "url": window.url().map(|u| u.to_string()).unwrap_or_default(),
@@ -995,7 +1073,19 @@ fn shell_window_diag(window: WebviewWindow) -> Result<Value, String> {
         "contentViewMouseDownCanMoveWindow": mouse_down_can_move_window(&window),
         "spaceBehaviorCanJoinAllSpaces": floating_space_flags(&window).map(|f| f.0),
         "spaceBehaviorFullScreenAuxiliary": floating_space_flags(&window).map(|f| f.1),
-    }))
+    });
+    // Wayland 会话标志与降级能力清单进诊断通道：前端能力说明区据此渲染降级声明
+    // （复用既有 shell_window_diag，不新造协议）；非 Linux 平台不输出这两个键。
+    #[cfg(target_os = "linux")]
+    {
+        let wayland = is_wayland_session();
+        diag["waylandSession"] = json!(wayland);
+        if wayland {
+            diag["degradedCaps"] =
+                json!(["window-restore", "shell_move_to", "selftest-move", "set_always_on_top"]);
+        }
+    }
+    Ok(diag)
 }
 
 #[tauri::command]
@@ -1021,6 +1111,9 @@ fn shell_toggle_size(app: AppHandle, window: WebviewWindow) -> Result<Value, Str
 /// 把窗口移动到指定位置（逻辑坐标）。用于「复位位置」以及位置记忆的端到端自检。
 #[tauri::command]
 fn shell_move_to(app: AppHandle, window: WebviewWindow, x: f64, y: f64) -> Result<Vec<i32>, String> {
+    if wayland_skip("shell_move_to") {
+        return Err("DEGRADED wayland: Wayland 会话不支持程序化移动窗口（位置由合成器管理）".into());
+    }
     window
         .set_position(tauri::LogicalPosition::new(x, y))
         .map_err(|e| e.to_string())?;
@@ -1032,6 +1125,9 @@ fn shell_move_to(app: AppHandle, window: WebviewWindow, x: f64, y: f64) -> Resul
 
 #[tauri::command]
 fn shell_set_always_on_top(window: WebviewWindow, on: bool) -> Result<bool, String> {
+    if wayland_skip("set_always_on_top") {
+        return Err("DEGRADED wayland: Wayland 会话不支持程序化置顶".into());
+    }
     window.set_always_on_top(on).map_err(|e| e.to_string())?;
     Ok(window.is_always_on_top().unwrap_or(false))
 }
@@ -1107,6 +1203,8 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             "tray_show" => {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.show();
+                    #[cfg(target_os = "linux")]
+                    let _ = w.unminimize(); // 同上：X11 show() 不解除 Iconic
                     let _ = w.set_focus();
                 }
                 log("TRAY_SHOW");
@@ -1114,6 +1212,8 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             "tray_showapp" => {
                 if let Some(w) = app.get_webview_window("app") {
                     let _ = w.show();
+                    #[cfg(target_os = "linux")]
+                    let _ = w.unminimize(); // X11：show() 不解除最小化（WM 保持 Iconic），托盘唤不回已关窗口
                     let _ = w.set_focus();
                 }
                 log("TRAY_SHOW_APP");

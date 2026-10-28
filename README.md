@@ -19,6 +19,30 @@ xattr -cr /Applications/CodeAll.app     # 方式一：终端移除隔离属性�
 
 观察会话与用量仍可用；本轮重点是 Claude Code/Codex/Kimi Code **CLI 主会话**与 DSH 已授权插件会话的定向对话。DSH 未挂插件时仅观察/入队，不宣称已投递；ZCode app-server 控制为实验能力，不列入 v0.1.0 必过通道。开发模式（从源码运行）见下节。
 
+## 〇·一、下载安装（Linux · Ubuntu 24.04 · arm64 实机验收，amd64 由 CI 出包标注「已构建未实机验证」）
+
+> Linux 版随 v0.2.0 PLAT-3（2026-10-28，实机验收于本机 arm64 Ubuntu Desktop 24.04 VM，证据 [docs/37](./docs/37-linux-sandbox.md) 与 [qa/linux-manual-tests.md](./qa/linux-manual-tests.md)）。同样**安装包自带本地服务与 Node 运行时**，无需先装 Node。
+
+**deb（推荐，Ubuntu/Debian）**
+
+```bash
+sudo apt install ./CodeAll_0.1.4_arm64.deb   # 装完即用：/usr/bin/agent-pet-shell，包内 Node 自起本地服务
+```
+
+**AppImage（免安装）**
+
+```bash
+chmod +x CodeAll_0.1.4_aarch64.AppImage && ./CodeAll_0.1.4_aarch64.AppImage
+```
+
+**开机自启（可选）**：把 `/usr/share/applications/CodeAll.desktop` 复制到 `~/.config/autostart/`（AppImage 版自建一份 Exec 指向绝对路径的 .desktop 同理）。
+
+**平台行为声明（X11 / Wayland，v0.2.0 口径，不得静默降级）**：
+- **X11（推荐）**：全功能——透明迷你条、置顶（📌）、跨工作区常驻、拖拽、位置记忆、托盘。
+- **Wayland**：壳可运行、服务/观察/控制全链正常；**位置记忆/全局坐标类操作降级**（位置恢复自动跳过，日志 `DEGRADED wayland:` 显式记录，不做静默），全局置顶/点击穿透受协议限制按[降级阶梯](./docs/24-v0.2.0-scope.md)处理。建议桌面会话选「Ubuntu on Xorg」获得完整体验。
+
+**已知限制（诚实标注）**：关窗后经托盘唤回 App 界面在 Linux 存在待修缺口（迷你条与服务不受影响，见 qa/linux-manual-tests.md §六）；各家 Agent 软件的 Linux 发行形态以 [docs/40 §0.2](./docs/40-adapters.md) 可用性矩阵为准，无发行版者如实标注不可用。
+
 ## 一、已实现的能力（v0.1.0，全部本机实测）
 
 ### 观察（只读，零侵入，不碰凭证）

@@ -114,8 +114,8 @@ PLAT-1 平台抽象层 `adapters/platform.mjs` 落地并同步到本机实测，
 D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;BA)(A;;FR;;;WD)(A;;FR;;;AN)
 ```
 
-- SYSTEM / Administrators：完全控制（FA）；**Everyone(WD) / Anonymous(AN)：只读（FR）**。
-- 即默认 ACL 下其它用户能连管道但写不进——HTTP-over-pipe 需要双向读写，跨用户客户端 `GENERIC_READ|WRITE` 打开被拒。**红线成立**（libuv/Node 命名管道默认描述符语义确认）。跨用户「只读连接」的实际危害面与「创建第二账号实测」留待有需要时补。
+- SYSTEM / Administrators：完全控制（FA）；**Everyone(WD) / Anonymous(AN)：只读（FR）**。这是**修复前**的默认描述符，不是当前实现的目标状态。
+- 当时只能证明跨用户写入被拒，不能证明「仅当前用户可连」——Everyone/Anonymous 仍有读取面。§9 的受保护 DACL 修复用于消除这一口径差异；跨用户「只读连接」的实际危害面与「创建第二账号实测」留待有需要时补。
 
 ### 8.3 Tauri Windows 外壳与 NSIS 安装包
 
@@ -125,3 +125,11 @@ D:(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;BA)(A;;FR;;;WD)(A;;FR;;;AN)
 - **安装实测**：`/S` 静默安装 exit=0 → `AppData\Local\CodeAll\{agent-pet-shell.exe, app\, uninstall.exe}`，布局全对。
 - **W02 服务侧红线（全部通过）**：包内 `app\bin\node.exe` 起 `app\demo\framed.mjs` → 127.0.0.1:7799 LISTENING；`/api/state` 200；**错 Host → 403**；**写接口无 token → 401**（读接口免 token 为既有设计，写鉴权是红线本体）。
 - **GUI 窗口（待人工）**：ssh 非交互会话里 WebView2 建窗失败（`0x80070578 无效的窗口句柄`——Windows GUI 必须在交互桌面会话；计划任务拉起方案被安全策略拦截，属合理防护）。**壳的双击启动与 W05 窗口行为（透明/置顶/拖拽/托盘）需在那台机器桌面会话人工验证**。
+
+## 9. 审查问题修复与当前复验状态（2026-10-28）
+
+- **shim 与模型注册表**：修正 `%~dp0` 匹配，node 与产品原生 exe 分选，新增 `spawnCommandArgs` 统一参数与 `windowsVerbatimArguments`；所有模型查询经同一解包接口。ZCode/flock 改为同步注册表反查，首轮不再落 mac 路径。
+- **命名管道 ACL**：插件监听后通过 `SetNamedSecurityInfo` 设置受保护 DACL（SYSTEM + 当前用户 SID 完全控制），不再依赖默认 Everyone/Anonymous 只读描述符；设置失败即关闭监听。默认描述符与「仅当前用户」规格不一致的问题已按实现修正，实际 SDDL 待远端复验。
+- **沙箱安全**：`service.sh stop` 改为精确端口 + `demo/framed.mjs` 命令行双重匹配，拒绝停止其它进程；`exec.sh`/PowerShell 统一 EncodedCommand，端口与日志行数做数值校验。
+- **Linux / E2E**：`xdg-terminal-exec` 通过 spawn cwd 进入项目目录；V04 分别续问 A/B，Kimi 按 `wd_*/session_*` 和主 agent wire 校验 cwd 与新回复，Codex 校验 rollout cwd 与 assistant 新回复；投递或断言失败均以非零退出码结束，不再打印无条件的 `ALL-DONE`。ACL 探针精确断言受保护 DACL 仅含 SYSTEM 与当前用户 SID。
+- **当前阻塞**：首次同步及后续 SSH 重试均连接超时（主机可 ping 通，22 端口不可达），因此远端同步、DACL 实测与 NSIS 复验尚未完成，不在此记为通过。

@@ -7,16 +7,16 @@
  *   1. 安装/数据路径（App 包、npm 全局、应用数据目录、注册表反查 Windows 安装目录）
  *   2. 进程快照（mac/linux `ps axo` → Windows PowerShell CIM，输出统一为 `pid\tname\targs` 行，
  *      args 内反斜杠归一为 `/`，让进程正则跨平台共用书写口径）
- *   3. 版本读取（PlistBuddy → Windows PE VersionInfo）
+ *   3. 版本读取（PlistBuddy → Windows PE VersionInfo → linux spawn --version）
  *   4. CLI 二进制解析与 spawn 目标（Windows npm shim .cmd/.ps1 解包成 node + 入口 js，不经 shell）
  *   5. 终端启动链（Terminal.app → wt.exe / start；linux 三级）
  *   6. 插件 socket（unix socket → Windows 命名管道 \\.\pipe\agent-pet-*）
- *   7. DSH flock addon 回退路径（mac 固定 /Applications；Windows 经注册表反查安装目录）
+ *   7. DSH flock addon 回退路径（mac 固定 /Applications；Windows 经注册表反查安装目录；linux .desktop 反查）
  *
  * 约定：全部只读探测；Windows 侧所有 PowerShell 调用统一 -NoProfile + UTF8 输出（docs/36 §5 坑），
  * 一律 execFile 参数数组不经 shell（防注入）。失败一律返回空值降级，绝不冒泡拖垮调用方。
  */
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,6 +24,7 @@ import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
 
+export const PLATFORM_ID = process.platform;
 export const IS_WIN = process.platform === 'win32';
 export const IS_MAC = process.platform === 'darwin';
 export const IS_LINUX = process.platform === 'linux';
@@ -77,25 +78,42 @@ const APP_DIR_TTL = 10 * 60_000;
  * 按显示名反查传统 Win32 安装目录（Uninstall 注册表）。MSIX（WindowsApps）应用不在其中，返回 null。
  * @returns {Promise<string|null>} 安装目录（末尾无斜杠），查不到为 null。
  */
+function winAppDirScript(displayName) {
+  const name = displayName.replace(/'/g, "''");
+  return "$ks='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'," +
+    "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'," +
+    "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*';" +
+    "$i = Get-ItemProperty $ks -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq '" + name + "' -or $_.DisplayName -like '" + name + " *' } | Select-Object -First 1 InstallLocation, DisplayIcon;" +
+    "if ($i) { $d = $i.InstallLocation; if (-not $d -and $i.DisplayIcon) { $d = ($i.DisplayIcon -split ',')[0] }; if ($d) { if (Test-Path $d -PathType Leaf) { $d = Split-Path $d } ; $d } }";
+}
+
+function winAppDirResult(displayName, stdout) {
+  const out = stdout.trim();
+  let dir = null;
+  if (out) { try { dir = JSON.parse(out); } catch { dir = out.replace(/^"|"$/g, '') || null; } }
+  if (dir && !fs.existsSync(dir)) dir = null;
+  appDirCache.set(displayName, { at: Date.now(), dir });
+  return dir;
+}
+
 export async function winAppDir(displayName) {
   if (!IS_WIN) return null;
   const hit = appDirCache.get(displayName);
   if (hit && Date.now() - hit.at < APP_DIR_TTL) return hit.dir;
-  const script =
-    "$ks='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'," +
-    "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'," +
-    "'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*';" +
-    "$i = Get-ItemProperty $ks -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq '" + displayName.replace(/'/g, "''") + "' -or $_.DisplayName -like '" + displayName.replace(/'/g, "''") + " *' } | Select-Object -First 1 InstallLocation, DisplayIcon;" +
-    "if ($i) { $d = $i.InstallLocation; if (-not $d -and $i.DisplayIcon) { $d = ($i.DisplayIcon -split ',')[0] }; if ($d) { if (Test-Path $d -PathType Leaf) { $d = Split-Path $d } ; $d } }";
-  let dir = null;
   try {
-    const { stdout } = await execFileP('powershell.exe', ['-NoProfile', '-Command', '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + script], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
-    const out = stdout.trim();
-    if (out) { try { dir = JSON.parse(out); } catch { dir = out.replace(/^"|"$/g, '') || null; } }
-  } catch { /* 查不到 → null */ }
-  if (dir && !fs.existsSync(dir)) dir = null;
-  appDirCache.set(displayName, { at: Date.now(), dir });
-  return dir;
+    const { stdout } = await execFileP('powershell.exe', ['-NoProfile', '-Command', '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + winAppDirScript(displayName)], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
+    return winAppDirResult(displayName, stdout);
+  } catch { return winAppDirResult(displayName, ''); }
+}
+
+export function winAppDirSync(displayName) {
+  if (!IS_WIN) return null;
+  const hit = appDirCache.get(displayName);
+  if (hit && Date.now() - hit.at < APP_DIR_TTL) return hit.dir;
+  try {
+    const stdout = execFileSync('powershell.exe', ['-NoProfile', '-Command', '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + winAppDirScript(displayName)], { encoding: 'utf8', timeout: 5000, maxBuffer: 4 * 1024 * 1024 });
+    return winAppDirResult(displayName, stdout);
+  } catch { return winAppDirResult(displayName, ''); }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +176,19 @@ export async function appVersion(bundleOrExe) {
       const script = "$v=(Get-Item -LiteralPath '" + lit + "').VersionInfo; if ($v.ProductVersion) { $v.ProductVersion } else { $v.FileVersion }";
       const { stdout } = await execFileP('powershell.exe', ['-NoProfile', '-Command', '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + script], { timeout: 4000, maxBuffer: 1024 * 1024 });
       v = stdout.trim() || null;
+    } else if (IS_LINUX) {
+      // linux 无统一元数据：可执行文件（含 AppImage，参数透传）跑 --version 取首个版本样 token；
+      // 目录/AppImage 之外的形态读不出就 null 如实。
+      const st = fs.statSync(bundleOrExe);
+      const target = st.isDirectory() ? null : bundleOrExe;
+      if (target) {
+        const t = resolveSpawnCommand(target);
+        if (t) {
+          const { stdout } = await execFileP(t.file, [...t.prefixArgs, '--version'], { timeout: 4000, maxBuffer: 1024 * 1024 });
+          const m = stdout.match(/\d+\.\d+(\.\d+)*([-+.\w]*)/);
+          v = m ? m[0] : (stdout.trim().split(/\r?\n/)[0] || null);
+        }
+      }
     }
   } catch { v = null; }
   versionCache.set(bundleOrExe, v);
@@ -220,20 +251,18 @@ export function resolveSpawnCommand(binPath) {
     try {
       const text = fs.readFileSync(binPath, 'utf8');
       const base = path.dirname(binPath);
-      // npm shim 模板：.cmd 引 "%dp0%\..." / "%~dp0\..."；.ps1 引 "$basedir/..."（$exe 是 ".exe" 变量）
       const raws = [];
-      for (const m of text.matchAll(/"%~?dp0%\\([^"]+)"/gi)) raws.push(m[1]);
+      for (const m of text.matchAll(/"%~?dp0\\([^"]+)"/gi)) raws.push(m[1]);
       for (const m of text.matchAll(/"\$basedir\/([^"]+)"/gi)) raws.push(m[1].replace(/\$exe\b/g, ''));
-      for (const raw of raws) {
-        const cand = path.join(base, raw);
-        let st = null; try { st = fs.statSync(cand); } catch { continue; }
-        if (!st.isFile()) continue;
-        const ce = path.extname(cand).toLowerCase();
-        if (ce === '.exe') return { file: cand, prefixArgs: [] };
-        if (ce === '.js' || ce === '.cjs' || ce === '.mjs') {
-          const localNode = path.join(base, 'node.exe');
-          return { file: fs.existsSync(localNode) ? localNode : 'node.exe', prefixArgs: [cand] };
-        }
+      const files = raws.map(raw => path.join(base, raw.replace(/[\\/]/g, path.sep))).filter(file => {
+        try { return fs.statSync(file).isFile(); } catch { return false; }
+      });
+      const productExe = files.find(file => path.extname(file).toLowerCase() === '.exe' && path.basename(file).toLowerCase() !== 'node.exe');
+      if (productExe) return { file: productExe, prefixArgs: [] };
+      const entryJs = files.find(file => ['.js', '.cjs', '.mjs'].includes(path.extname(file).toLowerCase()));
+      if (entryJs) {
+        const localNode = path.join(base, 'node.exe');
+        return { file: fs.existsSync(localNode) ? localNode : 'node.exe', prefixArgs: [entryJs] };
       }
     } catch { /* 解包失败 → cmd 兜底 */ }
     return { file: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe'), prefixArgs: ['/d', '/s', '/c', binPath], needsCmdQuote: true };
@@ -260,8 +289,18 @@ export function pluginSocketPath() {
 
 function shQuote(s) { return "'" + String(s).replace(/'/g, "'\\''") + "'"; }
 
-/** cmd /k 命令行引号：整体双引号包裹，内层 " → \"，换行折叠为空格。 */
-function cmdQuote(s) { return '"' + String(s).replace(/"/g, '\\"').replace(/\r\n?/g, ' ') + '"'; }
+function cmdQuote(s) {
+  return '"' + String(s).replace(/"/g, '""').replace(/%/g, '%%').replace(/!/g, '!!').replace(/\r\n?/g, ' ') + '"';
+}
+
+export function spawnCommandArgs(target, args = []) {
+  if (!target.needsCmdQuote) return { file: target.file, args: [...target.prefixArgs, ...args], windowsVerbatimArguments: false };
+  return {
+    file: target.file,
+    args: [...target.prefixArgs.slice(0, 3), ...target.prefixArgs.slice(3).concat(args).map(cmdQuote)],
+    windowsVerbatimArguments: true,
+  };
+}
 
 async function macTerminalDo(script) {
   await execFileP('osascript', ['-e', script], { timeout: 4000 });
@@ -281,6 +320,7 @@ async function hasWinWhere(name) {
  */
 export async function openTerminalWindow({ cwd, env = {}, file, args = [] }) {
   const envPrefix = (fmt) => Object.entries(env).map(([k, v]) => fmt(k, v)).join('');
+  const cmdEnvValue = (value) => String(value).replace(/%/g, '%%').replace(/!/g, '!!').replace(/"/g, '""');
   if (IS_MAC) {
     const script = 'tell application "Terminal" to do script ' + JSON.stringify(
       'cd ' + shQuote(cwd) + ' && ' + envPrefix((k, v) => 'export ' + k + '=' + shQuote(v) + '; ') + shQuote(file) + (args.length ? ' ' + args.map(shQuote).join(' ') : '')
@@ -289,7 +329,7 @@ export async function openTerminalWindow({ cwd, env = {}, file, args = [] }) {
     catch (e) { return { ok: false, via: 'Terminal', error: String(e.message || e).slice(0, 160) }; }
   }
   if (IS_WIN) {
-    const line = envPrefix((k, v) => 'set "' + k + '=' + v + '" && ') + cmdQuote(file) + (args.length ? ' ' + args.map(cmdQuote).join(' ') : '');
+    const line = envPrefix((k, v) => 'set "' + k + '=' + cmdEnvValue(v) + '" && ') + cmdQuote(file) + (args.length ? ' ' + args.map(cmdQuote).join(' ') : '');
     if (await hasWinWhere('wt.exe')) {
       try {
         await execFileP('wt.exe', ['-d', cwd, 'cmd', '/d', '/s', '/k', line.replace(/;/g, '\\;')], { timeout: 4000 });
@@ -297,7 +337,7 @@ export async function openTerminalWindow({ cwd, env = {}, file, args = [] }) {
       } catch { /* 落 start 兜底 */ }
     }
     try {
-      await execFileP('cmd.exe', ['/d', '/s', '/c', 'start', 'CodeAll', '/D', cwd, 'cmd', '/d', '/s', '/k', line], { timeout: 4000 });
+      await execFileP('cmd.exe', ['/d', '/s', '/c', 'start', 'CodeAll', '/D', cmdQuote(cwd), 'cmd', '/d', '/s', '/k', line], { timeout: 4000, windowsVerbatimArguments: true });
       return { ok: true, via: 'cmd 新窗口' };
     } catch (e) { return { ok: false, via: 'cmd', error: String(e.message || e).slice(0, 160) }; }
   }
@@ -308,7 +348,7 @@ export async function openTerminalWindow({ cwd, env = {}, file, args = [] }) {
     ['kitty', ['--directory', cwd, file, ...args]],
   ];
   for (const [bin, a] of tries) {
-    try { await execFileP(bin, a, { timeout: 4000 }); return { ok: true, via: bin }; } catch { /* 下一个 */ }
+    try { await execFileP(bin, a, { timeout: 4000, cwd }); return { ok: true, via: bin }; } catch { /* 下一个 */ }
   }
   return { ok: false, via: 'terminal', error: '未找到可用终端（xdg-terminal-exec/gnome-terminal/kitty）' };
 }
@@ -327,12 +367,90 @@ export const DESKTOP_APPS = Object.freeze({
   qoder: 'Qoder CN',
 });
 
-/** 桌面 App 安装目录（Promise；win 走注册表缓存，mac 返回 /Applications/<app>.app 或 null）。 */
-export async function desktopAppDir(appId) {
-  if (IS_WIN) return winAppDir(DESKTOP_APPS[appId] || appId);
+/** 桌面 App 安装目录（Promise；win 走注册表缓存，mac 返回 /Applications/<app>.app 或 null，linux 反查 .desktop）。 */
+function desktopAppDirMac(appId) {
   const macNames = { dsh: 'DeepSeek Harness.app', zcode: 'ZCode.app', 'kimi-code': 'Kimi Code.app', cursor: 'Cursor.app', qoder: 'Qoder CN.app' };
   const n = macNames[appId];
   if (!n) return null;
   const p = path.join('/Applications', n);
   return fs.existsSync(p) ? p : null;
+}
+
+// Linux：freedesktop .desktop 反查。应用目录语义对齐 win/mac 消费方（要的是「能往下拼 resources/…」
+// 的目录）：Exec 目标若为符号链（deb 惯例 /usr/bin/<name> → /usr/lib/<name>/<real>）用 realpath 解到
+// 真实目录；AppImage 返回其所在目录。找不到 .desktop（CLI-only 安装）返回 null，调用方降级。
+const LINUX_APP_DIR_TTL = 10 * 60_000;
+const linuxAppDirCache = new Map();
+
+function linuxDesktopDirs() {
+  const dirs = [];
+  const dataHome = process.env.XDG_DATA_HOME || path.join(HOME, '.local', 'share');
+  dirs.push(path.join(dataHome, 'applications'));
+  const dataDirs = (process.env.XDG_DATA_DIRS || '/usr/local/share:/usr/share').split(':');
+  for (const d of dataDirs) { if (d) dirs.push(path.join(d, 'applications')); }
+  dirs.push(path.join(dataHome, 'flatpak', 'exports', 'share', 'applications'));
+  dirs.push('/var/lib/flatpak/exports/share/applications');
+  return dirs;
+}
+
+function linuxDesktopFilename(appId) {
+  const names = { dsh: 'dsh', zcode: 'zcode', 'kimi-code': 'kimi', 'codex-pp': 'codex', cursor: 'cursor', qoder: 'qoder' };
+  return names[appId] || appId;
+}
+
+function linuxAppDirResult(appId) {
+  const stem = linuxDesktopFilename(appId);
+  let desktopFile = null;
+  for (const dir of linuxDesktopDirs()) {
+    try {
+      const hit = fs.readdirSync(dir).find((f) => f.endsWith('.desktop') && f.toLowerCase().includes(stem));
+      if (hit) { desktopFile = path.join(dir, hit); break; }
+    } catch { /* 下一个目录 */ }
+  }
+  let dir = null;
+  if (desktopFile) {
+    try {
+      const text = fs.readFileSync(desktopFile, 'utf8');
+      const execLine = text.split(/\r?\n/).find((l) => l.startsWith('Exec='));
+      if (execLine) {
+        // Exec= 去字段码（%f/%u 等）；flatpak run <app-id> 的产物目录无资源可拼，保持 null
+        const first = execLine.slice(5).trim().replace(/%[a-zA-Z]/g, '').trim().split(/\s+/)[0];
+        if (first && first.startsWith('/')) {
+          if (/\.AppImage$/i.test(first)) dir = path.dirname(first);
+          else {
+            let real = first;
+            try { real = fs.realpathSync(first); } catch { /* 断链按原路径 */ }
+            dir = path.dirname(real);
+          }
+        }
+      }
+    } catch { /* 读不了按 null */ }
+  }
+  if (dir && !fs.existsSync(dir)) dir = null;
+  linuxAppDirCache.set(appId, { at: Date.now(), dir });
+  return dir;
+}
+
+function desktopAppDirLinuxSync(appId) {
+  const hit = linuxAppDirCache.get(appId);
+  if (hit && Date.now() - hit.at < LINUX_APP_DIR_TTL) return hit.dir;
+  return linuxAppDirResult(appId);
+}
+
+async function desktopAppDirLinux(appId) {
+  const hit = linuxAppDirCache.get(appId);
+  if (hit && Date.now() - hit.at < LINUX_APP_DIR_TTL) return hit.dir;
+  return linuxAppDirResult(appId);
+}
+
+export async function desktopAppDir(appId) {
+  if (IS_WIN) return winAppDir(DESKTOP_APPS[appId] || appId);
+  if (IS_LINUX) return desktopAppDirLinux(appId);
+  return desktopAppDirMac(appId);
+}
+
+export function desktopAppDirSync(appId) {
+  if (IS_WIN) return winAppDirSync(DESKTOP_APPS[appId] || appId);
+  if (IS_LINUX) return desktopAppDirLinuxSync(appId);
+  return desktopAppDirMac(appId);
 }

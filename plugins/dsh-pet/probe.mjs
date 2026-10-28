@@ -23,6 +23,7 @@ import http from 'node:http';
 import { spawn, spawnSync as spawnSyncImpl } from 'node:child_process';
 import zlibDefault from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+import { IS_MAC, desktopAppDirSync } from '../../adapters/platform.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN = path.join(HERE, 'index.js');
@@ -32,7 +33,11 @@ const PROFILE_DIR = path.join(HOME, 'profiles', PROFILE);
 const SOCK = process.env.PROBE_SOCK || path.join(HOME, 'sock', 'dsh-plugin.sock');
 const LOG = path.join(HOME, 'probe-dsh.log');
 const PIDFILE = path.join(HOME, 'probe-dsh.pid');
-const CLI = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh';
+// 安装包自带 CLI：mac App 包固定路径；linux 经 .desktop 反查安装目录；env 显式覆盖优先。
+// 都取不到留 null，start 时给出明确指引（本平台无 DSH 发行版时如实退出，不装）。
+const CLI = process.env.PROBE_DSH_CLI
+  || (IS_MAC ? '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh' : null)
+  || (desktopAppDirSync('dsh') ? path.join(desktopAppDirSync('dsh'), 'runtime', 'cli', 'bin', 'dsh') : null);
 
 function step(label, detail) { console.log('== ' + label + (detail ? ': ' + detail : '')); }
 
@@ -80,6 +85,11 @@ function runCli(args, env) {
 }
 
 function start() {
+  if (!CLI || !fs.existsSync(CLI)) {
+    console.log('!! 找不到 DSH CLI（PROBE_DSH_CLI 未设且本平台未探得安装）：本平台无 DSH 发行版时属预期，预演跳过');
+    process.exitCode = 1;
+    return;
+  }
   fs.mkdirSync(path.dirname(LOG), { recursive: true });
   const out = fs.openSync(LOG, 'a');
   const child = spawn(CLI, ['--profile', PROFILE], {

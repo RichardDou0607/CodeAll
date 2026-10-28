@@ -73,8 +73,9 @@ if (!nodeSrc) { console.error('[bundle-service] 未找到 node 二进制，无�
 copyFile(nodeSrc, isWin ? path.join('bin', 'node.exe') : path.join('bin', 'node'));
 
 // 只发 Apple Silicon：universal 二进制裁到 arm64 单架构（体积约减半；lipo -thin 保留片内签名，
-// 签名校验失败则回退 fat 原件——宁可包大也不能给出跑不起来的 node）
-try {
+// 签名校验失败则回退 fat 原件——宁可包大也不能给出跑不起来的 node）。
+// lipo/codesign 是 mac 专属工具，显式 darwin gate（Linux/Windows 打包直跳，不再靠 try/catch 吞错）。
+if (process.platform === 'darwin') {
   const info = execFileSync('lipo', ['-info', nodeSrc], { encoding: 'utf8' });
   if (/x86_64/.test(info) && /arm64/.test(info)) {
     const stagedNode = path.join(STAGE, 'bin', 'node');
@@ -89,7 +90,7 @@ try {
       console.log('[bundle-service] 裁剪后签名无效，保留 universal 原件');
     }
   }
-} catch { /* lipo/codesign 不可用等：保留原件 */ }
+}
 
 const sizeMB = (d) => {
   let t = 0;

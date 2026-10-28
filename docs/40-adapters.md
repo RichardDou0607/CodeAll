@@ -28,10 +28,46 @@
 | 15 | **Cursor**（桌面 3.26.16 + cursor-agent CLI，2026-10-22 已落地） | 桌面 state.vscdb（composerHeaders + composerData.status；不读消息泡/subtitle）；CLI chats meta.json（store.db 转录原文红线不读） | 桌面：会话/状态级（agent.status）；CLI：会话级（MG1–MG9） | **已落地** | 控制 `cursor-agent -p --resume`（CLI 会话）；桌面 composer 无通道；用量云端 → 如实降级 |
 | 13 | **ZCode**（桌面 App 3.14.4，CLI 0.16.9 随包分发） | `~/.zcode/cli/db/db.sqlite`（WAL；session/message/part 三表，node:sqlite 只读并发）+ 包内 `zcode.cjs` CLI（--resume/--prompt） | sqlite 实测可映射 8 类（turn/step/tool/message；**无审批流**——permission 表为项目配置） | **首批 ✅（M-L）** | 已落地（无头投递对 account:* provider 会话受上游登录态限制，见 §3.12） |
 
+## 0.1 Windows 可用性矩阵（Win11 x64，2026-10-27 实测）
+
+| 源 / 通道 | 安装与观察 | 控制与验证状态 |
+|---|---|---|
+| DSH | 已安装；`C:\Users\admin\.dsh` 会话日志可读 | 观察通过；插件命名管道按需接入，ACL 实现目标为仅 SYSTEM + 当前用户 SID 可读写（DACL 待 SSH 恢复后复验），非挂载时如实降级 |
+| Claude Code CLI | 已安装；转录可读 | V01 新建、V02 续接与上下文连续、V04 同 cwd 双会话隔离、V05 失败可辨均已实测通过 |
+| Codex CLI | 已安装；rollout 可读 | 投递可写入 rollout；真实模型回合受该机 OpenAI 直连网络阻塞，未宣称完成 |
+| Kimi CLI | 已安装；本机无会话 | 账号 429 suspended，真实控制闭环未开展 |
+| ZCode | 已安装；sqlite 观察 9 会话 | app-server 控制通道保留；npm shim 损坏按桌面安装目录解析，不把 shim 状态当功能失败 |
+| OpenCode | 已安装；sqlite 观察 87 会话 | 机制可用；未进行真实模型回合 |
+| Qoder / Cursor | 未安装 | 不虚构状态 |
+| Tauri / NSIS | NSIS 安装、包内 Node、`/api/state` 200、Host 403、写无 token 401 已通过 | W05 窗口透明/置顶/拖拽/托盘仍待交互桌面人工验证 |
+
+平台实现统一走 `adapters/platform.mjs`：安装/数据目录、进程快照、版本读取、CLI 解包与 spawn、终端链、同步注册表反查和命名管道地址。沙箱停止脚本只按精确端口与 `demo/framed.mjs` 命令行停止测试服务，拒绝终止其它进程。
+
 **三条结论**：
 1. **Phase 2 的关键不是「能不能拿到事件」，而是「拿到事件要不要用户改配置」**：Claude Code / Codex / Cursor / Copilot / Gemini 的 hook 都要写进用户或项目配置文件，属于「需用户同意安装」的接入方式；**离线日志兜底（只读、零侵入）应当作为每个后端的默认降级路径**。本机实测证明两条路都可行（见 §3.1/§3.2 的实测证据段）。
 2. **上游漂移速度很快**：Claude Code 的 hook 事件在 **2026-09-29 → 2026-10-05 一周内从 30 个涨到 33 个**（DSH 桥自述基线 vs 官方文档当前值），Codex 桥基线 10 个、当前官方文档镜像为 12 个。**适配器必须把「事件名清单」做成可热更新的数据，而不是硬编码逻辑**。
 3. **ACP 是唯一「一次适配、多家覆盖」的通道**，但成熟的 ACP 客户端/Agent 生态仍在演进（本机 DSH 内置 @agentclientprotocol/sdk 1.4.0 已含 v2 草案 schema）。建议 P1，作为 Phase 2 后半段的杠杆。
+
+---
+
+## 0.2 Linux 可用性矩阵（Ubuntu 24.04 arm64 本机 VM，2026-10-28 实测）
+
+验证机与工作流见 [docs/37](./37-linux-sandbox.md)；装机工具链 node 22.23.4 + pnpm 12.15（`~/.local`，npmmirror 源）。
+
+| 源 / 通道 | 安装与观察 | 控制与验证状态 |
+|---|---|---|
+| DSH | npm `@deepseek-ai/dsh` 0.2.1-rc.2 装机（linux-arm64 有官方发行，flock addon `node-addon-system-linux-arm64` 0.1.2 在册）；`~/.dsh` 未建（无会话） | 观察/插件通道待真实运行验证；**unix socket 权限红线已实证**（sock-probe：socket 0600、父目录 0700、跨用户 nobody 拒连——win11 侧做不了的对照实验在本机 VM 成立） |
+| Claude Code CLI | npm 装机 2.1.312；转录通道就绪（~/.claude/projects） | `--version` 机制级通过；V01-V05 真实投递待授权（沿 docs/36 §8.1 口径） |
+| Codex CLI | npm 装机 0.165.0；rollout 通道就绪（~/.codex） | `--version` 机制级通过；真实回合待授权 |
+| Kimi CLI | npm `@moonshot-ai/kimi-code` 2.3.3（**要求 Node ≥ 22.15**，依赖 `node:zlib` zstd——22.14 会崩，装机须新于该版） | `--version` 机制级通过；投递待授权 |
+| OpenCode | npm 装机 1.19.4；`~/.local/share/opencode` 库在 | 机制可用（四态未打开）；真实回合待授权 |
+| cursor-agent | 官方装脚本（cursor.com/install）2026.10.22-27dcf5f，落 ~/.local/bin | 机制可用；注意 npm 同名包 `cursor-agent` 是无关软件，勿用 |
+| ZCode / Qoder / qoderclicn | 未装（ZCode Linux 发行形态待查；qoderclicn 为内部版本化目录 `~/.qoder-cn`，不公开） | 不虚构状态 |
+| 桌面 App 六家 | .desktop 反查全未检出（VM 无桌面 App） | 四态如实显示未下载/未打开；desktopAppDirLinux 三布局（deb 符号链/AppImage/flatpak）由 test-platform-linux 夹具级验证 |
+
+机制级全绿记录（2026-10-28）：platform-check（linux 分支：XDG 数据目录 13 项全对位）、check-fixtures（契约 v1.2）、test-platform-linux 10/10、local-agents 四态（7 未打开 / 7 未下载，版本读取 npm 口径生效）、sock-probe 四断言全过。终端链三级 xdg-terminal-exec→gnome-terminal→kitty 在 24.04 universe 源全可装。
+
+平台实现统一走 `adapters/platform.mjs`（linux 分支：appVersion spawn `--version`、desktopAppDir .desktop 反查、npm shim shebang 直通、终端链三级）；四态注册表第三槽位 `installPathsLinux/processReLinux` 缺省回落 mac 槽位（CLI 行 HOME 相对路径天然同值）。安装探测新增 npm 位 `~/.local/bin/dsh`、`~/.local/bin/kimi`（linux 实测口径）。
 
 ---
 

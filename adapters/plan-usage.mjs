@@ -30,9 +30,15 @@ import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { openZcodeDb, ZCODE_DB } from './zcode-adapter.mjs';
-import { appSupport, localData } from './platform.mjs';
+import { PLATFORM_ID, IS_MAC, appSupport, localData } from './platform.mjs';
 
 const HOME = process.env.PLAN_USAGE_HOME || os.homedir();
+/** appSupport 结果重定根到 HOME（PLAN_USAGE_HOME 可覆盖；测试夹具依赖此重定向，真机两者同值无感）。 */
+const appSupportUnder = (...segs) => {
+  const abs = appSupport(...segs);
+  const rel = path.relative(os.homedir(), abs);
+  return rel.startsWith('..') ? abs : path.join(HOME, rel);
+};
 const DAY_MS = 86_400_000;
 
 /** 身份/配额提取结果缓存（60s；与目录扫描热缓存同节奏，避免每 5s 快照都碰 sqlite）。 */
@@ -261,7 +267,7 @@ function kimiIdentity(o) {
 function qoderIdentity(o) {
   const evidence = [], notes = [];
   const st = readJson(path.join(HOME, '.qoder-cn/.qoder-app-status.json'));
-  const mainDb = path.join(HOME, 'Library/Application Support/com.qodercn.app.stable/main.sqlite');
+  const mainDb = appSupportUnder('com.qodercn.app.stable', 'main.sqlite');   // mac ~/Library/…、linux ~/.config/…、win %APPDATA%\…
   if (!st && !fileExists(mainDb)) return { status: 'not-installed', planName: null, account: null, evidence, notes };
   if (st) {
     evidence.push({ file: '~/.qoder-cn/.qoder-app-status.json', field: 'logged_in / version', value: (st.logged_in ? '已登录' : '未登录') + ' · v' + (st.version ?? '?') });
@@ -274,7 +280,7 @@ function qoderIdentity(o) {
       for (const r of rows) evidence.push({ file: 'main.sqlite', field: 'partner_plan_snapshots', value: String(r.partner_code ?? '?') + ' eligible=' + (r.eligible ? 1 : 0) + (r.subscription_status ? ' · ' + r.subscription_status : '') });
     } catch { /* 表不存在 */ } finally { try { db.close(); } catch { /* ignore */ } }
   }
-  const data = readJson(path.join(HOME, 'Library/Application Support/com.qodercn.app.stable/qoder-data.v1.json'));
+  const data = readJson(appSupportUnder('com.qodercn.app.stable', 'qoder-data.v1.json'));
   if (data && Array.isArray(data.subscriptions)) evidence.push({ file: 'qoder-data.v1.json', field: 'subscriptions', value: data.subscriptions.length ? data.subscriptions.map((s) => s?.plan ?? s?.id ?? '?').join(', ') : '[]（主订阅档未缓存）' });
   notes.push('订阅档位与配额在厂商云端，本地无缓存（token 亦不落盘，见用量页口径）');
   return { status: st?.logged_in ? 'signed-in' : 'not-signed-in', planName: null, account: st?.name ? maskName(st.name) : null, evidence, notes };
@@ -284,7 +290,7 @@ function qoderIdentity(o) {
 const CURSOR_PLAN_LABEL = { free: 'Free', pro: 'Pro', 'pro_plus': 'Pro+', ultra: 'Ultra', teams: 'Teams', enterprise: 'Enterprise' };
 function cursorIdentity(o) {
   const evidence = [], notes = [];
-  const dbPath = path.join(HOME, 'Library/Application Support/Cursor/User/globalStorage/state.vscdb');
+  const dbPath = appSupportUnder('Cursor', 'User', 'globalStorage', 'state.vscdb');
   if (!fileExists(dbPath)) return { status: fileExists(path.join(HOME, '.cursor')) ? 'not-signed-in' : 'not-installed', planName: null, account: null, evidence, notes };
   const db = openSqliteReadOnly(dbPath);
   let plan = null, email = null;
@@ -310,8 +316,10 @@ const COPILOT_SKU_LABEL = {
 };
 function copilotIdentity(o) {
   const evidence = [], notes = [];
-  const installed = ['/Applications/GitHub Copilot.app', path.join(HOME, '.copilot'),
-    path.join(HOME, 'Library/Caches/github-copilot-sdk'), localData('GitHub Copilot')].some(fileExists);
+  const installed = [
+    ...(IS_MAC ? ['/Applications/GitHub Copilot.app', path.join(HOME, 'Library/Caches/github-copilot-sdk')] : []),
+    path.join(HOME, '.copilot'), localData('GitHub Copilot'),
+  ].some(fileExists);
   const dbPath = appSupport('Code', 'User', 'globalStorage', 'state.vscdb');
   let sku = null;
   const db = openSqliteReadOnly(dbPath);
@@ -454,7 +462,7 @@ async function fetchKimiOnline(fetchImpl) {
 /** GLM：zcode credentials 确定性回退密钥解密（docs/40 §3.12：sha256("zcode-credential-fallback:<platform>:<homedir>:<username>")，enc:v1 AES-256-GCM）。 */
 function decryptZcodeValue(enc) {
   try {
-    const key = crypto.createHash('sha256').update('zcode-credential-fallback:' + process.platform + ':' + HOME + ':' + os.userInfo().username).digest();
+    const key = crypto.createHash('sha256').update('zcode-credential-fallback:' + PLATFORM_ID + ':' + HOME + ':' + os.userInfo().username).digest();
     const [iv, tag, ct] = String(enc).replace(/^enc:v1:/, '').split('.').map((x) => Buffer.from(x, 'base64url'));
     const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
     d.setAuthTag(tag);

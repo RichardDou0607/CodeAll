@@ -12,7 +12,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { describeModelMap, loadModelMap, mapModelName } from './model-map.mjs';
 import { resolveQoderCliBin } from './qoder-adapter.mjs';
-import { resolveCliBinPath, localData, desktopAppDir } from './platform.mjs';
+import { IS_WIN, IS_LINUX, IS_MAC, resolveCliBinPath, resolveSpawnCommand, spawnCommandArgs, localData, desktopAppDirSync } from './platform.mjs';
 
 const HOME = os.homedir();
 const CACHE_MS = 30_000;
@@ -132,12 +132,17 @@ function findExecutable(name, extra = []) {
   return resolveCliBinPath(name, extra);
 }
 
+function execCli(bin, args, options = {}) {
+  const spec = spawnCommandArgs(resolveSpawnCommand(bin), args);
+  return execFileSync(spec.file, spec.args, { ...options, windowsVerbatimArguments: spec.windowsVerbatimArguments });
+}
+
 function parseCodex(map = null) {
   const bin = findExecutable('codex');
   if (!bin) return emptySource('codex-cli-not-found');
   let payload;
   try {
-    const raw = execFileSync(bin, ['debug', 'models'], {
+    const raw = execCli(bin, ['debug', 'models'], {
       encoding: 'utf8', timeout: 8_000, maxBuffer: 16 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     });
     payload = JSON.parse(raw);
@@ -205,11 +210,11 @@ function parseClaude(map = null) {
 // contains provider credentials; project only model metadata, never log it.
 function parseKimi() {
   const kimiHome = process.env.KIMI_CODE_HOME || process.env.KIMI_HOME || path.join(HOME, '.kimi-code');
-  const bin = findExecutable('kimi', [path.join(kimiHome, 'bin', process.platform === 'win32' ? 'kimi.exe' : 'kimi')]);
+  const bin = findExecutable('kimi', [path.join(kimiHome, 'bin', IS_WIN ? 'kimi.exe' : 'kimi')]);
   if (!bin) return emptySource('kimi-cli-not-found');
   let payload;
   try {
-    payload = JSON.parse(execFileSync(bin, ['provider', 'list', '--json'], {
+    payload = JSON.parse(execCli(bin, ['provider', 'list', '--json'], {
       encoding: 'utf8', timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     }));
   } catch {
@@ -283,22 +288,25 @@ function zcodeProviderModels(config, rules, canCreateDefault) {
   return out;
 }
 
-// Windows 桌面 ZCode 安装目录随盘符（实测 D:\ZCode），经注册表异步反查缓存
-let zcodeAppDirCache = null;
-desktopAppDir('zcode').then((d) => { zcodeAppDirCache = d; }).catch(() => {});
+let zcodeAppDirCache;
+function zcodeAppDir() {
+  if (zcodeAppDirCache === undefined) zcodeAppDirCache = desktopAppDirSync('zcode');
+  return zcodeAppDirCache;
+}
 
 function parseZcode() {
   const userFile = process.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE
     || path.join(HOME, '.zcode', 'v2', 'provider_config.json');
+  // win/linux 桌面安装布局同构（<appDir>/resources/…，win 注册表反查 / linux .desktop 反查）；mac 走 App 包固定路径
   const builtinFile = process.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE
-    || (process.platform === 'win32' && zcodeAppDirCache ? path.join(zcodeAppDirCache, 'resources', 'config', 'provider', 'zcode-builtin.json') : null)
-    || '/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json';
+    || ((IS_WIN || IS_LINUX) && zcodeAppDir() ? path.join(zcodeAppDir(), 'resources', 'config', 'provider', 'zcode-builtin.json') : null)
+    || (IS_MAC ? '/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json' : null);
   const user = readJson(userFile);
   const builtin = readJson(builtinFile);
   if (!user && !builtin) return emptySource('zcode-provider-registry-unreadable');
-  const bin = findExecutable('zcode', process.platform === 'win32'
-    ? (zcodeAppDirCache ? [path.join(zcodeAppDirCache, 'resources', 'glm', 'zcode.cjs')] : [])
-    : ['/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs']);
+  const bin = findExecutable('zcode', (IS_WIN || IS_LINUX)
+    ? (zcodeAppDir() ? [path.join(zcodeAppDir(), 'resources', 'glm', 'zcode.cjs')] : [])
+    : (IS_MAC ? ['/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs'] : []));
   const rules = [...zcodeReasoningRules(builtin), ...zcodeReasoningRules(user)];
   const models = [
     ...zcodeProviderModels(user, rules, !!bin),
@@ -323,7 +331,7 @@ function parseOpencode() {
   if (!bin) return emptySource('opencode-cli-not-found');
   let payload;
   try {
-    payload = execFileSync(bin, ['models'], {
+    payload = execCli(bin, ['models'], {
       encoding: 'utf8', timeout: 8_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
@@ -355,7 +363,7 @@ function parseCursor() {
   if (!bin) return emptySource('cursor-cli-not-found');
   let payload;
   try {
-    payload = execFileSync(bin, ['--list-models'], {
+    payload = execCli(bin, ['--list-models'], {
       encoding: 'utf8', timeout: 8_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {
@@ -384,7 +392,7 @@ function parseQoder() {
   if (!bin) return emptySource('qoder-cli-not-found');
   let payload;
   try {
-    payload = execFileSync(bin, ['--list-models'], {
+    payload = execCli(bin, ['--list-models'], {
       encoding: 'utf8', timeout: 8_000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (error) {

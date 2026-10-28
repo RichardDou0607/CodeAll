@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
     --build)    MODE=build;   shift ;;
     --no-build) MODE=nobuild; shift ;;
     --dev)      MODE=dev;     shift ;;
-    --install)  MODE=install; shift ;;   # 构建并安装到 /Applications，之后从启动台/Spotlight 一键打开
+    --install)  MODE=install; shift ;;   # 构建并安装（mac：/Applications；Linux：deb 用 apt 装 / AppImage 收进 ~/.local/bin，并配 .desktop 自启）
     --restart-server) RESTART_SERVER=1; shift ;;   # 先停掉端口上的旧 framed.mjs，让外壳用新环境变量重拉
     -h|--help)  usage; exit 0 ;;
     --)         shift; PASSTHRU=("$@"); break ;;
@@ -63,8 +63,16 @@ command -v node >/dev/null 2>&1 || die "未找到 node —— 本地服务 demo/
 command -v pnpm >/dev/null 2>&1 || die "未找到 pnpm"
 command -v cargo >/dev/null 2>&1 || die "未找到 cargo（已把 ~/.cargo/bin 加进 PATH；请先装 Rust 工具链）"
 
-APP="$SELF_DIR/src-tauri/target/release/bundle/macos/CodeAll.app"
-BIN="$(ls "$APP/Contents/MacOS/"* 2>/dev/null | head -1)"   # 可执行文件名 = cargo bin 名
+OS="$(uname -s)"
+if [ "$OS" = "Linux" ]; then
+  # Linux 产物：deb（apt 安装）+ AppImage（免装直跑）；日常 run 走未打包的 release 二进制
+  DEB="$(ls "$SELF_DIR"/src-tauri/target/release/bundle/deb/*_arm64.deb 2>/dev/null | head -1)"
+  APPIMAGE="$(ls "$SELF_DIR"/src-tauri/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)"
+  BIN="$SELF_DIR/src-tauri/target/release/agent-pet-shell"   # 可执行文件名 = cargo bin 名
+else
+  APP="$SELF_DIR/src-tauri/target/release/bundle/macos/CodeAll.app"
+  BIN="$(ls "$APP/Contents/MacOS/"* 2>/dev/null | head -1)"   # 可执行文件名 = cargo bin 名
+fi
 
 if [ "$MODE" = dev ]; then
   say "tauri dev 模式 · 端口 ${AGENT_PET_PORT:-7799}"
@@ -85,13 +93,55 @@ if [ "$MODE" = nobuild ] && [ "$NEED_BUILD" = 1 ]; then
 fi
 
 if [ "$NEED_BUILD" = 1 ]; then
-  say "构建 .app（首次编译依赖约 1-5 分钟）…"
-  (cd "$SELF_DIR" && pnpm tauri build) || die "pnpm tauri build 失败（详见上方输出）"
+  if [ "$OS" = "Linux" ]; then
+    say "构建 deb + AppImage（首次编译依赖约 1-5 分钟）…"
+    # Linux 出包由 CLI --bundles 传参（tauri.conf.json 的 targets 保持 mac 口径不动）
+    (cd "$SELF_DIR" && pnpm tauri build --bundles deb appimage) || die "pnpm tauri build 失败（详见上方输出）"
+  else
+    say "构建 .app（首次编译依赖约 1-5 分钟）…"
+    (cd "$SELF_DIR" && pnpm tauri build) || die "pnpm tauri build 失败（详见上方输出）"
+  fi
 fi
 
 [ -x "$BIN" ] || die "构建结束但产物不存在：$BIN"
 
 if [ "$MODE" = install ]; then
+  if [ "$OS" = "Linux" ]; then
+    AUTOSTART_DIR="$HOME/.config/autostart"; mkdir -p "$AUTOSTART_DIR"
+    if [ -n "$DEB" ]; then
+      say "安装 deb 包：$DEB"
+      sudo apt install -y "$DEB" || die "apt install 失败"
+      # deb 布局：.desktop 由包落在 /usr/share/applications/，复制一份进自启目录
+      SRC_DESKTOP=""
+      for f in /usr/share/applications/CodeAll.desktop /usr/share/applications/code-all.desktop; do
+        [ -f "$f" ] && SRC_DESKTOP="$f" && break
+      done
+      if [ -n "$SRC_DESKTOP" ]; then
+        cp "$SRC_DESKTOP" "$AUTOSTART_DIR/"
+        say "自启已配置：$AUTOSTART_DIR/$(basename "$SRC_DESKTOP")"
+      else
+        say "警告：未找到包内 .desktop（/usr/share/applications/），自启未配置"
+      fi
+    elif [ -n "$APPIMAGE" ]; then
+      say "AppImage 收进 ~/.local/bin（免安装直跑）"
+      mkdir -p "$HOME/.local/bin"
+      cp "$APPIMAGE" "$HOME/.local/bin/" || die "复制 AppImage 失败"
+      chmod +x "$HOME/.local/bin/$(basename "$APPIMAGE")"
+      # AppImage 没有系统 .desktop，自启文件就地生成，Exec 必须写绝对路径
+      cat > "$AUTOSTART_DIR/codeall.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=CodeAll
+Exec=$HOME/.local/bin/$(basename "$APPIMAGE")
+Terminal=false
+DESKTOP
+      say "自启已配置：$AUTOSTART_DIR/codeall.desktop（Exec=绝对路径）"
+    else
+      die "找不到 Linux 产物（先运行 $0 --build 或 --install 构建）"
+    fi
+    say "完成 —— 注销重登后应自动启动；也可从应用菜单 / ~/.local/bin 打开「CodeAll」"
+    exit 0
+  fi
   DEST_DIR="/Applications"
   say "安装到 $DEST_DIR/CodeAll.app"
   rm -rf "$DEST_DIR/CodeAll.app"
@@ -103,7 +153,11 @@ if [ "$MODE" = install ]; then
   exit 0
 fi
 
-say "产物   $APP"
+if [ "$OS" = "Linux" ]; then
+  say "产物   deb=${DEB:-未构建} appimage=${APPIMAGE:-未构建}"
+else
+  say "产物   $APP"
+fi
 say "端口   ${AGENT_PET_PORT:-7799}（未监听时由外壳拉起 demo/framed.mjs）"
 say "仓库根 $AGENT_PET_ROOT"
 say "启动   $BIN"

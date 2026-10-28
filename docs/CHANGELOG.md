@@ -1,5 +1,26 @@
 # 变更日志（文档与契约）
 
+## 2026-10-28（二）
+### PLAT-3 Linux(arm64)适配收口:本机 Ubuntu 24.04 VM 实机——适配层补课 + 壳 Linux 化 + deb/AppImage 出包安装即用 + 红线全绿 + W05 十项取证 + Wayland 降级声明
+
+- **验证机与工作流**:新增 `scripts/linux-sandbox/`(check/sync/exec/service + redline + sock-probe + e2e-driver + README),方法论平移 win11 四件套;验证机接入(SSH 别名 `ubuntu`、快照、gdm 自动登录),[docs/37](./37-linux-sandbox.md) 落档。PLAT-0 矩阵实测落 [docs/40 §0.2](./40-adapters.md):六源 CLI 装机(claude 2.1.312/codex 0.165/kimi 2.3.3/opencode 1.19.4/cursor-agent 2026.10.22/dsh 0.2.1-rc.2——**DSH 有 linux-arm64 官方发行**,qoderclicn 不公开如实记);装机坑:kimi 需 Node≥22.15(zstd)、npm 同名 cursor-agent 是无关包。
+- **适配层 Linux 补课(平台分支只进 platform.mjs)**:`appVersion` linux 分支(spawn `--version`)、`desktopAppDirLinux`(.desktop 反查:deb 符号链 realpath/AppImage/flatpak)、local-agents 第三槽位(installPathsLinux/processReLinux 缺省回落 mac,补 npm 位 ~/.local/bin/dsh|kimi)、硬编码收口(plan-usage qoder/cursor/copilot 走 appSupport+PLAN_USAGE_HOME 重定根、cli-control ZCode UI 链 IS_LINUX 短路+selftest linux 分支、model-registry zcode builtin win/linux 同构)、dsh-pet socket 权限收紧(目录 0700+socket 0600 失败即关监听)。新增 demo/test-platform-linux.mjs 10 用例双端绿;mac 全量回归 26/27(唯一失败为本轮之前既存,stash 对照确认)。
+- **Tauri 壳 Linux 化(lib.rs 等,零 mac 回归)**:bundled_app_root Linux 候选(deb `/usr/lib/CodeAll/app`+AppImage 挂载,**首包即命中零返工**)、set_visible_on_all_workspaces(X11 STICKY 实证)、is_wayland_session 降级门(`DEGRADED wayland:` 日志,Wayland 实测触发)、resolve_node linux 路径、bundle-service lipo 显式 darwin gate、tauri.conf bundle.linux deb depends、run.sh Linux 产物/安装分支、新增 tools/window-check-linux.sh。托盘/显示路径补 X11 unminimize。
+- **出包与安装即用**:deb + AppImage 双产物(arm64);deb 安装即用——包内 Node 自起服务(`/usr/lib/CodeAll/app/bin/node` 跑包内 framed)、红线 200/403/401 包环境全绿、GUI 完整渲染(会话总览/八源/托盘/中文);AppImage 挂载即跑;`.desktop` 自启全链(注销重登→壳→服务 200)。AppImage 打包三坑记档:tauri 缓存文件名须含 commit hash、`LDAI_RUNTIME_FILE` 传 type2 runtime、plugin-appimage 下载失败非致命。
+- **L7 红线与窗口行为**:redline.mjs 全绿(含 **跨用户 nobody 拒连**——win11 侧做不了的对照实验);W05 十项 X11 取证([qa/linux-manual-tests.md](../qa/linux-manual-tests.md)):7✅(透明/置顶 ABOVE/拖拽/双窗/托盘菜单/关窗不退/全屏并存)+2⚠️(位置记忆部分生效、⤢ 放大待查)+1 N/A(穿透未启用);**Wayland 实测**:全链绿 + `DEGRADED wayland: window-restore 跳过` 如实触发,降级声明落 README 与 docs。已知缺口 GAP-1/2/3 登记,不冒进记通过。
+- **待授权门(L8)**:e2e-driver 就位;VM 内 claude 未登录,真实投递待 VM 内 OAuth 登录+额度授权,不虚构不阻塞。
+- **环境坑(VM)**:VMware VM 只重启 X 不重启整机 → webkit2gtk 全系白屏(连 epiphany),整机重启恢复;ssh 远程守护须双层 bash 写法;X 显示号以 /tmp/.X11-unix 为准;DISPLAY/XAUTHORITY/DBUS 全套才可驱动图形会话。
+
+## 2026-10-28（一）
+### Windows 审查问题修复：shim/首轮路径、命名管道 ACL、沙箱安全与 E2E 真实性
+
+- **Windows shim 与模型注册表**：修正 `%~dp0` 正则，node 与产品原生 exe 分选，新增 `spawnCommandArgs` 统一参数与 `windowsVerbatimArguments`；`cli-control`、模型查询和 E2E 均走同一接口。ZCode/flock 改同步注册表反查，首轮不再落 mac 路径或依赖异步回填。
+- **命名管道 ACL**：新增 `plugins/dsh-pet/pipe-acl.mjs`，监听后用 `SetNamedSecurityInfo` 设置受保护 DACL（SYSTEM + 当前用户 SID 完全控制），失败即关闭监听；不再把 Everyone/Anonymous 只读误写为「仅当前用户」。
+- **沙箱与 Linux**：`service.sh stop` 同时要求精确端口和 `demo/framed.mjs` 命令行，拒绝误杀其它进程；`exec.sh` 与 PowerShell 统一 EncodedCommand；`xdg-terminal-exec` 通过 spawn cwd 进入目标项目。
+- **E2E**：V04 分别续问 A/B；Kimi 按 `wd_*/session_*` 和主 agent wire 校验 cwd 与新 assistant 回复，Codex rollout 同时按 cwd/暗号筛选；失败均以非零退出码结束，避免初始提示词、无关会话或无条件成功造成假阳性。ACL 探针精确核对受保护 DACL 仅含 SYSTEM 与当前用户。
+- **验证**：`demo/test-platform-windows.mjs` 6/6（标准 shim、原生 exe、回退转义、Linux cwd、首轮 ZCode、Kimi E2E 目录与新回复）；相关模型/打开/目录/多源回归与 demo 全套通过；macOS cargo check 与完整构建通过。
+- **远端状态**：首次同步及重试均 SSH 连接超时（主机可 ping 通，22 端口不可达），同步、DACL 实测与 NSIS 复验尚未完成，不宣称远端通过。Windows 可用性矩阵已补入 docs/40，修复与阻塞记录见 docs/36 §9。
+
 ## 2026-10-27（十六）
 ### PLAT-2 闭环与 NSIS 安装包实测：真实投递四项全过 + 管道 ACL 红线成立 + Win 包服务侧红线通过（用户授权真实轮次，Win11 沙箱）
 

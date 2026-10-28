@@ -23,3 +23,4 @@ $str=[IntPtr]::Zero; $len=[uint32]0
 if (-not [PipeSec]::ConvertSecurityDescriptorToStringSecurityDescriptorW($sd, 1, 4, [ref]$str, [ref]$len)) { Write-Output "conv failed"; exit 1 }
 Write-Output ("DACL_SDDL: " + [Runtime.InteropServices.Marshal]::PtrToStringUni($str))
 Write-Output ("creator: " + [System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
+Write-Output ("creatorSid: " + [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
