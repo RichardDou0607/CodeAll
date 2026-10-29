@@ -1,0 +1,158 @@
+{
+  "meta": {
+    "project": "Acme Deploy CLI（合成示例）",
+    "title": "Acme 工程观测台",
+    "description": "用一份 JSON 观察模块、性能、版本演进与当前交付进度。",
+    "version": "v0.3.2",
+    "baseline": "main@demo123",
+    "snapshot": "2026-10-29",
+    "sourceLabel": "合成示例 · 不代表真实项目数据",
+    "accent": "teal",
+    "demo": true
+  },
+  "summary": [
+    { "label": "核心模块", "value": "03", "note": "CLI / API / Worker" },
+    { "label": "启动耗时改善", "value": "−60%", "note": "同机同数据对照", "tone": "teal" },
+    { "label": "当前开发", "value": "v0.4.0", "note": "任务项 2 / 4 完成", "tone": "blue" },
+    { "label": "公开版本", "value": "v0.3.2", "note": "已打 tag", "tone": "accent" }
+  ],
+  "views": [
+    {
+      "id": "architecture",
+      "label": "系统模块",
+      "title": "三个模块，各自一条边界",
+      "description": "卡片展示当前实现职责，不代表早期规划目录。",
+      "type": "cards",
+      "items": [
+        {
+          "id": "cli",
+          "title": "CLI 入口",
+          "subtitle": "用户交互与参数校验",
+          "description": "只负责解析命令、调用应用服务，不直接操作部署资源。",
+          "status": "稳定",
+          "path": "src/cli.ts",
+          "tags": ["输入", "校验"],
+          "facts": ["无业务状态", "失败时返回非零退出码"],
+          "fields": [{ "label": "运行时", "value": "Node.js 18+" }]
+        },
+        {
+          "id": "api",
+          "title": "应用服务",
+          "subtitle": "计划与执行编排",
+          "description": "生成部署计划、控制执行顺序并汇总结果。",
+          "status": "稳定",
+          "path": "src/deploy.ts",
+          "tags": ["编排", "状态机"],
+          "facts": ["计划与执行分离", "所有写入需要显式确认"]
+        },
+        {
+          "id": "worker",
+          "title": "Worker",
+          "subtitle": "后台任务",
+          "description": "处理可重试的长任务，心跳只携带必要状态。",
+          "status": "实验中",
+          "path": "src/worker.ts",
+          "tags": ["队列", "重试"],
+          "facts": ["默认并发 2", "崩溃后不自动重放未知结果"]
+        }
+      ]
+    },
+    {
+      "id": "performance",
+      "label": "性能对比",
+      "title": "同口径的优化前后",
+      "description": "示例数值仅用于展示指标视图，不属于任何真实项目。",
+      "type": "metrics",
+      "items": [
+        { "id": "boot", "name": "冷启动", "before": 2500, "after": 1000, "unit": "ms", "delta": "−60%", "note": "相同机器、相同 fixture" },
+        { "id": "payload", "name": "快照推送", "before": 4800000, "after": 960000, "unit": "/ min", "format": "bytes", "delta": "−80%", "note": "60 秒窗口" },
+        { "id": "scan", "name": "目录扫描", "before": 800, "after": 240, "unit": "ms", "delta": "−70%", "note": "固定 5,000 文件语料" }
+      ]
+    },
+    {
+      "id": "versions",
+      "label": "版本演进",
+      "title": "每版提升与能力边界",
+      "description": "选择版本查看详情；规划版不会显示成现有能力。",
+      "type": "timeline",
+      "items": [
+        {
+          "id": "v0-3-0",
+          "title": "v0.3.0",
+          "date": "2026-09-15",
+          "status": "已发布",
+          "summary": "引入可重放部署计划。",
+          "previous": "v0.2.x",
+          "upgrades": ["手工步骤 → 可审查计划", "增加失败恢复点"],
+          "can": ["生成计划", "按确认执行"],
+          "cannot": ["不保证云端资源一定存在"],
+          "note": "计划文件不包含凭证。"
+        },
+        {
+          "id": "v0-3-2",
+          "title": "v0.3.2",
+          "date": "2026-10-01",
+          "status": "当前公开版",
+          "summary": "降低常驻开销并补齐错误状态。",
+          "previous": "v0.3.0",
+          "upgrades": ["全量轮询 → 增量读取", "增加 interrupted 中性终态"],
+          "can": ["增量扫描", "区分停止与错误"],
+          "cannot": ["不承诺逐秒实时", "不把崩溃视为用户停止"],
+          "note": "当前公开安装包对应此版本。"
+        },
+        {
+          "id": "v0-4-0",
+          "title": "v0.4.0",
+          "date": "进行中",
+          "status": "开发中 · 未发布",
+          "summary": "增加团队项目模板。",
+          "previous": "v0.3.2",
+          "upgrades": ["计划提升：单项目 → 团队共享模板"],
+          "can": ["模板数据模型已落地"],
+          "cannot": ["不宣称已发布", "不承诺旧模板自动迁移"],
+          "note": "剩余 CI 与干净环境验收。"
+        }
+      ]
+    },
+    {
+      "id": "delivery",
+      "label": "开发进度",
+      "title": "v0.4.0 当前任务",
+      "description": "按任务项统计，不按代码行数估算。",
+      "type": "tasks",
+      "items": [
+        { "id": "model", "title": "模板数据模型", "status": "done", "summary": "结构与校验已完成。", "evidence": "src/template.ts" },
+        { "id": "migration", "title": "旧模板迁移", "status": "done", "summary": "迁移夹具通过。", "evidence": "fixtures/migration" },
+        { "id": "desktop", "title": "桌面端验收", "status": "blocked", "summary": "等待交互桌面环境。", "remaining": "完成窗口与托盘行为验收", "evidence": "qa/desktop.md" },
+        { "id": "release", "title": "发布流水线", "status": "pending", "summary": "尚未开始。", "remaining": "CI 出包、干净安装、版本号与 Release", "evidence": "docs/release.md" }
+      ],
+      "blockers": [
+        { "title": "交互桌面暂不可用", "detail": "非交互会话无法完成窗口验收，不能用模拟结果代替。" }
+      ],
+      "next": [
+        { "title": "恢复验收环境", "detail": "先解除桌面端阻塞。" },
+        { "title": "完成桌面验收", "detail": "保留截图和断言记录。" },
+        { "title": "构建并发布", "detail": "CI 全绿后再改公开版本号。" }
+      ]
+    },
+    {
+      "id": "platforms",
+      "label": "平台矩阵",
+      "title": "支持范围一览",
+      "description": "不可用和未验证状态必须分开。",
+      "type": "table",
+      "columns": [
+        { "key": "platform", "label": "平台" },
+        { "key": "package", "label": "产物" },
+        { "key": "state", "label": "状态" },
+        { "key": "boundary", "label": "边界" }
+      ],
+      "items": [
+        { "id": "mac", "platform": "macOS", "package": "DMG", "state": "已发布", "boundary": "Apple Silicon" },
+        { "id": "win", "platform": "Windows", "package": "NSIS", "state": "验收中", "boundary": "GUI 待复验" },
+        { "id": "linux", "platform": "Linux", "package": "deb / AppImage", "state": "适配完成", "boundary": "待随下一版发布" }
+      ],
+      "caption": "合成示例：平台完成不等于整版发布。"
+    }
+  ]
+}

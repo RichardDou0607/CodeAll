@@ -1,0 +1,3 @@
+interface:
+  display_name: "Interactive HTML"
+  short_description: "Generate standalone interactive HTML dashboards for any project"
